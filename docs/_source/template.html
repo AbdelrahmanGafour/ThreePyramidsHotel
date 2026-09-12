@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>$title$</title>
+</head>
+<body>
+<section class="cover">
+  <div class="cover-kicker">$project$</div>
+  <h1 class="document-title">$title$</h1>
+  <div class="cover-rule"></div>
+  <dl class="doc-meta">
+    <dt>Project</dt><dd>$project$</dd>
+    <dt>Document</dt><dd>$title$</dd>
+    <dt>Document ID</dt><dd class="document-id">$document_id$</dd>
+    <dt>Version</dt><dd>$version$</dd>
+    <dt>Status</dt><dd>$status$</dd>
+    <dt>Owner</dt><dd>$owner$</dd>
+    <dt>Last Updated</dt><dd>$updated$</dd>
+  </dl>
+  <div class="cover-note">Official readable project artifact. Editable source is maintained under <code>docs/_source/</code>.</div>
+</section>
+$if(toc)$
+<section class="toc-page">
+<h1>Contents</h1>
+$table-of-contents$
+</section>
+$endif$
+<main>
+$body$
+</main>
+</body>
+</html>

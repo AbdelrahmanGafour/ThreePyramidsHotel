@@ -1,0 +1,75 @@
+@page {
+  size: A4;
+  margin: 20mm 17mm 18mm 17mm;
+  @top-left { content: "Hotel Reservation System"; font-size: 8.5pt; color: #64748b; }
+  @top-right { content: string(docid); font-size: 8.5pt; color: #64748b; }
+  @bottom-left { content: string(doctitle); font-size: 8pt; color: #94a3b8; }
+  @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 8pt; color: #64748b; }
+}
+@page :first {
+  margin: 0;
+  @top-left { content: none; }
+  @top-right { content: none; }
+  @bottom-left { content: none; }
+  @bottom-right { content: none; }
+}
+
+* { box-sizing: border-box; }
+html { font-family: "DejaVu Sans", Arial, sans-serif; color: #1f2937; font-size: 10.3pt; line-height: 1.48; }
+body { margin: 0; }
+main { counter-reset: h2counter; }
+.document-title { string-set: doctitle content(); }
+.document-id { string-set: docid content(); }
+
+.cover {
+  height: 297mm;
+  padding: 33mm 24mm 24mm 24mm;
+  background: linear-gradient(145deg, #f8fafc 0%, #eef2f7 65%, #e7edf4 100%);
+  border-top: 10mm solid #172554;
+  page-break-after: always;
+  position: relative;
+}
+.cover-kicker { text-transform: uppercase; letter-spacing: .13em; font-weight: 700; font-size: 10pt; color: #475569; margin-top: 12mm; }
+.cover h1 { margin: 8mm 0 4mm 0; font-size: 28pt; line-height: 1.12; color: #172554; font-weight: 700; }
+.cover-rule { width: 42mm; height: 2.2mm; background: #2563eb; margin: 8mm 0 13mm 0; }
+.doc-meta { display: grid; grid-template-columns: 34mm 1fr; column-gap: 7mm; row-gap: 3mm; max-width: 145mm; }
+.doc-meta dt { font-weight: 700; color: #475569; }
+.doc-meta dd { margin: 0; color: #0f172a; }
+.cover-note { position: absolute; left: 24mm; right: 24mm; bottom: 22mm; color: #64748b; font-size: 8.7pt; }
+
+.toc-page { page-break-after: always; }
+.toc-page h1 { border-bottom: 1px solid #cbd5e1; padding-bottom: 3mm; }
+.toc-page nav ul { list-style: none; padding-left: 0; }
+.toc-page nav ul ul { padding-left: 6mm; }
+.toc-page a { color: #334155; text-decoration: none; }
+
+h1, h2, h3, h4 { color: #172554; line-height: 1.25; page-break-after: avoid; }
+h1 { font-size: 21pt; margin: 0 0 6mm 0; }
+h2 { font-size: 15pt; margin: 9mm 0 3mm 0; border-bottom: 1px solid #dbe2ea; padding-bottom: 1.5mm; }
+h3 { font-size: 12.2pt; margin: 6mm 0 2.3mm 0; }
+h4 { font-size: 10.5pt; margin: 4mm 0 2mm 0; }
+p { margin: 0 0 3.2mm 0; }
+ul, ol { margin-top: 1.5mm; margin-bottom: 3.5mm; padding-left: 7mm; }
+li { margin-bottom: 1.1mm; }
+strong { color: #0f172a; }
+code { font-family: "DejaVu Sans Mono", monospace; font-size: 8.9pt; background: #f1f5f9; padding: .2mm .8mm; border-radius: 1mm; }
+pre { font-family: "DejaVu Sans Mono", monospace; font-size: 8.2pt; line-height: 1.4; background: #f8fafc; border: 1px solid #dbe2ea; border-left: 3px solid #2563eb; padding: 4mm; white-space: pre-wrap; page-break-inside: avoid; }
+blockquote { margin: 4mm 0; padding: 3mm 4mm; border-left: 3px solid #2563eb; background: #f8fafc; color: #334155; }
+hr { border: 0; border-top: 1px solid #cbd5e1; margin: 7mm 0; }
+
+table { width: 100%; border-collapse: collapse; margin: 3mm 0 5mm 0; font-size: 8.5pt; page-break-inside: auto; }
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; }
+th { background: #eaf0f8; color: #172554; text-align: left; font-weight: 700; }
+th, td { border: 1px solid #cbd5e1; padding: 2.1mm 2.4mm; vertical-align: top; }
+
+img { max-width: 100%; height: auto; display: block; margin: 5mm auto; }
+.figure-caption { text-align: center; color: #64748b; font-size: 8.5pt; margin-top: -2mm; }
+
+.callout { border: 1px solid #bfdbfe; border-left: 4px solid #2563eb; background: #eff6ff; padding: 3mm 4mm; margin: 4mm 0; page-break-inside: avoid; }
+.callout.warning { border-color: #fed7aa; border-left-color: #ea580c; background: #fff7ed; }
+.callout.success { border-color: #bbf7d0; border-left-color: #16a34a; background: #f0fdf4; }
+.tag { display: inline-block; border-radius: 2mm; padding: .4mm 1.8mm; font-size: 7.8pt; font-weight: 700; background: #e2e8f0; color: #334155; }
+.small { font-size: 8.6pt; color: #64748b; }
+.pagebreak { page-break-before: always; }
+.keep { page-break-inside: avoid; }

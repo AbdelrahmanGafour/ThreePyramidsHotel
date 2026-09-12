@@ -1,0 +1,7 @@
+{
+  "name": "hotel-reservation",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ]
+}

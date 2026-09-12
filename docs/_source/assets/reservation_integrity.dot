@@ -1,0 +1,13 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="transparent", pad="0.12", nodesep="0.20", ranksep="0.28"];
+  node [shape=box, style="rounded,filled", fillcolor="#F7F9FC", color="#637083", fontname="DejaVu Sans", fontsize=8.5, margin="0.12,0.07", width=2.6];
+  edge [color="#4A5568", penwidth=1.0, arrowsize=0.65];
+  a [label="1. Validate request and capacity"];
+  b [label="2. Recheck availability"];
+  c [label="3. Select eligible physical room"];
+  d [label="4. Protect allocation in DB transaction"];
+  e [label="5. Calculate nights and EGP price"];
+  f [label="6. Persist Pending reservation,\nprice snapshot and booking reference"];
+  g [label="7. Commit and return guest-safe confirmation"];
+  a -> b -> c -> d -> e -> f -> g;
+}

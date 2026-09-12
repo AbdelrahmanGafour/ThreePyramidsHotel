@@ -1,0 +1,16 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="transparent", pad="0.15", nodesep="0.42", ranksep="0.42"];
+  node [shape=box, style="rounded,filled", fillcolor="#F7F9FC", color="#637083", fontname="DejaVu Sans", fontsize=10, margin="0.14,0.09"];
+  edge [color="#4A5568", penwidth=1.25, arrowsize=0.75, fontname="DejaVu Sans", fontsize=8.5];
+  guest [label="Guest Browser"];
+  web [label="Next.js Web\napps/web"];
+  api [label="Express REST API\napps/api\nModular Monolith"];
+  db [label="PostgreSQL\nSystem of Record"];
+  mail [label="Transactional Email\nProvider: Deferred", style="rounded,dashed,filled"];
+  media [label="Persistent Media Storage\nProvider: Deferred", style="rounded,dashed,filled"];
+  guest -> web [label="HTTPS"];
+  web -> api [label="REST /api/v1"];
+  api -> db [label="SQL / transactions"];
+  api -> mail [label="confirmation", style=dashed];
+  web -> media [label="images", style=dashed];
+}

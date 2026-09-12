@@ -1,0 +1,22 @@
+digraph G {
+  graph [rankdir=TB, bgcolor="transparent", pad="0.2", nodesep="0.45", ranksep="0.5"];
+  node [shape=box, style="rounded,filled", fillcolor="#F7F9FC", color="#637083", fontname="DejaVu Sans", fontsize=10, margin="0.16,0.10"];
+  edge [color="#4A5568", penwidth=1.2, arrowsize=0.7];
+  app [label="Express Application\napp.ts / server.ts", fillcolor="#EAF0F8"];
+  rooms [label="rooms module"];
+  reservations [label="reservations module"];
+  auth [label="auth module"];
+  packages [label="packages module"];
+  tech [label="cross-cutting technical infrastructure\n(config, errors, middleware when justified)", style="rounded,dashed,filled"];
+  db [label="Shared PostgreSQL Database", fillcolor="#EEF7EE"];
+  app -> rooms;
+  app -> reservations;
+  app -> auth;
+  app -> packages;
+  rooms -> db;
+  reservations -> db;
+  auth -> db;
+  packages -> db;
+  tech -> app [style=dashed];
+  rooms -> reservations [dir=both, style=dashed, label=" explicit public capability only ", fontname="DejaVu Sans", fontsize=8];
+}
