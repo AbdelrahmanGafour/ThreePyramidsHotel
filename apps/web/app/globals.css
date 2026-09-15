@@ -1,0 +1,670 @@
+@import "tailwindcss";
+
+:root {
+  --espresso: #2b1e18;
+  --chocolate: #3a2921;
+  --clay: #7b5542;
+  --terracotta: #8c5e45;
+  --ivory: #f4eee5;
+  --limestone: #ddd0c0;
+  --sand: #c6ae90;
+  --brass: #b08a51;
+  --aged-gold: #94703e;
+  --ink: #1e1815;
+  --lapis: #264a59;
+  --smoke: rgba(43, 30, 24, 0.66);
+  --smoke-strong: rgba(30, 24, 21, 0.78);
+  --light-glass: rgba(244, 238, 229, 0.86);
+  --hairline: rgba(244, 238, 229, 0.18);
+  --dark-line: rgba(30, 24, 21, 0.16);
+  --brass-line: rgba(176, 138, 81, 0.48);
+  --page-x: clamp(1.25rem, 4.6vw, 4.75rem);
+  --section-y: clamp(4.25rem, 7vw, 7.25rem);
+  --ease-luxury: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-ui: cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-micro: 220ms;
+  --motion-ui: 420ms;
+  --motion-editorial: 900ms;
+  --motion-cinematic: 1200ms;
+  --depth-perspective: 1400px;
+}
+
+@theme inline {
+  --font-sans: var(--font-body);
+  --font-serif: var(--font-display);
+  --color-espresso: var(--espresso);
+  --color-chocolate: var(--chocolate);
+  --color-clay: var(--clay);
+  --color-terracotta: var(--terracotta);
+  --color-ivory: var(--ivory);
+  --color-limestone: var(--limestone);
+  --color-sand: var(--sand);
+  --color-brass: var(--brass);
+  --color-aged-gold: var(--aged-gold);
+  --color-ink: var(--ink);
+  --color-lapis: var(--lapis);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  background: var(--espresso);
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 18% 8%, rgba(176, 138, 81, 0.12), transparent 26rem),
+    linear-gradient(180deg, var(--espresso) 0, var(--espresso) 28rem, var(--ivory) 28rem);
+  font-family: var(--font-body), Arial, sans-serif;
+  overflow-x: hidden;
+  text-rendering: optimizeLegibility;
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  pointer-events: none;
+  content: "";
+  opacity: 0.026;
+  background-image:
+    linear-gradient(rgba(244, 238, 229, 0.55) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244, 238, 229, 0.55) 1px, transparent 1px);
+  background-size: 3px 3px;
+  mix-blend-mode: soft-light;
+}
+
+::selection {
+  color: var(--ink);
+  background: var(--brass);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 1px solid var(--brass);
+  outline-offset: 4px;
+}
+
+img {
+  max-width: 100%;
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  column-gap: clamp(1rem, 1.8vw, 1.5rem);
+  padding-inline: var(--page-x);
+}
+
+.display {
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.02;
+}
+
+.label {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.body-copy {
+  color: rgba(30, 24, 21, 0.68);
+  font-size: clamp(0.95rem, 1.02vw, 1.04rem);
+  line-height: 1.75;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+.image-frame {
+  position: relative;
+  overflow: hidden;
+  background: var(--chocolate);
+}
+
+.image-frame img {
+  object-fit: cover;
+  animation: image-presence 700ms var(--ease-luxury) both;
+}
+
+@keyframes image-presence {
+  from {
+    opacity: 0.001;
+    transform: scale(1.012);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.smoked-surface {
+  position: relative;
+  border: 1px solid rgba(244, 238, 229, 0.18);
+  background:
+    linear-gradient(115deg, rgba(255, 255, 255, 0.16), transparent 34%),
+    linear-gradient(292deg, rgba(176, 138, 81, 0.18), transparent 40%),
+    var(--smoke);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 rgba(30, 24, 21, 0.44),
+    0 24px 80px rgba(30, 24, 21, 0.28);
+  backdrop-filter: blur(6px);
+}
+
+.mirror-object {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(176, 138, 81, 0.46);
+  background:
+    radial-gradient(circle at 50% 46%, rgba(176, 138, 81, 0.2), transparent 32%),
+    repeating-radial-gradient(circle at 50% 46%, rgba(244, 238, 229, 0.12) 0 1px, transparent 1px 16px),
+    linear-gradient(118deg, rgba(255, 255, 255, 0.16), transparent 34%),
+    var(--smoke-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 0 60px rgba(176, 138, 81, 0.1),
+    0 22px 70px rgba(30, 24, 21, 0.22);
+  backdrop-filter: blur(4px);
+}
+
+.mirror-object::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  background: radial-gradient(
+    circle at var(--mirror-glint-x, 26%) var(--mirror-glint-y, 22%),
+    rgba(244, 238, 229, 0.18),
+    transparent 48%
+  );
+  transition: background 420ms var(--ease-luxury);
+}
+
+.reflective-surface {
+  position: relative;
+  overflow: hidden;
+}
+
+.reflective-surface::after {
+  position: absolute;
+  inset: -20% auto -20% -12%;
+  width: 42%;
+  pointer-events: none;
+  content: "";
+  opacity: 0.07;
+  background: linear-gradient(90deg, transparent, rgba(244, 238, 229, 0.72), transparent);
+  transform: skewX(-17deg);
+  transition:
+    transform var(--motion-ui) var(--ease-luxury),
+    opacity var(--motion-ui) var(--ease-luxury);
+}
+
+.reflective-surface:hover::after {
+  opacity: 0.1;
+  transform: translateX(18%) skewX(-17deg);
+}
+
+.room-info-panel {
+  border-left: 1px solid rgba(176, 138, 81, 0.42);
+  background:
+    linear-gradient(112deg, rgba(244, 238, 229, 0.14), transparent 26%),
+    linear-gradient(290deg, rgba(176, 138, 81, 0.14), transparent 36%),
+    radial-gradient(circle at var(--panel-glint-x, 82%) 8%, rgba(176, 138, 81, 0.16), transparent 15rem),
+    rgba(43, 30, 24, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(244, 238, 229, 0.12),
+    inset 0 -1px 0 rgba(30, 24, 21, 0.34),
+    0 22px 70px rgba(30, 24, 21, 0.28);
+  backdrop-filter: blur(4px);
+}
+
+.room-info-panel::before {
+  position: absolute;
+  inset: 0 auto 0 calc(var(--panel-glint-x, 82%) - 22%);
+  width: 38%;
+  pointer-events: none;
+  content: "";
+  opacity: 0.42;
+  background: linear-gradient(90deg, transparent, rgba(244, 238, 229, 0.08), transparent);
+  transform: skewX(-16deg);
+}
+
+.reputation-object {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(176, 138, 81, 0.46);
+  background:
+    radial-gradient(circle at 50% 46%, rgba(176, 138, 81, 0.24), transparent 30%),
+    repeating-radial-gradient(circle at 50% 46%, rgba(244, 238, 229, 0.12) 0 1px, transparent 1px 16px),
+    repeating-conic-gradient(from 18deg at 50% 46%, rgba(176, 138, 81, 0.12) 0deg 1deg, transparent 1deg 14deg),
+    linear-gradient(128deg, rgba(244, 238, 229, 0.12), transparent 30%),
+    rgba(43, 30, 24, 0.82);
+  box-shadow:
+    inset 0 1px 0 rgba(244, 238, 229, 0.16),
+    inset 0 -1px 0 rgba(30, 24, 21, 0.42),
+    0 24px 68px rgba(30, 24, 21, 0.2);
+  transform-style: preserve-3d;
+  backdrop-filter: blur(3px);
+}
+
+.reputation-object::before {
+  position: absolute;
+  inset: 13%;
+  content: "";
+  border: 1px solid rgba(176, 138, 81, 0.3);
+  border-radius: 999px;
+  opacity: 0.82;
+}
+
+.reputation-object::after {
+  position: absolute;
+  inset: -24% auto -24% var(--reputation-glint-x, 28%);
+  width: 30%;
+  pointer-events: none;
+  content: "";
+  opacity: 0.07;
+  background: linear-gradient(90deg, transparent, rgba(244, 238, 229, 0.72), transparent);
+  transform: skewX(-18deg);
+  transition:
+    left var(--motion-ui) var(--ease-luxury),
+    opacity var(--motion-ui) var(--ease-luxury);
+}
+
+.reserve-plate {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--brass);
+  background: var(--brass);
+  color: var(--ink);
+  padding: 0.64rem 1.2rem;
+  font-size: 0.6rem;
+  font-weight: 850;
+  letter-spacing: 0.22em;
+  line-height: 1;
+  text-transform: uppercase;
+  transition:
+    color 420ms var(--ease-luxury),
+    background-color 420ms var(--ease-luxury),
+    border-color 420ms var(--ease-luxury);
+}
+
+.reserve-plate:hover {
+  border-color: var(--brass);
+  background-color: transparent;
+  color: var(--ivory);
+}
+
+.hero-booking-console {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(176, 138, 81, 0.42);
+  background:
+    linear-gradient(112deg, rgba(244, 238, 229, 0.1), transparent 32%),
+    radial-gradient(circle at 92% 0%, rgba(176, 138, 81, 0.15), transparent 22rem),
+    rgba(43, 30, 24, 0.68);
+  box-shadow:
+    inset 0 1px 0 rgba(244, 238, 229, 0.14),
+    inset 0 -1px 0 rgba(30, 24, 21, 0.32),
+    0 18px 54px rgba(30, 24, 21, 0.22);
+  backdrop-filter: blur(3px);
+}
+
+.hero-booking-console::before {
+  position: absolute;
+  top: 0;
+  left: -8%;
+  width: 34%;
+  height: 100%;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(90deg, transparent, rgba(244, 238, 229, 0.09), transparent);
+  transform: skewX(-18deg);
+}
+
+.hero-booking-console::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  border-top: 1px solid rgba(244, 238, 229, 0.14);
+  border-bottom: 1px solid rgba(30, 24, 21, 0.3);
+}
+
+.reservation-rail {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(176, 138, 81, 0.34);
+  background:
+    radial-gradient(circle at var(--booking-glint-x, 86%) 0%, rgba(176, 138, 81, 0.2), transparent 18rem),
+    repeating-linear-gradient(180deg, rgba(244, 238, 229, 0.035) 0 1px, transparent 1px 3px),
+    linear-gradient(112deg, rgba(244, 238, 229, 0.12), transparent 28%),
+    linear-gradient(90deg, rgba(43, 30, 24, 0.72), rgba(58, 41, 33, 0.61));
+  box-shadow:
+    inset 0 1px 0 rgba(244, 238, 229, 0.12),
+    0 16px 48px rgba(30, 24, 21, 0.2);
+  backdrop-filter: blur(3px);
+}
+
+.reservation-rail::after {
+  position: absolute;
+  inset: 0 auto 0 calc(var(--booking-glint-x, 86%) - 18%);
+  width: 32%;
+  pointer-events: none;
+  content: "";
+  opacity: 0.08;
+  background: linear-gradient(90deg, transparent, rgba(244, 238, 229, 0.78), transparent);
+  transform: skewX(-18deg);
+}
+
+.reservation-rail::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  border-top: 1px solid rgba(176, 138, 81, 0.28);
+  border-bottom: 1px solid rgba(244, 238, 229, 0.08);
+}
+
+.reservation-action {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--brass);
+  transition:
+    color 420ms var(--ease-luxury),
+    transform 420ms var(--ease-luxury);
+}
+
+.reservation-action::after {
+  position: absolute;
+  right: 0;
+  bottom: 0.55rem;
+  left: 0;
+  height: 1px;
+  content: "";
+  background: currentColor;
+  transform: scaleX(0.36);
+  transform-origin: left;
+  transition: transform 520ms var(--ease-luxury);
+}
+
+.reservation-action:hover,
+.reservation-action:focus-visible {
+  color: var(--ivory);
+  transform: translateX(1px);
+}
+
+.reservation-action:hover::after,
+.reservation-action:focus-visible::after {
+  transform: scaleX(1);
+}
+
+.reservation-key-action {
+  position: relative;
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  border-top: 1px solid rgba(148, 112, 62, 0.5);
+  border-bottom: 1px solid rgba(148, 112, 62, 0.5);
+  color: var(--ink);
+  font-size: 0.62rem;
+  font-weight: 950;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  transition:
+    color var(--motion-ui) var(--ease-luxury),
+    padding var(--motion-ui) var(--ease-luxury);
+}
+
+.reservation-key-action::before {
+  width: 0.56rem;
+  height: 0.56rem;
+  margin-right: 0.8rem;
+  content: "";
+  background: var(--brass);
+  transform: rotate(45deg);
+  transition: transform var(--motion-ui) var(--ease-luxury);
+}
+
+.reservation-key-action:hover,
+.reservation-key-action:focus-visible {
+  color: var(--aged-gold);
+  padding-left: 0.18rem;
+}
+
+.reservation-key-action:hover::before,
+.reservation-key-action:focus-visible::before {
+  transform: translateX(2px) rotate(45deg);
+}
+
+.hero-plaque {
+  background:
+    linear-gradient(180deg, rgba(244, 238, 229, 0.1), transparent 34%),
+    rgba(43, 30, 24, 0.44);
+  box-shadow:
+    inset 1px 0 0 rgba(176, 138, 81, 0.34),
+    inset -1px 0 0 rgba(244, 238, 229, 0.08);
+  backdrop-filter: blur(1px);
+}
+
+.hero-progress-fill {
+  animation-name: hero-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@keyframes hero-progress {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.brass-button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(176, 138, 81, 0.72);
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.16), transparent 44%),
+    var(--brass);
+  color: var(--ink);
+  padding: 0.8rem 1rem;
+  font-size: 0.64rem;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+  line-height: 1;
+  text-transform: uppercase;
+  transition:
+    transform 450ms var(--ease-luxury),
+    background-color 450ms var(--ease-luxury),
+    border-color 450ms var(--ease-luxury);
+}
+
+.brass-button:hover {
+  transform: translateY(-1px);
+  border-color: var(--ivory);
+}
+
+.text-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  gap: 0.55rem;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.text-link::after {
+  position: absolute;
+  right: 1.25rem;
+  bottom: 0.5rem;
+  left: 0;
+  height: 1px;
+  content: "";
+  background: currentColor;
+  transform: scaleX(0.42);
+  transform-origin: left;
+  transition: transform 500ms var(--ease-luxury);
+}
+
+.text-link:hover::after {
+  transform: scaleX(1);
+}
+
+.serif-accent {
+  font-family: var(--font-display), Georgia, serif;
+  font-style: italic;
+  font-weight: 500;
+}
+
+.tracking-settle {
+  animation: tracking-settle 720ms var(--ease-luxury) both;
+}
+
+.line-reveal {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+
+.line-reveal > span {
+  display: inline-block;
+}
+
+.location-route {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: route-draw 900ms var(--ease-luxury) forwards;
+}
+
+@keyframes route-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes tracking-settle {
+  from {
+    opacity: 0;
+    letter-spacing: 0.3em;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stone-section {
+  background:
+    linear-gradient(90deg, rgba(176, 138, 81, 0.08), transparent 20%, transparent 80%, rgba(38, 74, 89, 0.04)),
+    var(--ivory);
+}
+
+.portal-line {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--brass), transparent);
+}
+
+.jewel-dot {
+  width: 0.42rem;
+  height: 0.42rem;
+  background: var(--lapis);
+  box-shadow: 0 0 0 1px rgba(244, 238, 229, 0.3), 0 0 22px rgba(38, 74, 89, 0.42);
+  transform: rotate(45deg);
+}
+
+.vertical-rl {
+  writing-mode: vertical-rl;
+}
+
+@media (max-width: 1024px) {
+  .smoked-surface,
+  .mirror-object,
+  .room-info-panel,
+  .reputation-object,
+  .hero-booking-console,
+  .reservation-rail {
+    backdrop-filter: none;
+  }
+
+  .reservation-rail::after,
+  .room-info-panel::before,
+  .reputation-object::after,
+  .reflective-surface::after,
+  .mirror-object::after {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  :root {
+    --page-x: clamp(1.15rem, 5.8vw, 1.5rem);
+    --section-y: 4rem;
+  }
+
+  .page-grid {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .image-frame img {
+    animation: none !important;
+  }
+}
+
+@media (max-width: 430px) {
+  .label,
+  .brass-button,
+  .text-link {
+    letter-spacing: 0.16em;
+  }
+}
