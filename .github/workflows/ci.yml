@@ -13,6 +13,25 @@ jobs:
     name: Validate monorepo
     runs-on: ubuntu-latest
 
+    # Disposable database for this run only, so the connection string is not a secret.
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hotel_reservation_test
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hotel_reservation_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d hotel_reservation_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,8 +48,20 @@ jobs:
       - name: Typecheck API
         run: npm run typecheck -w apps/api
 
+      - name: Typecheck API tests
+        run: npm run typecheck:test -w apps/api
+
       - name: Build API
         run: npm run build -w apps/api
+
+      - name: Apply database migrations
+        run: npm run migrate:up -w apps/api
+
+      - name: Test API
+        run: npm test -w apps/api
+
+      - name: Test API against PostgreSQL
+        run: npm run test:integration -w apps/api
 
       - name: Lint Web
         run: npm run lint -w apps/web
