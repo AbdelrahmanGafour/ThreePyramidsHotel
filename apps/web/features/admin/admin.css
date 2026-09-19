@@ -1,0 +1,702 @@
+/* Hotel administration — a calm, operational surface.
+   Espresso shell, ivory workspace, fine 1px rules, square geometry, almost no
+   shadow. Reuses the site's colour tokens from globals.css; all selectors are
+   namespaced `adm-` so nothing here can touch the public pages. */
+
+.adm {
+  --adm-sidebar-w: 16.5rem;
+  --adm-rule: rgba(30, 24, 21, 0.14);
+  --adm-rule-soft: rgba(30, 24, 21, 0.09);
+  --adm-muted: rgba(30, 24, 21, 0.72);
+  --adm-panel: #faf6ee;
+  --adm-moss: #4a6a3c;
+  --adm-focus: var(--aged-gold);
+
+  min-height: 100dvh;
+  background: var(--ivory);
+  color: var(--ink);
+  font-family: var(--font-body), Arial, sans-serif;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  /* Covers the marketing body's espresso band + texture — admin has its own ground. */
+  position: relative;
+  z-index: 90;
+}
+
+.adm :is(a, button):focus-visible {
+  outline: 2px solid var(--adm-focus);
+  outline-offset: 2px;
+}
+
+:where(.adm) :is(h1, h2, p, ul, ol, dl, dd) {
+  margin: 0;
+  padding: 0;
+}
+
+:where(.adm) :is(ul, ol) {
+  list-style: none;
+}
+
+/* ---- Skip link --------------------------------------------------------- */
+.adm-skip {
+  position: fixed;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 200;
+  padding: 0.75rem 1rem;
+  background: var(--brass);
+  color: var(--ink);
+  font-weight: 700;
+  transform: translateY(-200%);
+}
+
+.adm-skip:focus {
+  transform: none;
+}
+
+/* ---- Sidebar ----------------------------------------------------------- */
+.adm-sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 60;
+  display: flex;
+  width: min(19rem, 86vw);
+  flex-direction: column;
+  background: var(--espresso);
+  color: var(--ivory);
+  border-right: 1px solid rgba(244, 238, 229, 0.1);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform 240ms var(--ease-ui),
+    visibility 0s linear 240ms;
+}
+
+.adm-sidebar[data-open="true"] {
+  transform: none;
+  visibility: visible;
+  transition: transform 240ms var(--ease-ui);
+}
+
+.adm-sidebar :is(a, button):focus-visible {
+  outline-color: var(--brass);
+  outline-offset: -2px;
+}
+
+.adm-brand {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 1.35rem 1.25rem 1.25rem;
+  border-bottom: 1px solid rgba(244, 238, 229, 0.1);
+}
+
+.adm-brand-mark {
+  flex: none;
+  color: var(--brass);
+}
+
+.adm-brand-name {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: 1.125rem;
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+.adm-brand-sub {
+  margin-top: 0.2rem;
+  color: rgba(244, 238, 229, 0.7);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+}
+
+.adm-drawer-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: inline-flex;
+  width: 2.75rem;
+  height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--ivory);
+}
+
+.adm-nav {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem 0;
+}
+
+.adm-sidebar-foot {
+  padding: 0.75rem 0 1rem;
+  border-top: 1px solid rgba(244, 238, 229, 0.1);
+}
+
+.adm-nav-item {
+  position: relative;
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.55rem 1.25rem;
+  color: rgba(244, 238, 229, 0.82);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  transition:
+    background-color 160ms var(--ease-ui),
+    color 160ms var(--ease-ui);
+}
+
+.adm-nav-item svg {
+  flex: none;
+  opacity: 0.85;
+}
+
+a.adm-nav-item:hover {
+  background: rgba(244, 238, 229, 0.06);
+  color: var(--ivory);
+}
+
+.adm-nav-item[data-state="active"] {
+  background: rgba(244, 238, 229, 0.08);
+  color: var(--ivory);
+  font-weight: 700;
+}
+
+.adm-nav-item[data-state="active"] svg {
+  color: var(--brass);
+  opacity: 1;
+}
+
+.adm-nav-item[data-state="active"]::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  content: "";
+  background: var(--brass);
+}
+
+.adm-nav-item[data-state="unavailable"] {
+  color: rgba(244, 238, 229, 0.6);
+  cursor: default;
+}
+
+.adm-nav-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.adm-nav-soon {
+  flex: none;
+  color: rgba(244, 238, 229, 0.6);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.adm-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(30, 24, 21, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms var(--ease-ui);
+}
+
+.adm-scrim[data-open="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ---- Frame + top bar --------------------------------------------------- */
+.adm-frame {
+  min-width: 0;
+}
+
+.adm-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  min-height: 3.5rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.25rem clamp(1rem, 3vw, 2.5rem);
+  background: var(--ivory);
+  border-bottom: 1px solid var(--adm-rule);
+}
+
+.adm-menu-btn {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.85rem 0 0.65rem;
+  border: 1px solid rgba(30, 24, 21, 0.5);
+  background: transparent;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.adm-menu-btn:hover {
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+.adm-crumbs {
+  min-width: 0;
+  flex: 1;
+}
+
+.adm-crumbs ol {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+}
+
+.adm-crumbs li + li::before {
+  margin-right: 0.5rem;
+  content: "/";
+  color: rgba(30, 24, 21, 0.4);
+}
+
+.adm-crumbs li[aria-current="page"] {
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Secondary tools only appear once there is room for them. */
+.adm-topbar-tools {
+  display: none;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.adm-topbar-date {
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.adm-topbar-link {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: rgba(30, 24, 21, 0.35);
+  text-underline-offset: 0.25em;
+  white-space: nowrap;
+}
+
+.adm-topbar-link:hover {
+  color: var(--brass-ink);
+  text-decoration-color: var(--brass-ink);
+}
+
+.adm-icon-sm {
+  width: 1rem;
+  height: 1rem;
+}
+
+.adm-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding-left: 1.5rem;
+  border-left: 1px solid var(--adm-rule);
+}
+
+.adm-identity-mark {
+  display: inline-flex;
+  width: 2.25rem;
+  height: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  background: var(--espresso);
+  color: var(--brass);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.adm-identity-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.adm-identity-name {
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.adm-identity-role {
+  color: var(--adm-muted);
+  font-size: 0.8125rem;
+}
+
+/* ---- Workspace --------------------------------------------------------- */
+.adm-main {
+  max-width: 82rem;
+  padding: clamp(1.5rem, 3vw, 2.25rem) clamp(1rem, 3vw, 2.5rem) 4rem;
+  outline: none;
+}
+
+.adm-page-head {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1.75rem;
+}
+
+.adm-page-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(2rem, 4vw, 2.5rem);
+  font-weight: 500;
+  line-height: 1.1;
+}
+
+.adm-page-lede {
+  max-width: 40rem;
+  color: var(--adm-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.adm-demo-note {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+}
+
+/* ---- Metrics: one ruled strip, not four cards -------------------------- */
+.adm-metrics {
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--adm-rule);
+  border-top: 2px solid var(--brass);
+  background: var(--adm-rule);
+}
+
+.adm-metrics dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+}
+
+.adm-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 1rem 1.15rem 1.1rem;
+  background: var(--adm-panel);
+}
+
+.adm-metric dt {
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.adm-metric-value {
+  font-size: 2.25rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.adm-metric-detail {
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+}
+
+/* ---- Panels ------------------------------------------------------------ */
+.adm-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+.adm-panel {
+  min-width: 0;
+  border: 1px solid var(--adm-rule);
+  border-top: 2px solid var(--brass);
+  background: var(--adm-panel);
+}
+
+.adm-panel-head {
+  padding: 1.1rem 1.25rem 0.9rem;
+}
+
+.adm-panel-title {
+  font-size: 1.0625rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.adm-panel-note {
+  margin-top: 0.15rem;
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+}
+
+.adm-panel-foot {
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--adm-rule-soft);
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+}
+
+.adm-strong {
+  display: block;
+  font-weight: 600;
+}
+
+.adm-sub {
+  display: block;
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+/* ---- Tables: desktop table, mobile list -------------------------------- */
+.adm-table-wrap {
+  display: none;
+}
+
+.adm-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.adm-table th,
+.adm-table td {
+  padding: 0.85rem 1.25rem;
+  vertical-align: top;
+  font-weight: 400;
+}
+
+.adm-table thead th {
+  padding-block: 0.65rem;
+  border-top: 1px solid var(--adm-rule);
+  border-bottom: 1px solid rgba(30, 24, 21, 0.4);
+  color: rgba(30, 24, 21, 0.78);
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.adm-table tbody tr + tr > * {
+  border-top: 1px solid var(--adm-rule-soft);
+}
+
+.adm-table .adm-cell-primary {
+  font-weight: 400;
+}
+
+.adm-list > li,
+.adm-rooms > li {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--adm-rule-soft);
+}
+
+.adm-list > li:first-child,
+.adm-rooms > li:first-child {
+  border-top: 1px solid var(--adm-rule);
+}
+
+.adm-list-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* ---- Status ------------------------------------------------------------ */
+.adm-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.adm-status-mark {
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: currentColor;
+  color: rgba(30, 24, 21, 0.6);
+}
+
+.adm-status-mark[data-shape="ring"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px currentColor;
+}
+
+.adm-status-mark[data-shape="square"] {
+  border-radius: 0;
+}
+
+.adm-status[data-tone="lapis"] .adm-status-mark {
+  color: var(--lapis);
+}
+
+.adm-status[data-tone="moss"] .adm-status-mark {
+  color: var(--adm-moss);
+}
+
+.adm-status[data-tone="brass"] .adm-status-mark {
+  color: var(--brass-ink);
+}
+
+.adm-status[data-tone="danger"] .adm-status-mark {
+  color: var(--danger);
+}
+
+.adm-status[data-tone="terracotta"] .adm-status-mark {
+  color: var(--terracotta);
+}
+
+/* ---- Room units -------------------------------------------------------- */
+.adm-room-meter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.85rem;
+  margin-top: 0.15rem;
+}
+
+.adm-units {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.adm-unit {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 1px solid var(--ink);
+  vertical-align: -1px;
+}
+
+.adm-unit[data-state="occupied"] {
+  background: var(--ink);
+}
+
+.adm-unit[data-state="available"] {
+  background: transparent;
+}
+
+.adm-unit[data-state="blocked"] {
+  border-color: var(--danger);
+  background: repeating-linear-gradient(135deg, var(--danger) 0 2px, transparent 2px 4px);
+}
+
+.adm-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.adm-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.25rem;
+}
+
+/* ---- Management areas -------------------------------------------------- */
+.adm-areas > li {
+  padding: 0.8rem 1.25rem;
+  border-top: 1px solid var(--adm-rule-soft);
+}
+
+.adm-areas > li:first-child {
+  border-top: 1px solid var(--adm-rule);
+}
+
+/* ---- Breakpoints ------------------------------------------------------- */
+@media (min-width: 720px) {
+  .adm-table-wrap {
+    display: block;
+  }
+
+  .adm-list {
+    display: none;
+  }
+
+  .adm-topbar-date {
+    display: none;
+  }
+}
+
+@media (min-width: 900px) {
+  .adm-metrics dl {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .adm-sidebar {
+    width: var(--adm-sidebar-w);
+    transform: none;
+    visibility: visible;
+  }
+
+  .adm-frame {
+    margin-left: var(--adm-sidebar-w);
+  }
+
+  .adm-menu-btn,
+  .adm-drawer-close,
+  .adm-scrim {
+    display: none;
+  }
+
+  .adm-topbar-tools {
+    display: flex;
+  }
+}
+
+@media (min-width: 1280px) {
+  .adm-topbar-date {
+    display: block;
+  }
+
+  .adm-grid {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+@media (max-width: 1023px) {
+  /* Below desktop the identity is dropped from the bar; the drawer keeps focus on navigation. */
+  .adm-topbar-tools {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adm-sidebar,
+  .adm-scrim,
+  .adm-nav-item {
+    transition: none;
+  }
+}
