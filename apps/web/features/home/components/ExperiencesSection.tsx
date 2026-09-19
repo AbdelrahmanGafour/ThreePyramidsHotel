@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { luxuryEase, motionPrimitives } from "@/shared/components/motion/PremiumMotion";
@@ -89,7 +90,7 @@ export function ExperiencesSection() {
                     <span className="mt-2 block font-sans text-[clamp(1.05rem,1.5vw,1.38rem)] font-semibold leading-[1.08]">
                       {experience.title}
                     </span>
-                    <span className={`mt-3 block overflow-hidden transition-all duration-500 ${selectedItem ? "max-h-16 opacity-100" : "max-h-0 opacity-0"}`}>
+                    <span className={`mt-3 block overflow-hidden transition-[max-height,opacity] duration-500 ${selectedItem ? "max-h-16 opacity-100" : "max-h-0 opacity-0"}`}>
                       <span className="block max-w-[390px] text-[0.84rem] leading-[1.55] text-ink/62">
                         {experience.copy}
                       </span>
@@ -173,9 +174,9 @@ export function ExperiencesSection() {
                   <p className="mt-3 max-w-[420px] text-[0.96rem] leading-[1.62] text-ivory/76">
                     {selected.copy}
                   </p>
-                  <a href="#reserve" className="text-link mt-4 text-ivory">
+                  <Link href="/packages" className="text-link mt-4 text-ivory">
                     View experience -&gt;
-                  </a>
+                  </Link>
                 </motion.div>
               </AnimatePresence>
             </div>

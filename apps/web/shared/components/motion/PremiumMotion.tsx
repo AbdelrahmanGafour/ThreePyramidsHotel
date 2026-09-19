@@ -2,14 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import {
-  motion,
-  useMotionValue,
-  useReducedMotion,
-  useScroll,
-  useTransform,
-  type Variants,
-} from "motion/react";
+import { motion, useMotionValue, useReducedMotion, type Variants } from "motion/react";
 
 export const luxuryEase = [0.22, 1, 0.36, 1] as const;
 export const uiEase = [0.4, 0, 0.2, 1] as const;
@@ -82,11 +75,6 @@ export function DepthImage({
   const [canHover, setCanHover] = useState(false);
   const rotateX = useMotionValue(0);
   const rotateY = useMotionValue(0);
-  const { scrollYProgress } = useScroll({
-    target: ref,
-    offset: ["start end", "end start"],
-  });
-  const y = useTransform(scrollYProgress, [0, 1], [-6, 6]);
 
   useEffect(() => {
     const query = window.matchMedia("(hover: hover) and (pointer: fine)");
@@ -121,7 +109,6 @@ export function DepthImage({
       }}
       style={{
         perspective: 1400,
-        y: reduceMotion ? 0 : y,
         rotateX: reduceMotion ? 0 : rotateX,
         rotateY: reduceMotion ? 0 : rotateY,
       }}

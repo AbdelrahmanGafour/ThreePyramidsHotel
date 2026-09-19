@@ -20,6 +20,9 @@
   --brass-line: rgba(176, 138, 81, 0.48);
   --page-x: clamp(1.25rem, 4.6vw, 4.75rem);
   --section-y: clamp(4.25rem, 7vw, 7.25rem);
+  /* Mirrors the shared Header's fixed height (`Header.tsx`) so any page
+     that needs to clear its solid surface has one value to reference. */
+  --header-h: calc(58px + env(safe-area-inset-top, 0px));
   --ease-luxury: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-ui: cubic-bezier(0.4, 0, 0.2, 1);
   --motion-micro: 220ms;
@@ -55,6 +58,7 @@ html {
 }
 
 body {
+  position: relative;
   margin: 0;
   color: var(--ink);
   background:
@@ -65,8 +69,14 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Scrolls with the page (not `position: fixed`) so this blended layer never has
+   to be re-composited against new content passing beneath it on every scroll
+   frame — a fixed + mix-blend-mode overlay forces exactly that on every route,
+   regardless of page weight, which is what made scrolling feel worse the more
+   the site grew. At this opacity and tile size the texture reads identically
+   whether it's pinned to the viewport or scrolls with the document. */
 body::before {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 80;
   pointer-events: none;
@@ -646,6 +656,12 @@ img {
   }
 }
 
+@media (min-width: 1180px) {
+  :root {
+    --header-h: calc(64px + env(safe-area-inset-top, 0px));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -666,5 +682,293 @@ img {
   .brass-button,
   .text-link {
     letter-spacing: 0.16em;
+  }
+}
+
+/* ==========================================================================
+   Inner-page system — every page after the homepage.
+
+   One vocabulary for page openings, section headings, buttons, and forms so
+   the whole public journey reads as a single product. These classes are
+   additive: the homepage's own classes above are untouched.
+
+   Functional text (labels, prices, facts, buttons, errors) stays at or above
+   ~14px; only decorative eyebrows sit smaller. Meaning is never carried by
+   colour alone — errors and selected states always add an icon or text.
+   ========================================================================== */
+:root {
+  /* Brass darkened for small text on ivory (≈5.6:1); --brass stays for fills and rules. */
+  --brass-ink: #7a5a2b;
+  --danger: #9b3324;
+  --field-surface: #fffdf8;
+  --field-border: rgba(30, 24, 21, 0.52);
+  --panel-surface: #faf6ee;
+}
+
+.eyebrow {
+  color: var(--brass-ink);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.page-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 500;
+  font-size: clamp(2rem, 4.6vw, 2.75rem);
+  line-height: 1.08;
+  text-wrap: balance;
+}
+
+.page-lede {
+  max-width: 40rem;
+  color: rgba(30, 24, 21, 0.78);
+  font-size: clamp(1rem, 1.3vw, 1.125rem);
+  line-height: 1.65;
+}
+
+.section-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 500;
+  font-size: clamp(1.4rem, 2.4vw, 1.75rem);
+  line-height: 1.18;
+}
+
+.group-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-weight: 500;
+  font-size: 1.2rem;
+  line-height: 1.2;
+}
+
+.prose-body {
+  color: rgba(30, 24, 21, 0.8);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.fine-print {
+  color: rgba(30, 24, 21, 0.68);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+/* ---- Buttons: primary (transactional) / secondary / tertiary link ------- */
+.btn {
+  display: inline-flex;
+  min-height: 3rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid transparent;
+  padding: 0.75rem 1.5rem;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  text-align: center;
+  touch-action: manipulation;
+  transition:
+    background-color 220ms var(--ease-ui),
+    border-color 220ms var(--ease-ui),
+    color 220ms var(--ease-ui);
+}
+
+.btn-primary {
+  border-color: var(--aged-gold);
+  background: var(--brass);
+  color: var(--ink);
+}
+
+.btn-primary:hover {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+.btn-primary:disabled,
+.btn-primary[aria-disabled="true"] {
+  cursor: not-allowed;
+  border-color: rgba(30, 24, 21, 0.18);
+  background: rgba(30, 24, 21, 0.1);
+  color: rgba(30, 24, 21, 0.55);
+}
+
+.btn-secondary {
+  border-color: rgba(30, 24, 21, 0.7);
+  background: transparent;
+  color: var(--ink);
+}
+
+.btn-secondary:hover {
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+.btn-link {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: rgba(30, 24, 21, 0.35);
+  text-underline-offset: 0.25em;
+  transition:
+    color 220ms var(--ease-ui),
+    text-decoration-color 220ms var(--ease-ui);
+}
+
+.btn-link:hover {
+  color: var(--brass-ink);
+  text-decoration-color: var(--brass-ink);
+}
+
+.btn:focus-visible,
+.btn-link:focus-visible,
+.field-control:focus-visible,
+.inner-focus:focus-visible {
+  outline: 2px solid var(--aged-gold);
+  outline-offset: 3px;
+}
+
+/* ---- Forms -------------------------------------------------------------- */
+.form-panel {
+  border: 1px solid rgba(30, 24, 21, 0.14);
+  border-top: 2px solid var(--brass);
+  background: var(--panel-surface);
+  padding: clamp(1.25rem, 3vw, 2rem);
+}
+
+.field-label {
+  display: block;
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.field-control {
+  display: block;
+  width: 100%;
+  min-height: 3rem;
+  border: 1px solid var(--field-border);
+  border-radius: 0;
+  background-color: var(--field-surface);
+  color: var(--ink);
+  padding: 0.7rem 0.9rem;
+  font-size: 1rem;
+  line-height: 1.4;
+  transition:
+    border-color 180ms var(--ease-ui),
+    box-shadow 180ms var(--ease-ui);
+}
+
+.field-control::placeholder {
+  color: rgba(30, 24, 21, 0.5);
+}
+
+.field-control:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.field-control:focus {
+  border-color: var(--aged-gold);
+  box-shadow: 0 0 0 3px rgba(176, 138, 81, 0.3);
+}
+
+.field-control[aria-invalid="true"] {
+  border-color: var(--danger);
+  border-width: 2px;
+  padding: calc(0.7rem - 1px) calc(0.9rem - 1px);
+}
+
+.field-control:disabled {
+  cursor: not-allowed;
+  border-color: rgba(30, 24, 21, 0.2);
+  background-color: rgba(30, 24, 21, 0.06);
+  color: rgba(30, 24, 21, 0.55);
+}
+
+select.field-control {
+  appearance: none;
+  padding-right: 2.75rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%231e1815' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3.5 6 4.5 4.5L12.5 6'/%3E%3C/svg%3E");
+  background-position: right 0.95rem center;
+  background-repeat: no-repeat;
+  background-size: 1rem;
+  cursor: pointer;
+}
+
+textarea.field-control {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+input[type="date"].field-control {
+  cursor: pointer;
+}
+
+.field-hint {
+  margin-top: 0.4rem;
+  color: rgba(30, 24, 21, 0.68);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  color: var(--danger);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.form-group {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.form-group + .form-group {
+  margin-top: clamp(1.75rem, 3vw, 2.25rem);
+  border-top: 1px solid rgba(30, 24, 21, 0.14);
+  padding-top: clamp(1.5rem, 3vw, 2rem);
+}
+
+.form-group > legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 1rem;
+  padding: 0;
+}
+
+.form-group > legend + * {
+  clear: both;
+}
+
+@media (max-width: 760px) {
+  .page-title {
+    font-size: clamp(1.9rem, 8vw, 2.25rem);
+  }
+
+  .btn {
+    min-height: 3.25rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .btn-link,
+  .field-control {
+    transition: none;
   }
 }

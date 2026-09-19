@@ -1,4 +1,5 @@
 import Image from "next/image";
+import Link from "next/link";
 import * as motion from "motion/react-client";
 import { motionPrimitives } from "@/shared/components/motion/PremiumMotion";
 
@@ -42,9 +43,9 @@ export function FinalReservation() {
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-5">
-            <a href="#" className="reservation-key-action">
+            <Link href="/booking" className="reservation-key-action">
               Reserve your stay -&gt;
-            </a>
+            </Link>
             <span className="text-[0.58rem] font-black uppercase tracking-[0.19em] text-ink/42">
               Three Pyramids / Giza
             </span>

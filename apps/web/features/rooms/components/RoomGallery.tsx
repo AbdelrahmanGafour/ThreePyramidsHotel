@@ -90,7 +90,7 @@ export function RoomGallery({ room }: RoomGalleryProps) {
         type="button"
         className="image-frame group relative aspect-[4/3] w-full cursor-zoom-in sm:aspect-[3/2]"
         onClick={() => openAt(active)}
-        aria-label={`Open photo of ${room.name}`}
+        aria-label={`Open larger photo of ${room.name}`}
       >
         <AnimatePresence mode="wait">
           <motion.div
@@ -113,20 +113,9 @@ export function RoomGallery({ room }: RoomGalleryProps) {
           </motion.div>
         </AnimatePresence>
 
-        <div aria-hidden="true" className="absolute inset-y-6 left-6 hidden flex-col items-center sm:flex">
-          <span className="text-[0.68rem] font-black uppercase tracking-[0.16em] text-ivory/85 [writing-mode:vertical-rl]">
-            {room.number}
-          </span>
-          <span className="relative mt-3 w-px flex-1 bg-brass/55">
-            <span className="absolute left-1/2 top-1/4 h-px w-1.5 -translate-x-1/2 bg-brass/70" />
-            <span className="absolute left-1/2 top-1/2 h-px w-1.5 -translate-x-1/2 bg-brass/70" />
-            <span className="absolute left-1/2 top-3/4 h-px w-1.5 -translate-x-1/2 bg-brass/70" />
-          </span>
-        </div>
-
         {hasMultiple ? (
-          <span className="absolute right-4 top-4 text-[0.56rem] font-black uppercase tracking-[0.18em] text-brass">
-            {String(active + 1).padStart(2, "0")} / {String(images.length).padStart(2, "0")}
+          <span className="absolute bottom-3 right-3 bg-ink/75 px-2.5 py-1 text-[0.8125rem] font-semibold text-ivory">
+            Photo {active + 1} of {images.length}
           </span>
         ) : null}
       </button>
@@ -161,7 +150,7 @@ export function RoomGallery({ room }: RoomGalleryProps) {
                   style={{ objectPosition: room.position }}
                 />
                 {isLastVisible ? (
-                  <span className="absolute inset-0 flex items-center justify-center bg-ink/58 text-[0.62rem] font-black uppercase tracking-[0.14em] text-ivory">
+                  <span className="absolute inset-0 flex items-center justify-center bg-ink/60 text-[0.9375rem] font-semibold text-ivory">
                     +{remaining + 1} more
                   </span>
                 ) : null}
@@ -171,10 +160,10 @@ export function RoomGallery({ room }: RoomGalleryProps) {
 
           <button
             type="button"
-            className="text-link col-span-full mt-1 justify-self-start text-ink/70"
+            className="btn-link col-span-full mt-1 justify-self-start"
             onClick={() => openAt(0)}
           >
-            View all photos -&gt;
+            View all photos
           </button>
         </motion.div>
       ) : null}
@@ -194,13 +183,13 @@ export function RoomGallery({ room }: RoomGalleryProps) {
             onTouchEnd={handleTouchEnd}
           >
             <div className="mb-4 flex items-center justify-between gap-4">
-              <p className="label text-brass">
-                {hasMultiple ? `${String(active + 1).padStart(2, "0")} / ${String(images.length).padStart(2, "0")}` : room.name}
+              <p className="text-[0.9375rem] font-semibold text-ivory">
+                {hasMultiple ? `Photo ${active + 1} of ${images.length}` : room.name}
               </p>
               <button
                 ref={closeButtonRef}
                 type="button"
-                className="min-h-11 text-[0.62rem] font-black uppercase tracking-[0.18em] text-ivory/68 transition-colors hover:text-brass"
+                className="min-h-11 border border-ivory/50 px-4 text-[0.9375rem] font-semibold text-ivory transition-colors hover:border-brass hover:text-brass"
                 aria-label="Close photo viewer"
                 onClick={close}
               >
@@ -227,17 +216,17 @@ export function RoomGallery({ room }: RoomGalleryProps) {
               <div className="mt-4 flex items-center justify-between gap-5">
                 <button
                   type="button"
-                  className="min-h-11 text-[0.62rem] font-black uppercase tracking-[0.18em] text-ivory/68 transition-colors hover:text-brass"
+                  className="min-h-11 border border-ivory/50 px-5 text-[0.9375rem] font-semibold text-ivory transition-colors hover:border-brass hover:text-brass"
                   onClick={() => go(-1)}
                 >
-                  Prev
+                  Previous photo
                 </button>
                 <button
                   type="button"
-                  className="min-h-11 text-[0.62rem] font-black uppercase tracking-[0.18em] text-brass transition-colors hover:text-ivory"
+                  className="min-h-11 border border-brass bg-brass px-5 text-[0.9375rem] font-semibold text-ink transition-colors hover:bg-ivory"
                   onClick={() => go(1)}
                 >
-                  Next
+                  Next photo
                 </button>
               </div>
             ) : null}

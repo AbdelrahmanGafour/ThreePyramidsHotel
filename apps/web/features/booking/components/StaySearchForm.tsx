@@ -2,14 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import * as motion from "motion/react-client";
-import { luxuryEase, motionPrimitives } from "@/shared/components/motion/PremiumMotion";
-import { BookingFormField, bookingInputClassName } from "@/features/booking/components/BookingFormField";
+import { FormField, FormGroup, RequiredNote, fieldControlClass } from "@/shared/components/ui/form";
+import { BookingActions } from "@/features/booking/components/BookingActions";
+import { BookingStepHeader } from "@/features/booking/components/BookingStepHeader";
 import { GuestSelector } from "@/features/booking/components/GuestSelector";
 import { useBooking } from "@/features/booking/context/BookingContext";
-import { isValidStayRange, isPastDate, todayISO } from "@/features/booking/lib/dates";
+import { isValidStayRange, isPastDate, nightsBetween, todayISO } from "@/features/booking/lib/dates";
 import type { BookingState } from "@/features/booking/types";
 import { rooms } from "@/features/rooms/data/roomsData";
+
+type StayErrors = { checkIn?: string; checkOut?: string };
 
 // Only mounted once `hydrated` is true, so its lazy `useState` initializers
 // read the already-restored booking state on their real first render — no
@@ -21,7 +23,7 @@ function StaySearchFields({ initial }: { initial: BookingState }) {
   const [checkIn, setCheckIn] = useState(initial.checkIn ?? "");
   const [checkOut, setCheckOut] = useState(initial.checkOut ?? "");
   const [guests, setGuests] = useState({ adults: initial.adults, children: initial.children });
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<StayErrors>({});
 
   // A native date input's `min` only constrains *future* picks — it won't
   // retroactively clear a check-out the guest already chose. Without this,
@@ -35,72 +37,75 @@ function StaySearchFields({ initial }: { initial: BookingState }) {
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
 
-    if (!checkIn || !checkOut) {
-      setError("Choose your check-in and check-out dates.");
-      return;
+    const nextErrors: StayErrors = {};
+    if (!checkIn) nextErrors.checkIn = "Choose your check-in date.";
+    else if (isPastDate(checkIn)) nextErrors.checkIn = "Check-in can't be in the past. Choose today or a later date.";
+
+    if (!checkOut) nextErrors.checkOut = "Choose your check-out date.";
+    else if (checkIn && !nextErrors.checkIn && !isValidStayRange(checkIn, checkOut)) {
+      nextErrors.checkOut = "Check-out must be after check-in. Choose a later date.";
     }
-    if (isPastDate(checkIn)) {
-      setError("Check-in can't be in the past.");
-      return;
-    }
-    if (!isValidStayRange(checkIn, checkOut)) {
-      setError("Check-out must be after check-in.");
+
+    setErrors(nextErrors);
+    if (nextErrors.checkIn || nextErrors.checkOut) {
+      document.getElementById(nextErrors.checkIn ? "check-in" : "check-out")?.focus();
       return;
     }
 
-    setError(null);
     setStay({ checkIn, checkOut, adults: guests.adults, children: guests.children });
     router.push("/booking/rooms");
   };
 
+  const nights = nightsBetween(checkIn, checkOut);
+
   return (
-    <motion.form
-      onSubmit={handleSubmit}
-      noValidate
-      className="mt-8 grid gap-6"
-      variants={motionPrimitives.revealUp}
-      transition={{ duration: 0.5, delay: 0.14, ease: luxuryEase }}
-    >
-      <div className="grid grid-cols-2 gap-5">
-        <BookingFormField label="Check in" htmlFor="check-in" required>
-          <input
-            id="check-in"
-            type="date"
-            required
-            min={todayISO()}
-            value={checkIn}
-            onChange={(event) => handleCheckInChange(event.target.value)}
-            className={bookingInputClassName}
-          />
-        </BookingFormField>
-        <BookingFormField label="Check out" htmlFor="check-out" required>
-          <input
-            id="check-out"
-            type="date"
-            required
-            min={checkIn || todayISO()}
-            value={checkOut}
-            onChange={(event) => setCheckOut(event.target.value)}
-            className={bookingInputClassName}
-          />
-        </BookingFormField>
+    <form onSubmit={handleSubmit} noValidate className="mt-8">
+      <div className="form-panel">
+        <RequiredNote />
+
+        <FormGroup title="Your dates">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <FormField label="Check-in date" id="check-in" required error={errors.checkIn}>
+              {(control) => (
+                <input
+                  {...control}
+                  type="date"
+                  required
+                  min={todayISO()}
+                  value={checkIn}
+                  onChange={(event) => handleCheckInChange(event.target.value)}
+                  className={fieldControlClass}
+                />
+              )}
+            </FormField>
+            <FormField label="Check-out date" id="check-out" required error={errors.checkOut}>
+              {(control) => (
+                <input
+                  {...control}
+                  type="date"
+                  required
+                  min={checkIn || todayISO()}
+                  value={checkOut}
+                  onChange={(event) => setCheckOut(event.target.value)}
+                  className={fieldControlClass}
+                />
+              )}
+            </FormField>
+          </div>
+          {nights > 0 ? (
+            <p role="status" className="text-[1rem] font-semibold text-ink">
+              {nights} night{nights === 1 ? "" : "s"}
+            </p>
+          ) : null}
+        </FormGroup>
+
+        <FormGroup title="Guests" description="Choose one room for your whole party. Use the plus and minus buttons to change the numbers.">
+          <GuestSelector value={guests} onChange={setGuests} />
+        </FormGroup>
       </div>
 
-      <fieldset className="m-0 border-0 p-0">
-        <legend className="label mb-2 p-0 text-ink/56">Guests</legend>
-        <GuestSelector value={guests} onChange={setGuests} />
-      </fieldset>
-
-      {error ? (
-        <p role="alert" className="text-[0.82rem] text-terracotta">
-          {error}
-        </p>
-      ) : null}
-
-      <button type="submit" className="brass-button mt-2 min-h-11 w-full">
-        Search availability -&gt;
-      </button>
-    </motion.form>
+      <BookingActions continueLabel="Continue to room selection" continueType="submit" />
+    </form>
   );
 }
 
@@ -122,29 +127,22 @@ export function StaySearchForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, hydrated]);
 
+  const preselected = rooms.find((room) => room.slug === state.selectedRoomSlug);
+
   return (
-    <motion.div
-      className="mx-auto flex min-h-[70dvh] max-w-[520px] flex-col justify-center px-[var(--page-x)] py-[clamp(2rem,5vw,3rem)]"
-      initial="hidden"
-      animate="show"
-      variants={motionPrimitives.staggerContainer}
-    >
-      <motion.p
-        className="label text-aged-gold"
-        variants={motionPrimitives.precisionDetail}
-        transition={{ duration: 0.4, ease: luxuryEase }}
-      >
-        Reserve your stay
-      </motion.p>
-      <motion.h1
-        className="display mt-3 text-[clamp(1.7rem,5vw,2.1rem)] leading-[1.1] text-ink"
-        variants={motionPrimitives.editorialText}
-        transition={{ duration: 0.6, delay: 0.06, ease: luxuryEase }}
-      >
-        When would you like to arrive?
-      </motion.h1>
+    <div className="mx-auto max-w-[640px] px-[var(--page-x)] py-[clamp(2rem,5vw,3.5rem)]">
+      <BookingStepHeader step="Step 1 of 4" title="Choose your stay dates">
+        Choose your check-in and check-out dates and the number of guests. Next, you&apos;ll choose a room.
+      </BookingStepHeader>
+
+      {hydrated && preselected ? (
+        <p className="mt-5 border-l-2 border-brass bg-[var(--panel-surface)] px-4 py-3 text-[1rem] text-ink/85">
+          You&apos;re reserving <strong className="font-semibold text-ink">{preselected.name}</strong>. You can change the room in the
+          next step.
+        </p>
+      ) : null}
 
       {hydrated ? <StaySearchFields initial={state} /> : null}
-    </motion.div>
+    </div>
   );
 }

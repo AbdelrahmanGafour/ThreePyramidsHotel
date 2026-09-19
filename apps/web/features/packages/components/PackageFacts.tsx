@@ -1,40 +1,30 @@
+import { InfoSection } from "@/shared/components/ui/InfoSection";
 import type { Package } from "@/features/packages/types";
 
-type PackageFactsProps = {
-  pkg: Package;
-};
-
-// A single flowing dossier line, not a two-column facts grid — the room
-// detail page already owns that pattern, so "journey at a glance" reads
-// differently on purpose: one continuous row of label — value pairs.
-export function PackageFacts({ pkg }: PackageFactsProps) {
+// Label above value, in a plain grid — the quick facts a guest checks before
+// reading the itinerary.
+export function PackageFacts({ pkg }: { pkg: Package }) {
   const facts = [
     { label: "Duration", value: pkg.duration },
-    { label: "Nights", value: String(pkg.nights) },
+    { label: "Nights at the hotel", value: String(pkg.nights) },
     { label: "Route", value: pkg.route.join(" · ") },
-    pkg.groupType ? { label: "Group", value: pkg.groupType } : null,
-    pkg.languages?.length ? { label: "Language", value: pkg.languages.join(", ") } : null,
+    pkg.groupType ? { label: "Group type", value: pkg.groupType } : null,
+    pkg.languages?.length ? { label: "Languages", value: pkg.languages.join(", ") } : null,
     pkg.pickup ? { label: "Pickup", value: pkg.pickup } : null,
   ].filter((fact): fact is { label: string; value: string } => Boolean(fact));
 
   if (!facts.length) return null;
 
   return (
-    <section className="border-t border-ink/10 bg-ivory py-[clamp(2rem,3.5vw,2.75rem)] text-ink">
-      <div className="page-grid">
-        <div className="col-span-10 col-start-2 max-md:col-span-full">
-          <p className="label text-aged-gold">Journey at a glance</p>
-          <p className="mt-4 flex flex-wrap items-baseline gap-x-8 gap-y-3 border-t border-ink/12 pt-4">
-            {facts.map((fact) => (
-              <span key={fact.label} className="text-[0.86rem] leading-[1.5] text-ink/76">
-                <span className="text-[0.66rem] font-bold uppercase tracking-[0.1em] text-ink/48">{fact.label}</span>
-                {" — "}
-                {fact.value}
-              </span>
-            ))}
-          </p>
-        </div>
-      </div>
-    </section>
+    <InfoSection title="Journey at a glance">
+      <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
+        {facts.map((fact) => (
+          <div key={fact.label} className="border-t border-ink/12 pt-3">
+            <dt className="text-[0.875rem] text-ink/68">{fact.label}</dt>
+            <dd className="mt-0.5 text-[1.0625rem] font-semibold text-ink">{fact.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </InfoSection>
   );
 }

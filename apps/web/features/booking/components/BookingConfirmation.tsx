@@ -1,9 +1,8 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import * as motion from "motion/react-client";
-import { luxuryEase, motionPrimitives } from "@/shared/components/motion/PremiumMotion";
 import { BookingEmptyState } from "@/features/booking/components/BookingEmptyState";
 import { useBooking } from "@/features/booking/context/BookingContext";
 import { formatDateLabel, nightsBetween } from "@/features/booking/lib/dates";
@@ -20,6 +19,13 @@ type BookingConfirmationProps = {
 // trusted as a real confirmation.
 export function BookingConfirmation({ rooms }: BookingConfirmationProps) {
   const { state, hydrated, reset } = useBooking();
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const confirmed = Boolean(state.confirmation);
+
+  // Move focus to the result so keyboard and screen-reader users land on it.
+  useEffect(() => {
+    if (hydrated && confirmed) headingRef.current?.focus();
+  }, [hydrated, confirmed]);
 
   if (!hydrated) return null;
 
@@ -39,97 +45,99 @@ export function BookingConfirmation({ rooms }: BookingConfirmationProps) {
   const totalGuests = state.adults + state.children;
 
   return (
-    <motion.div
-      className="mx-auto max-w-[560px] px-[var(--page-x)] py-[clamp(3rem,6vw,4.5rem)] text-center"
-      initial="hidden"
-      animate="show"
-      variants={motionPrimitives.staggerContainer}
-    >
-      <motion.span
-        aria-hidden="true"
-        className="mx-auto flex h-14 w-14 items-center justify-center border border-brass text-brass"
-        variants={motionPrimitives.precisionDetail}
-        transition={{ duration: 0.4, ease: luxuryEase }}
-      >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <path d="M4 12.5 9.5 18 20 6" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </motion.span>
+    <div className="mx-auto max-w-[640px] px-[var(--page-x)] py-[clamp(2.5rem,6vw,4rem)]">
+      <div className="text-center">
+        <span
+          aria-hidden="true"
+          className="mx-auto flex h-14 w-14 items-center justify-center border-2 border-aged-gold text-[var(--brass-ink)]"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M4 12.5 9.5 18 20 6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
 
-      <motion.p
-        className="label mt-5 text-aged-gold"
-        variants={motionPrimitives.precisionDetail}
-        transition={{ duration: 0.4, delay: 0.06, ease: luxuryEase }}
-      >
-        Reservation confirmed
-      </motion.p>
+        <p className="eyebrow mt-5">Reservation confirmed</p>
+        <h1
+          ref={headingRef}
+          tabIndex={-1}
+          className="page-title mt-2 text-[clamp(1.85rem,5vw,2.4rem)]! outline-none"
+        >
+          Thank you{state.guest.firstName ? `, ${state.guest.firstName}` : ""}.
+        </h1>
+        <p className="page-lede mx-auto mt-3">Your reservation is confirmed. We look forward to welcoming you to Giza.</p>
+      </div>
 
-      <motion.h1
-        className="display mt-3 text-[clamp(1.8rem,5.5vw,2.3rem)] leading-[1.1] text-ink"
-        variants={motionPrimitives.editorialText}
-        transition={{ duration: 0.6, delay: 0.12, ease: luxuryEase }}
-      >
-        We&apos;ll see you in Giza.
-      </motion.h1>
+      <div className="mt-8 border border-ink/20 border-t-2 border-t-brass bg-[var(--panel-surface)] p-5 text-center">
+        <p className="text-[0.9375rem] text-ink/75">Your reservation reference</p>
+        <p className="mt-1 text-[1.5rem] font-bold tracking-[0.08em] text-ink">{state.confirmation.reference}</p>
+        <p className="fine-print mt-1">Keep this reference for your records.</p>
+      </div>
 
-      <motion.p
-        className="mt-3 text-[0.68rem] font-black uppercase tracking-[0.18em] text-ink/44"
-        variants={motionPrimitives.precisionDetail}
-        transition={{ duration: 0.4, delay: 0.2, ease: luxuryEase }}
-      >
-        Reference {state.confirmation.reference}
-      </motion.p>
-
-      <motion.div
-        className="mt-8 grid gap-5 border-t border-ink/10 pt-6 text-left"
-        variants={motionPrimitives.revealUp}
-        transition={{ duration: 0.5, delay: 0.28, ease: luxuryEase }}
-      >
-        {room ? (
-          <div className="grid grid-cols-[96px_1fr] gap-4">
+      <section aria-labelledby="stay-summary-title" className="mt-8 border-t border-ink/20 pt-5">
+        <h2 id="stay-summary-title" className="group-title">
+          Your stay
+        </h2>
+        <div className={`mt-4 grid gap-4 ${room ? "grid-cols-[110px_1fr] sm:grid-cols-[150px_1fr] sm:gap-5" : ""}`}>
+          {room ? (
             <div className="image-frame relative aspect-[4/3]">
-              <Image src={room.image} alt={room.imageAlt} fill sizes="96px" className="object-cover" style={{ objectPosition: room.position }} />
+              <Image
+                src={room.image}
+                alt={room.imageAlt}
+                fill
+                sizes="150px"
+                className="object-cover"
+                style={{ objectPosition: room.position }}
+              />
+            </div>
+          ) : null}
+          <dl className="grid gap-y-2 text-[1rem]">
+            {room ? (
+              <div>
+                <dt className="sr-only">Room</dt>
+                <dd className="display text-[1.25rem] leading-[1.15]">{room.name}</dd>
+              </div>
+            ) : null}
+            <div>
+              <dt className="sr-only">Dates</dt>
+              <dd className="font-semibold">
+                {formatDateLabel(state.checkIn)} &ndash; {formatDateLabel(state.checkOut)}
+              </dd>
             </div>
             <div>
-              <h2 className="display text-[1rem] leading-[1.1] text-ink">{room.name}</h2>
-              <p className="mt-1.5 text-[0.8rem] text-ink/64">
-                {formatDateLabel(state.checkIn)} &ndash; {formatDateLabel(state.checkOut)}
-              </p>
-              <p className="mt-1 text-[0.8rem] text-ink/64">
-                {nights} night{nights === 1 ? "" : "s"} &middot; {totalGuests} guest{totalGuests === 1 ? "" : "s"}
-              </p>
+              <dt className="sr-only">Length and guests</dt>
+              <dd className="text-ink/80">
+                {nights} night{nights === 1 ? "" : "s"}, {totalGuests} guest{totalGuests === 1 ? "" : "s"}
+              </dd>
             </div>
-          </div>
-        ) : null}
-
-        <div className="border-t border-ink/10 pt-5 text-[0.86rem] text-ink/68">
-          <p>
-            {state.guest.firstName} {state.guest.lastName}
-          </p>
-          <p className="mt-1 text-ink/56">{state.guest.email}</p>
+            <div>
+              <dt className="sr-only">Reserved for</dt>
+              <dd className="text-ink/80">
+                {state.guest.firstName} {state.guest.lastName}
+              </dd>
+            </div>
+          </dl>
         </div>
+      </section>
 
-        <div className="border-t border-ink/10 pt-5">
-          <p className="label text-aged-gold">Next steps</p>
-          <p className="mt-2 text-[0.86rem] leading-[1.7] text-ink/64">
-            A confirmation email will be sent to {state.guest.email || "your email"} once this reservation is
-            processed. Our team will reach out if anything needs your attention before arrival.
-          </p>
-        </div>
-      </motion.div>
+      <section aria-labelledby="next-steps-title" className="mt-8 border-t border-ink/20 pt-5">
+        <h2 id="next-steps-title" className="group-title">
+          What happens next
+        </h2>
+        <p className="prose-body mt-3">
+          A confirmation email will be sent to <strong className="font-semibold text-ink">{state.guest.email || "your email address"}</strong>.
+          If anything needs your attention before arrival, our team will contact you. Questions in the meantime?{" "}
+          <Link href="/contact" className="font-semibold text-ink underline underline-offset-4 hover:text-[var(--brass-ink)]">
+            Contact the hotel
+          </Link>
+          .
+        </p>
+      </section>
 
-      <motion.div
-        className="mt-9 flex flex-col items-center gap-4"
-        variants={motionPrimitives.precisionDetail}
-        transition={{ duration: 0.4, delay: 0.36, ease: luxuryEase }}
-      >
-        <Link href="/" onClick={reset} className="brass-button min-h-11 w-full sm:w-auto">
+      <div className="mt-9 flex justify-center">
+        <Link href="/" onClick={reset} className="btn btn-primary w-full sm:w-auto sm:min-w-[16rem]">
           Return to the hotel
         </Link>
-        <button type="button" disabled className="text-link cursor-not-allowed text-ink/36">
-          Manage booking (coming soon) -&gt;
-        </button>
-      </motion.div>
-    </motion.div>
+      </div>
+    </div>
   );
 }

@@ -42,16 +42,16 @@ export default async function RoomDetailPage({ params }: RoomDetailPageProps) {
       <RoomBreadcrumb room={room} />
       <RoomDetailOpening room={room} />
       <RoomFacts room={room} />
-      <RoomStory room={room} />
       <RoomAmenities room={room} />
+      <RoomStory room={room} />
       <RoomStayDetails />
       <RelatedRooms rooms={relatedRooms} />
       <RoomsReservationBand
-        copy={
-          <>
-            Ready for <span className="serif-accent">{room.name}</span>? Check dates whenever you&apos;re ready.
-          </>
-        }
+        title={`Reserve ${room.name}`}
+        text="Choose your dates and guests to continue. You can review everything before you confirm."
+        href={`/booking?room=${room.slug}`}
+        actionLabel="Reserve this room"
+        hideActionOnMobile
       />
       <RoomMobileBookingBar room={room} />
     </main>

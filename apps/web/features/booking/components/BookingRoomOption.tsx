@@ -1,35 +1,35 @@
 import Image from "next/image";
 import Link from "next/link";
-import { formatCurrency } from "@/features/booking/lib/pricing";
+import { RoomFactList } from "@/features/rooms/components/RoomFactList";
+import { calculatePriceBreakdown, formatCurrency } from "@/features/booking/lib/pricing";
 import type { Room } from "@/features/rooms/data/roomsData";
 
 type BookingRoomOptionProps = {
   room: Room;
+  nights: number;
   selected: boolean;
   unavailableReason: string | null;
   onSelect: () => void;
 };
 
-// A scannable row, not another card grid — the room-selection step is about
-// comparing a short list, not browsing. Carries the same elevation-mark and
-// typographic-facts language as `RoomPlate` on the Rooms page.
-export function BookingRoomOption({ room, selected, unavailableReason, onSelect }: BookingRoomOptionProps) {
-  const facts = [
-    room.sleeps ? `${room.sleeps} guests` : null,
-    room.bedType ?? null,
-    room.sizeSqm ? `${room.sizeSqm} m²` : null,
-    room.view ?? null,
-  ].filter((fact): fact is string => Boolean(fact));
-
+// A scannable row for comparing a short list. The selected room is
+// unmistakable — heavier brass border, tinted surface, and a "Selected"
+// badge with a tick — and an unavailable room says plainly why, in text,
+// without dimming the whole row into illegibility.
+export function BookingRoomOption({ room, nights, selected, unavailableReason, onSelect }: BookingRoomOptionProps) {
   const unavailable = Boolean(unavailableReason);
+  const isSelected = selected && !unavailable;
+  const total = room.priceFrom ? calculatePriceBreakdown({ nightlyRate: room.priceFrom, nights }).total : null;
 
   return (
-    <div
-      className={`grid gap-5 border-t border-ink/10 py-6 transition-opacity sm:grid-cols-[200px_1fr] sm:gap-7 ${
-        unavailable ? "opacity-50" : ""
+    <li
+      className={`mt-4 grid gap-5 border p-4 transition-colors sm:grid-cols-[200px_1fr] sm:gap-6 sm:p-5 ${
+        isSelected
+          ? "border-2 border-aged-gold bg-[#f6ecd9] p-[calc(1rem-1px)] sm:p-[calc(1.25rem-1px)]"
+          : "border-ink/25 bg-[var(--panel-surface)]"
       }`}
     >
-      <div className="image-frame relative aspect-[4/3] origin-center sm:aspect-[4/5]">
+      <div className={`image-frame relative aspect-[4/3] sm:aspect-[4/5] ${unavailable ? "opacity-60 grayscale" : ""}`}>
         <Image
           src={room.image}
           alt={room.imageAlt}
@@ -38,65 +38,63 @@ export function BookingRoomOption({ room, selected, unavailableReason, onSelect 
           className="object-cover"
           style={{ objectPosition: room.position }}
         />
-        <span className="hero-plaque absolute left-3 top-3 px-2.5 py-1.5 text-[0.6rem] font-black uppercase tracking-[0.16em] text-brass">
-          {room.number}
-        </span>
       </div>
 
       <div className="flex flex-col">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <h3 className="display flex items-center gap-3 text-[1.2rem] leading-[1.1] text-ink">
-            {room.name}
-            {selected ? (
-              <span className="label rounded-none border border-brass/50 px-1.5 py-0.5 text-brass">Selected</span>
-            ) : null}
-          </h3>
-          {room.priceFrom && !unavailable ? (
-            <p className="shrink-0 whitespace-nowrap text-[0.78rem] font-bold text-ink/64">
-              From <span className="text-ink/95">{formatCurrency(room.priceFrom)}</span>
-              <span className="text-ink/48"> / night</span>
-            </p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h3 className="display text-[1.35rem] leading-[1.15] text-ink">{room.name}</h3>
+          {isSelected ? (
+            <span className="inline-flex items-center gap-1.5 bg-ink px-2.5 py-1 text-[0.8125rem] font-semibold text-ivory">
+              <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path d="m3 8.5 3.2 3L13 4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Selected
+            </span>
           ) : null}
         </div>
 
-        <p className="mt-2 text-[0.86rem] leading-[1.6] text-ink/64">{room.description}</p>
-
-        {facts.length ? (
-          <p className="mt-3 flex flex-wrap items-center text-[0.66rem] font-bold uppercase tracking-[0.08em] text-ink/56">
-            {facts.map((fact, index) => (
-              <span key={fact} className="flex items-center">
-                {index > 0 ? <span aria-hidden="true" className="mx-2.5 h-3 w-px bg-ink/22" /> : null}
-                {fact}
-              </span>
-            ))}
+        {room.priceFrom && !unavailable ? (
+          <p className="mt-2 text-[0.9375rem] text-ink/75">
+            <span className="text-[1.125rem] font-bold text-ink">{formatCurrency(room.priceFrom)}</span> per night
+            {total !== null && nights > 0 ? (
+              <>
+                {" "}
+                &middot; <span className="font-semibold text-ink">{formatCurrency(total)}</span> total for {nights} night
+                {nights === 1 ? "" : "s"}
+              </>
+            ) : null}
           </p>
         ) : null}
+
+        <p className="mt-2 text-[0.9375rem] leading-[1.6] text-ink/75">{room.description}</p>
+
+        <RoomFactList room={room} className="mt-4" />
 
         {unavailableReason ? (
-          <p role="status" className="mt-3 text-[0.78rem] text-terracotta">
-            {unavailableReason}
+          <p role="status" className="mt-4 flex items-start gap-2 border border-[var(--danger)]/40 bg-[var(--danger)]/[0.06] px-3 py-2.5 text-[0.9375rem] font-semibold text-[var(--danger)]">
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" className="mt-[3px] shrink-0">
+              <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M8 4.5v4.2M8 10.9v.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+            <span>Can&apos;t be selected: {unavailableReason}</span>
           </p>
         ) : null}
 
-        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 sm:mt-auto sm:pt-4">
-          <Link href={`/rooms/${room.slug}`} className="text-link text-ink/68 hover:text-ink">
-            Room details -&gt;
-          </Link>
+        <div className="mt-5 flex flex-col gap-3 sm:mt-auto sm:flex-row sm:items-center sm:gap-5 sm:pt-4">
           <button
             type="button"
             onClick={onSelect}
             disabled={unavailable}
-            aria-pressed={selected}
-            className={
-              selected && !unavailable
-                ? "reservation-key-action min-h-11"
-                : "brass-button min-h-11 disabled:cursor-not-allowed disabled:opacity-40"
-            }
+            aria-pressed={isSelected}
+            className={`btn w-full sm:w-auto ${isSelected ? "btn-secondary" : "btn-primary"}`}
           >
-            {unavailable ? "Not available" : selected ? "Change room" : "Select this room"}
+            {unavailable ? "Not available for your party" : isSelected ? "Selected" : "Select this room"}
           </button>
+          <Link href={`/rooms/${room.slug}`} className="btn-link justify-center sm:justify-start">
+            View room details
+          </Link>
         </div>
       </div>
-    </div>
+    </li>
   );
 }

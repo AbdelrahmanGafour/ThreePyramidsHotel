@@ -1,45 +1,38 @@
+import { InfoSection } from "@/shared/components/ui/InfoSection";
 import type { Package } from "@/features/packages/types";
 
-type PackageInclusionsProps = {
-  pkg: Package;
-};
-
-// Plain typographic lists, not a green-check/red-cross icon grid — a fine
-// ink mark for what's included, a hollow one for what isn't.
-export function PackageInclusions({ pkg }: PackageInclusionsProps) {
-  if (!pkg.included.length && !pkg.excluded.length) return null;
-
+// Two plainly-titled sections. What's included gets a tick; what isn't gets a
+// dash — and each carries its heading, so the marks never carry meaning alone.
+export function PackageInclusions({ pkg }: { pkg: Package }) {
   return (
-    <section className="border-t border-ink/10 bg-ivory py-[clamp(2.25rem,4vw,3rem)] text-ink">
-      <div className="page-grid gap-y-8">
-        {pkg.included.length ? (
-          <div className="col-span-4 col-start-2 max-md:col-span-full">
-            <h2 className="label text-aged-gold">Included</h2>
-            <ul className="mt-5 grid gap-3">
-              {pkg.included.map((item) => (
-                <li key={item} className="flex items-start gap-3 text-[0.88rem] leading-[1.6] text-ink/76">
-                  <span aria-hidden="true" className="mt-2 h-1 w-1 shrink-0 rotate-45 bg-brass" />
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
+    <>
+      {pkg.included.length ? (
+        <InfoSection title="What's included">
+          <ul className="grid gap-3">
+            {pkg.included.map((item) => (
+              <li key={item} className="flex items-start gap-3 text-[1rem] leading-[1.6] text-ink/85">
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" className="mt-1 shrink-0 text-[var(--brass-ink)]">
+                  <path d="m3 8.5 3.2 3L13 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </InfoSection>
+      ) : null}
 
-        {pkg.excluded.length ? (
-          <div className="col-span-4 col-start-7 max-md:col-span-full">
-            <h2 className="label text-ink/48">Not included</h2>
-            <ul className="mt-5 grid gap-3">
-              {pkg.excluded.map((item) => (
-                <li key={item} className="flex items-start gap-3 text-[0.88rem] leading-[1.6] text-ink/56">
-                  <span aria-hidden="true" className="mt-2.5 h-1 w-1 shrink-0 rotate-45 border border-ink/40" />
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </div>
-    </section>
+      {pkg.excluded.length ? (
+        <InfoSection title="What's not included">
+          <ul className="grid gap-3">
+            {pkg.excluded.map((item) => (
+              <li key={item} className="flex items-start gap-3 text-[1rem] leading-[1.6] text-ink/80">
+                <span aria-hidden="true" className="mt-[0.72rem] h-px w-3 shrink-0 bg-ink/60" />
+                {item}
+              </li>
+            ))}
+          </ul>
+        </InfoSection>
+      ) : null}
+    </>
   );
 }

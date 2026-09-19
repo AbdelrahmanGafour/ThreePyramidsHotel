@@ -2,9 +2,13 @@ import Link from "next/link";
 import { BrandMark } from "@/shared/components/ui/BrandMark";
 import { FooterSand } from "@/shared/components/layout/footer/FooterSand";
 
-// Homepage sections use root-fragment URLs so they resolve from every marketing route.
+// Every entry here is a real, working destination. `/#id` resolves correctly
+// from any route — including the homepage itself, where Next's Link treats
+// it as a same-page scroll rather than a reload — so no client-side
+// pathname branching is needed to make these work everywhere.
 const primaryLinks = [
-  { label: "Stay", href: "/#stay" },
+  { label: "Stay", href: "/rooms" },
+  { label: "Journeys", href: "/packages" },
   { label: "Rooftop", href: "/#rooftop" },
   { label: "Experiences", href: "/#experiences" },
   { label: "Gallery", href: "/#gallery" },
@@ -13,20 +17,11 @@ const primaryLinks = [
 const secondaryLinks = [
   { label: "Our Story", href: "/#our-story" },
   { label: "Location", href: "/#location" },
-  { label: "Contact", href: "/#reserve" },
-  { label: "Instagram", href: "#" },
-  { label: "Facebook", href: "#" },
+  { label: "Contact", href: "/contact" },
+  { label: "FAQ", href: "/faq" },
 ];
 
-function FooterLink({
-  href,
-  index,
-  label,
-}: {
-  href: string;
-  index: number;
-  label: string;
-}) {
+function FooterLink({ href, index, label }: { href: string; index: number; label: string }) {
   return (
     <Link
       href={href}
@@ -65,7 +60,7 @@ export function Footer() {
           Ancient materials. Modern hospitality. Giza after sunset.
         </p>
 
-        <div className="mt-6 grid gap-4 sm:grid-cols-3 sm:gap-x-8 lg:mt-7 lg:gap-x-14">
+        <div className="mx-auto mt-6 grid max-w-[480px] gap-4 sm:grid-cols-2 sm:gap-x-10 lg:mt-7">
           <nav aria-label="Primary footer navigation" className="grid content-start gap-1">
             <p className="mb-1.5 text-[0.52rem] font-black uppercase tracking-[0.22em] text-brass">Hotel</p>
             {primaryLinks.map((link, index) => (
@@ -75,30 +70,23 @@ export function Footer() {
 
           <nav aria-label="Secondary footer navigation" className="grid content-start gap-1">
             <p className="mb-1.5 text-[0.52rem] font-black uppercase tracking-[0.22em] text-brass">Index</p>
-            {secondaryLinks.slice(0, 3).map((link, index) => (
+            {secondaryLinks.map((link, index) => (
               <FooterLink href={link.href} index={index + primaryLinks.length + 1} key={link.label} label={link.label} />
-            ))}
-          </nav>
-
-          <nav aria-label="Social footer navigation" className="grid content-start gap-1">
-            <p className="mb-1.5 text-[0.52rem] font-black uppercase tracking-[0.22em] text-brass">Social</p>
-            {secondaryLinks.slice(3).map((link, index) => (
-              <FooterLink href={link.href} index={index + 8} key={link.label} label={link.label} />
             ))}
           </nav>
         </div>
 
-        <div className="mt-5 grid gap-3 border-t border-ivory/10 pt-3 text-[0.52rem] font-black uppercase tracking-[0.14em] text-ivory/38 sm:grid-cols-[1fr_auto_1fr] sm:items-center sm:text-[0.54rem] sm:tracking-[0.16em]">
+        <div className="mt-5 flex flex-col items-center gap-3 border-t border-ivory/10 pt-3 text-[0.52rem] font-black uppercase tracking-[0.14em] text-ivory/38 sm:flex-row sm:justify-between sm:gap-4 sm:text-[0.54rem] sm:tracking-[0.16em]">
           <p>(c) 2026 Three Pyramids Boutique Hotel</p>
-          <p className="text-brass/64">Giza / Egypt</p>
-          <div className="flex gap-6 sm:justify-end">
-            <a href="#" className="transition-colors hover:text-brass">
+          <nav aria-label="Utility footer navigation" className="flex items-center gap-4">
+            <Link href="/privacy" className="transition-colors hover:text-brass">
               Privacy
-            </a>
-            <button type="button" className="transition-colors hover:text-brass">
-              EN
-            </button>
-          </div>
+            </Link>
+            <Link href="/policies" className="transition-colors hover:text-brass">
+              Policies
+            </Link>
+          </nav>
+          <p className="text-brass/64">Giza / Egypt</p>
         </div>
       </div>
     </footer>

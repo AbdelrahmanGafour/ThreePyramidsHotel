@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, type PointerEvent } from "react";
-import { motion, useReducedMotion } from "motion/react";
+import { motion, useReducedMotion, type Variants } from "motion/react";
 import { luxuryEase } from "@/shared/components/motion/PremiumMotion";
 
 type NetworkInformationLike = { saveData?: boolean };
@@ -51,6 +51,48 @@ export function GizaMoment() {
     return () => observer.disconnect();
   }, [reduceMotion]);
 
+  // A single whileInView on the wrapping group below drives every child through
+  // one shared IntersectionObserver; each child keeps its own hidden/show
+  // shape and delay so the staggered reveal reads exactly as before.
+  const revealGroup: Variants = { hidden: {}, show: {} };
+
+  const plaqueVariants: Variants = {
+    hidden: { opacity: 0, y: reduceMotion ? 0 : 10 },
+    show: {
+      opacity: 1,
+      y: 0,
+      transition: { duration: reduceMotion ? 0 : 0.55, delay: reduceMotion ? 0 : 0.15, ease: luxuryEase },
+    },
+  };
+
+  const headingLine1Variants: Variants = {
+    hidden: { opacity: 0, y: reduceMotion ? 0 : 14, clipPath: reduceMotion ? undefined : "inset(0 0 100% 0)" },
+    show: {
+      opacity: 1,
+      y: 0,
+      clipPath: "inset(0 0 0% 0)",
+      transition: { duration: reduceMotion ? 0 : 0.62, delay: reduceMotion ? 0 : 0.3, ease: luxuryEase },
+    },
+  };
+
+  const headingLine2Variants: Variants = {
+    hidden: { opacity: 0, y: reduceMotion ? 0 : 14, clipPath: reduceMotion ? undefined : "inset(0 0 100% 0)" },
+    show: {
+      opacity: 1,
+      y: 0,
+      clipPath: "inset(0 0 0% 0)",
+      transition: { duration: reduceMotion ? 0 : 0.62, delay: reduceMotion ? 0 : 1.15, ease: luxuryEase },
+    },
+  };
+
+  const dividerVariants: Variants = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: { duration: reduceMotion ? 0 : 0.5, delay: reduceMotion ? 0 : 1.95, ease: luxuryEase },
+    },
+  };
+
   return (
     <section
       ref={sectionRef}
@@ -78,60 +120,49 @@ export function GizaMoment() {
       />
 
       <motion.div
-        ref={plaqueRef}
-        className="mirror-object absolute left-[var(--page-x)] top-[clamp(4.75rem,13vw,8rem)] z-10 w-[148px] px-3.5 py-2.5 sm:w-[176px] sm:px-4 sm:py-3 lg:w-[208px]"
-        onPointerMove={updateGlint}
-        onPointerLeave={resetGlint}
-        initial={{ opacity: 0, y: reduceMotion ? 0 : 10 }}
-        whileInView={{ opacity: 1, y: 0 }}
+        initial="hidden"
+        whileInView="show"
         viewport={{ once: true, margin: "-18% 0px" }}
-        transition={{ duration: reduceMotion ? 0 : 0.55, delay: reduceMotion ? 0 : 0.15, ease: luxuryEase }}
+        variants={revealGroup}
       >
-        <p className="text-[0.5rem] font-black uppercase tracking-[0.2em] text-ivory/68">Giza Plateau</p>
-        <p className="mt-1.5 text-[0.56rem] font-extrabold leading-[1.5] tracking-[0.06em] text-brass/85">
-          29.9792&deg; N
-          <br />
-          31.1342&deg; E
-        </p>
-      </motion.div>
+        <motion.div
+          ref={plaqueRef}
+          className="mirror-object absolute left-[var(--page-x)] top-[clamp(4.75rem,13vw,8rem)] z-10 w-[148px] px-3.5 py-2.5 sm:w-[176px] sm:px-4 sm:py-3 lg:w-[208px]"
+          onPointerMove={updateGlint}
+          onPointerLeave={resetGlint}
+          variants={plaqueVariants}
+        >
+          <p className="text-[0.5rem] font-black uppercase tracking-[0.2em] text-ivory/68">Giza Plateau</p>
+          <p className="mt-1.5 text-[0.56rem] font-extrabold leading-[1.5] tracking-[0.06em] text-brass/85">
+            29.9792&deg; N
+            <br />
+            31.1342&deg; E
+          </p>
+        </motion.div>
 
-      <div className="absolute inset-x-0 top-[58%] z-10 flex justify-center px-5 sm:px-[var(--page-x)] md:top-[63%]">
-        <div className="w-full text-center sm:max-w-[560px] md:max-w-[640px] lg:max-w-[720px]">
-          <h2 className="display text-[clamp(2.125rem,8vw,2.625rem)] leading-[1.08] md:text-[clamp(3.1rem,3.6vw,3.6rem)]">
-            <motion.span
-              className="block text-balance"
-              initial={{ opacity: 0, y: reduceMotion ? 0 : 14, clipPath: reduceMotion ? undefined : "inset(0 0 100% 0)" }}
-              whileInView={{ opacity: 1, y: 0, clipPath: "inset(0 0 0% 0)" }}
-              viewport={{ once: true, margin: "-18% 0px" }}
-              transition={{ duration: reduceMotion ? 0 : 0.62, delay: reduceMotion ? 0 : 0.3, ease: luxuryEase }}
-            >
-              The plateau is not an excursion.
-            </motion.span>
-            <motion.span
-              className="block text-balance"
-              initial={{ opacity: 0, y: reduceMotion ? 0 : 14, clipPath: reduceMotion ? undefined : "inset(0 0 100% 0)" }}
-              whileInView={{ opacity: 1, y: 0, clipPath: "inset(0 0 0% 0)" }}
-              viewport={{ once: true, margin: "-18% 0px" }}
-              transition={{ duration: reduceMotion ? 0 : 0.62, delay: reduceMotion ? 0 : 1.15, ease: luxuryEase }}
-            >
-              It is the horizon.
-            </motion.span>
-          </h2>
+        <div className="absolute inset-x-0 top-[58%] z-10 flex justify-center px-5 sm:px-[var(--page-x)] md:top-[63%]">
+          <div className="w-full text-center sm:max-w-[560px] md:max-w-[640px] lg:max-w-[720px]">
+            <h2 className="display text-[clamp(2.125rem,8vw,2.625rem)] leading-[1.08] md:text-[clamp(3.1rem,3.6vw,3.6rem)]">
+              <motion.span className="block text-balance" variants={headingLine1Variants}>
+                The plateau is not an excursion.
+              </motion.span>
+              <motion.span className="block text-balance" variants={headingLine2Variants}>
+                It is the horizon.
+              </motion.span>
+            </h2>
 
-          <motion.div
-            className="mt-5 flex items-center justify-center gap-3 md:mt-6"
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true, margin: "-18% 0px" }}
-            transition={{ duration: reduceMotion ? 0 : 0.5, delay: reduceMotion ? 0 : 1.95, ease: luxuryEase }}
-          >
-            <span className="portal-line w-8" aria-hidden="true" />
-            <span className="text-[0.54rem] font-black uppercase tracking-[0.22em] text-ivory/52">
-              Dusk / Giza Plateau
-            </span>
-          </motion.div>
+            <motion.div
+              className="mt-5 flex items-center justify-center gap-3 md:mt-6"
+              variants={dividerVariants}
+            >
+              <span className="portal-line w-8" aria-hidden="true" />
+              <span className="text-[0.54rem] font-black uppercase tracking-[0.22em] text-ivory/52">
+                Dusk / Giza Plateau
+              </span>
+            </motion.div>
+          </div>
         </div>
-      </div>
+      </motion.div>
     </section>
   );
 }

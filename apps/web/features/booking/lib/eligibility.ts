@@ -16,7 +16,7 @@ import type { Room } from "@/features/rooms/data/roomsData";
  */
 export function getRoomUnavailableReason(room: Room, partySize: number): string | null {
   if (room.sleeps && room.sleeps < partySize) {
-    return `Sleeps up to ${room.sleeps} — fewer than your ${partySize} guests.`;
+    return `this room sleeps up to ${room.sleeps} guests, and your party is ${partySize}.`;
   }
   return null;
 }

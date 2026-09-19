@@ -50,9 +50,10 @@ export default async function PackageDetailPage({ params }: PackageDetailPagePro
       <PackageInquiry pkg={pkg} />
       <RelatedPackages packages={relatedPackages} />
       <PackagesClosing
-        copy={`Ready to shape ${pkg.shortTitle} around your dates? Enquire above and the hotel will follow up.`}
+        title={`Ready to enquire about ${pkg.shortTitle}?`}
+        text="Send a short inquiry and the hotel will follow up to shape the journey around your dates."
         href="#inquire"
-        actionLabel="Enquire now ->"
+        actionLabel="Enquire about this journey"
       />
     </main>
   );

@@ -1,33 +1,49 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { BrandMark } from "@/shared/components/ui/BrandMark";
+import { navItems } from "@/features/home/data/homeData";
 
-// Homepage sections linked from the shared header. Root-fragment URLs so they resolve from every marketing route.
-const navItems = [
-  { label: "Stay", sectionId: "stay", href: "/#stay" },
-  { label: "Rooftop", sectionId: "rooftop", href: "/#rooftop" },
-  { label: "Experiences", sectionId: "experiences", href: "/#experiences" },
-  { label: "Gallery", sectionId: "gallery", href: "/#gallery" },
-  { label: "Location", sectionId: "location", href: "/#location" },
-];
 const leftNavItems = navItems.slice(0, 3);
 const rightNavItems = navItems.slice(3);
-const reserveHref = "/booking";
 
-const MotionLink = motion.create(Link);
+// Items that are real pages now — always the same destination regardless of
+// which page you're currently on. Everything else in `navItems` is a
+// homepage section anchor: on the homepage itself that's a smooth in-page
+// scroll, from any other page it's a link back to `/` with the hash so the
+// browser lands on the right section once the homepage has mounted.
+const PAGE_LINKS: Record<string, string> = {
+  Stay: "/rooms",
+  Journeys: "/packages",
+};
+
+// Routes that render a light background from the first frame, so the
+// transparent top-of-page treatment (designed for a dark hero image) would
+// read as low-contrast there. This intentionally includes routes that are
+// not in the primary nav (like Contact) — nav membership and "is this a
+// light page" are separate questions.
+const LIGHT_BACKGROUND_ROUTES = [...Object.values(PAGE_LINKS), "/contact", "/faq", "/policies", "/privacy"];
+
+function slugify(item: string) {
+  return item.toLowerCase().replace(" ", "-");
+}
 
 export function Header() {
   const pathname = usePathname();
   const isHome = pathname === "/";
+  // Those routes render the header's existing dark/scrolled surface
+  // immediately instead of waiting for a scroll event; the homepage keeps
+  // the scroll-driven behavior unchanged.
+  const isLightBackgroundRoute = LIGHT_BACKGROUND_ROUTES.some(
+    (base) => pathname === base || pathname.startsWith(`${base}/`),
+  );
   const [scrolled, setScrolled] = useState(false);
+  const showDarkSurface = scrolled || isLightBackgroundRoute;
   const [menuOpen, setMenuOpen] = useState(false);
-  const [activeSection, setActiveSection] = useState("stay");
-  // Section highlighting only applies on the homepage, where those sections exist.
-  const currentSection = isHome ? activeSection : null;
+  const [activeAnchor, setActiveAnchor] = useState("");
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const reduceMotion = useReducedMotion();
@@ -36,6 +52,24 @@ export function Header() {
     setMenuOpen(false);
     window.setTimeout(() => menuButtonRef.current?.focus(), 0);
   }, []);
+
+  const hrefFor = useCallback((item: string) => {
+    const pageHref = PAGE_LINKS[item];
+    if (pageHref) return pageHref;
+    // `/#id` resolves correctly from any route, including the homepage
+    // itself — Next's Link treats it as a same-page scroll there rather
+    // than a reload, so no pathname branching is needed for the href.
+    return `/#${slugify(item)}`;
+  }, []);
+
+  const isActive = useCallback(
+    (item: string) => {
+      const pageHref = PAGE_LINKS[item];
+      if (pageHref) return pathname === pageHref || pathname.startsWith(`${pageHref}/`);
+      return isHome && activeAnchor === slugify(item);
+    },
+    [pathname, isHome, activeAnchor],
+  );
 
   useEffect(() => {
     // React skips re-rendering when the value is unchanged, so this only renders when the threshold is crossed.
@@ -46,35 +80,28 @@ export function Header() {
   }, []);
 
   useEffect(() => {
-    // The header persists across marketing routes, so re-run whenever the user enters or leaves the homepage.
     if (!isHome) return;
 
-    const sections = navItems
-      .map((item) => document.getElementById(item.sectionId))
+    const anchorItems = navItems.filter((item) => !PAGE_LINKS[item]);
+    const sections = anchorItems
+      .map((item) => document.getElementById(slugify(item)))
       .filter((section): section is HTMLElement => Boolean(section));
 
     if (!sections.length) return;
 
-    // A section is active while it covers the narrow band 38–48% down the viewport. Threshold 0 fires as soon as
-    // a section touches the band, so tall sections (whose ratio can never reach a larger threshold) still register.
-    // If two sections share the band, the one covering more of it wins; ratios would unfairly favour short sections.
     const observer = new IntersectionObserver(
       (entries) => {
         const visible = entries
           .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => b.intersectionRect.height - a.intersectionRect.height)[0];
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
 
-        if (visible?.target.id) setActiveSection(visible.target.id);
+        if (visible?.target.id) setActiveAnchor(visible.target.id);
       },
-      { rootMargin: "-38% 0px -52% 0px", threshold: 0 },
+      { rootMargin: "-38% 0px -52% 0px", threshold: [0.12, 0.28, 0.44] },
     );
 
     sections.forEach((section) => observer.observe(section));
-    return () => {
-      observer.disconnect();
-      // Start fresh on the next homepage visit instead of showing a stale section.
-      setActiveSection("stay");
-    };
+    return () => observer.disconnect();
   }, [isHome]);
 
   useEffect(() => {
@@ -116,14 +143,19 @@ export function Header() {
       <div
         aria-hidden="true"
         className={`pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(30,24,21,0.26),rgba(30,24,21,0.1)_60%,transparent)] transition-opacity duration-500 ${
-          scrolled ? "opacity-0" : "opacity-100"
+          showDarkSurface ? "opacity-0" : "opacity-100"
         }`}
       />
-      {/* Scrolled: near-black translucent glass with a light blur and a hairline edge. */}
+      {/* Scrolled: near-black translucent glass with a light blur and a hairline edge.
+          The blur itself is desktop-only — on inner pages (contact/faq/policies/
+          privacy/rooms/packages) this surface is permanently on, so backdrop-filter
+          would otherwise recompute every scroll frame for the life of the page.
+          The rest of the design system already drops backdrop-filter at this same
+          1024px cutoff (see globals.css); this brings the header in line with it. */}
       <div
         aria-hidden="true"
         className={`pointer-events-none absolute inset-0 bg-[rgba(18,15,13,0.72)] shadow-[inset_0_-1px_0_rgba(244,238,229,0.09)] transition-opacity duration-500 ${
-          scrolled ? "opacity-100 backdrop-blur-[12px]" : "opacity-0"
+          showDarkSurface ? "opacity-100 lg:backdrop-blur-[12px]" : "opacity-0"
         }`}
       />
 
@@ -136,38 +168,34 @@ export function Header() {
 
       <nav
         className={`relative grid grid-cols-[1fr_auto] items-center px-[var(--page-x)] pt-[env(safe-area-inset-top)] transition-[height] duration-500 ease-[var(--ease-luxury)] min-[1180px]:grid-cols-[1fr_auto_1fr] min-[1180px]:pt-0 ${
-          scrolled ? "h-[58px] min-[1180px]:h-[64px]" : "h-[68px] min-[1180px]:h-[80px]"
+          showDarkSurface ? "h-[58px] min-[1180px]:h-[64px]" : "h-[68px] min-[1180px]:h-[80px]"
         }`}
       >
         <div className="hidden items-center justify-end gap-5 pr-7 min-[1180px]:flex">
           {leftNavItems.map((item) => (
             <Link
-              href={item.href}
-              key={item.sectionId}
-              aria-current={currentSection === item.sectionId ? "page" : undefined}
+              href={hrefFor(item)}
+              key={item}
+              aria-current={isActive(item) ? "page" : undefined}
               className={`group relative py-4 text-[0.58rem] font-extrabold uppercase tracking-[0.2em] transition-colors hover:text-brass! ${
-                currentSection === item.sectionId ? "text-brass!" : "text-ivory/90!"
+                isActive(item) ? "text-brass!" : "text-ivory/90!"
               }`}
             >
               <span
                 className={`absolute bottom-2 left-1/2 h-px w-5 -translate-x-1/2 bg-brass transition-transform duration-500 ${
-                  currentSection === item.sectionId ? "scale-x-100" : "scale-x-0 group-hover:scale-x-100"
+                  isActive(item) ? "scale-x-100" : "scale-x-0 group-hover:scale-x-100"
                 }`}
               />
-              {item.label}
+              {item}
             </Link>
           ))}
           <span className="h-px w-[clamp(2.5rem,6vw,6.5rem)] bg-[linear-gradient(90deg,transparent,rgba(176,138,81,0.62))]" />
         </div>
 
-        <Link
-          href="/"
-          className="group justify-self-start min-[1180px]:justify-self-center"
-          aria-label="Three Pyramids home"
-        >
+        <Link href="/" className="group justify-self-start min-[1180px]:justify-self-center" aria-label="Three Pyramids home">
           <span
             className={`grid grid-cols-[auto_1fr] items-center gap-2 leading-none transition-transform duration-500 ease-[var(--ease-luxury)] min-[1180px]:block min-[1180px]:justify-items-center ${
-              scrolled ? "min-[1180px]:scale-[0.88]" : ""
+              showDarkSurface ? "min-[1180px]:scale-[0.88]" : ""
             }`}
           >
             <BrandMark className="h-5 w-10 text-brass transition-colors group-hover:text-ivory min-[1180px]:mx-auto min-[1180px]:h-7 min-[1180px]:w-14" />
@@ -184,22 +212,22 @@ export function Header() {
           <span className="h-px w-[clamp(2.5rem,6vw,6.5rem)] bg-[linear-gradient(90deg,rgba(176,138,81,0.62),transparent)]" />
           {rightNavItems.map((item) => (
             <Link
-              href={item.href}
-              key={item.sectionId}
-              aria-current={currentSection === item.sectionId ? "page" : undefined}
+              href={hrefFor(item)}
+              key={item}
+              aria-current={isActive(item) ? "page" : undefined}
               className={`group relative py-4 text-[0.58rem] font-extrabold uppercase tracking-[0.2em] transition-colors hover:text-brass! ${
-                currentSection === item.sectionId ? "text-brass!" : "text-ivory/90!"
+                isActive(item) ? "text-brass!" : "text-ivory/90!"
               }`}
             >
               <span
                 className={`absolute bottom-2 left-1/2 h-px w-5 -translate-x-1/2 bg-brass transition-transform duration-500 ${
-                  currentSection === item.sectionId ? "scale-x-100" : "scale-x-0 group-hover:scale-x-100"
+                  isActive(item) ? "scale-x-100" : "scale-x-0 group-hover:scale-x-100"
                 }`}
               />
-              {item.label}
+              {item}
             </Link>
           ))}
-          <Link href={reserveHref} className="reserve-plate ml-1">
+          <Link href="/booking" className="reserve-plate ml-1">
             Reserve
           </Link>
         </div>
@@ -259,17 +287,11 @@ export function Header() {
                 <p className="label mb-5 text-brass">Navigation</p>
                 <div className="grid" aria-label="Mobile navigation links">
                   {navItems.map((item, index) => {
-                    const selected = currentSection === item.sectionId;
+                    const selected = isActive(item);
 
                     return (
-                      <MotionLink
-                        href={item.href}
-                        key={item.sectionId}
-                        aria-current={selected ? "page" : undefined}
-                        className={`group grid min-h-14 grid-cols-[2.25rem_1fr] items-center border-b border-ivory/10 py-3 text-ivory transition-colors ${
-                          selected ? "text-brass!" : "text-ivory/82! hover:text-brass!"
-                        }`}
-                        onClick={closeMenu}
+                      <motion.div
+                        key={item}
                         initial={{ opacity: 0, y: reduceMotion ? 0 : 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{
@@ -278,20 +300,29 @@ export function Header() {
                           ease: [0.22, 1, 0.36, 1],
                         }}
                       >
-                        <span className="text-[0.64rem] font-black tracking-[0.2em] text-brass/74">
-                          {String(index + 1).padStart(2, "0")}
-                        </span>
-                        <span className="font-sans text-[clamp(1.45rem,7.2vw,2rem)] font-semibold uppercase leading-none tracking-[0.03em]">
-                          {item.label}
-                        </span>
-                      </MotionLink>
+                        <Link
+                          href={hrefFor(item)}
+                          aria-current={selected ? "page" : undefined}
+                          className={`group grid min-h-14 grid-cols-[2.25rem_1fr] items-center border-b border-ivory/10 py-3 text-ivory transition-colors ${
+                            selected ? "text-brass!" : "text-ivory/82! hover:text-brass!"
+                          }`}
+                          onClick={closeMenu}
+                        >
+                          <span className="text-[0.64rem] font-black tracking-[0.2em] text-brass/74">
+                            {String(index + 1).padStart(2, "0")}
+                          </span>
+                          <span className="font-sans text-[clamp(1.45rem,7.2vw,2rem)] font-semibold uppercase leading-none tracking-[0.03em]">
+                            {item}
+                          </span>
+                        </Link>
+                      </motion.div>
                     );
                   })}
                 </div>
               </div>
 
               <div className="border-t border-brass/24 pt-5">
-                <Link href={reserveHref} className="reserve-plate min-h-11 w-full" onClick={closeMenu}>
+                <Link href="/booking" className="reserve-plate min-h-11 w-full" onClick={closeMenu}>
                   Reserve your stay -&gt;
                 </Link>
                 <div className="mt-5 flex items-center justify-between gap-4 text-[0.58rem] font-black uppercase tracking-[0.2em] text-ivory/44">

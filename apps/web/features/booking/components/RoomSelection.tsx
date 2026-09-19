@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import * as motion from "motion/react-client";
-import { luxuryEase, motionPrimitives } from "@/shared/components/motion/PremiumMotion";
 import { BookingActions } from "@/features/booking/components/BookingActions";
 import { BookingEmptyState } from "@/features/booking/components/BookingEmptyState";
 import { BookingRoomOption } from "@/features/booking/components/BookingRoomOption";
+import { BookingStepHeader } from "@/features/booking/components/BookingStepHeader";
 import { useBooking } from "@/features/booking/context/BookingContext";
 import { formatDateLabel, nightsBetween } from "@/features/booking/lib/dates";
 import { getRoomUnavailableReason, hasAnyEligibleRoom } from "@/features/booking/lib/eligibility";
+import { calculatePriceBreakdown, formatCurrency } from "@/features/booking/lib/pricing";
 import type { Room } from "@/features/rooms/data/roomsData";
 
 type RoomSelectionProps = {
@@ -41,60 +41,80 @@ export function RoomSelection({ rooms }: RoomSelectionProps) {
   // after the fact (e.g. going back to step 1 and adding a guest) — that must
   // block continuing, not just look wrong.
   const canContinue = selectedRoom ? !getRoomUnavailableReason(selectedRoom, totalGuests) : false;
+  const selectedTotal =
+    selectedRoom?.priceFrom && canContinue
+      ? calculatePriceBreakdown({ nightlyRate: selectedRoom.priceFrom, nights }).total
+      : null;
 
   return (
-    <motion.div
-      className="mx-auto max-w-[760px] px-[var(--page-x)] py-[clamp(2.5rem,5vw,3.75rem)]"
-      initial="hidden"
-      animate="show"
-      variants={motionPrimitives.staggerContainer}
-    >
-      <motion.p
-        className="label text-aged-gold"
-        variants={motionPrimitives.precisionDetail}
-        transition={{ duration: 0.4, ease: luxuryEase }}
-      >
-        {formatDateLabel(state.checkIn)} &ndash; {formatDateLabel(state.checkOut)} &middot; {nights} night
-        {nights === 1 ? "" : "s"} &middot; {totalGuests} guest{totalGuests === 1 ? "" : "s"}
-      </motion.p>
-      <motion.h1
-        className="display mt-3 text-[clamp(1.7rem,5vw,2.1rem)] leading-[1.1] text-ink"
-        variants={motionPrimitives.editorialText}
-        transition={{ duration: 0.6, delay: 0.06, ease: luxuryEase }}
-      >
-        Choose your room.
-      </motion.h1>
+    <div className="mx-auto max-w-[760px] px-[var(--page-x)] py-[clamp(2rem,5vw,3.5rem)]">
+      <BookingStepHeader step="Step 2 of 4" title="Choose your room">
+        Choose one room to continue. Prices are per night, with the total for your stay shown too.
+      </BookingStepHeader>
+
+      <div className="mt-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-1 border-y border-ink/15 py-3">
+        <p className="text-[1rem] text-ink">
+          <span className="font-semibold">
+            {formatDateLabel(state.checkIn)} &ndash; {formatDateLabel(state.checkOut)}
+          </span>
+          <span className="text-ink/75">
+            {" "}
+            &middot; {nights} night{nights === 1 ? "" : "s"} &middot; {totalGuests} guest{totalGuests === 1 ? "" : "s"}
+          </span>
+        </p>
+        <Link href="/booking" className="btn-link">
+          Edit dates and guests
+        </Link>
+      </div>
 
       {anyEligible ? (
-        <motion.div variants={motionPrimitives.revealUp} transition={{ duration: 0.5, delay: 0.14, ease: luxuryEase }}>
+        <ul aria-label="Available room types">
           {rooms.map((room) => (
             <BookingRoomOption
               key={room.slug}
               room={room}
+              nights={nights}
               selected={state.selectedRoomSlug === room.slug}
               unavailableReason={getRoomUnavailableReason(room, totalGuests)}
               onSelect={() => selectRoom(room.slug)}
             />
           ))}
-        </motion.div>
+        </ul>
       ) : (
-        <div className="border-t border-ink/10 py-10 text-center">
-          <p className="text-[0.94rem] text-ink/64">None of our rooms sleep {totalGuests}+ guests in one room.</p>
-          <p className="mt-2 text-[0.94rem] text-ink/64">Try fewer guests, or edit your stay.</p>
-          <Link href="/booking" className="text-link mt-5 inline-flex text-ink/72 hover:text-ink">
-            Edit stay -&gt;
-          </Link>
+        <div className="mt-6 border border-ink/20 bg-[var(--panel-surface)] p-6 text-center">
+          <p className="text-[1.0625rem] font-semibold text-ink">
+            None of our rooms sleep {totalGuests} guests in one room.
+          </p>
+          <p className="prose-body mt-2">Try fewer guests, or contact the hotel and we&apos;ll help you plan.</p>
+          <div className="mt-5 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Link href="/booking" className="btn btn-primary w-full sm:w-auto">
+              Edit dates and guests
+            </Link>
+            <Link href="/contact" className="btn btn-secondary w-full sm:w-auto">
+              Contact the hotel
+            </Link>
+          </div>
         </div>
       )}
 
       <BookingActions
         backHref="/booking"
-        continueLabel="Continue to guest details ->"
+        backLabel="Back to dates"
+        continueLabel="Continue to guest details"
         continueType="button"
         disabled={!canContinue}
+        disabledHint="Select a room above to continue."
         sticky
+        helper={
+          selectedRoom && canContinue ? (
+            <>
+              <span className="font-semibold text-ink">{selectedRoom.name}</span>
+              {selectedTotal !== null ? <> &middot; {formatCurrency(selectedTotal)} total</> : null}
+            </>
+          ) : null
+        }
         onContinue={() => router.push("/booking/guest-details")}
       />
-    </motion.div>
+    </div>
   );
 }

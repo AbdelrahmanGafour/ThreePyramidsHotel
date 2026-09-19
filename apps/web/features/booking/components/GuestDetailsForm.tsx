@@ -2,11 +2,10 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import * as motion from "motion/react-client";
-import { luxuryEase, motionPrimitives } from "@/shared/components/motion/PremiumMotion";
+import { FormErrorSummary, FormField, FormGroup, RequiredNote, fieldControlClass } from "@/shared/components/ui/form";
 import { BookingActions } from "@/features/booking/components/BookingActions";
 import { BookingEmptyState } from "@/features/booking/components/BookingEmptyState";
-import { BookingFormField, bookingInputClassName } from "@/features/booking/components/BookingFormField";
+import { BookingStepHeader } from "@/features/booking/components/BookingStepHeader";
 import { useBooking } from "@/features/booking/context/BookingContext";
 import { DEMO_ARRIVAL_WINDOWS, DEMO_COUNTRIES } from "@/features/booking/data/bookingDemoData";
 import { hasGuestDetailsErrors, validateGuestDetails, type GuestDetailsErrors } from "@/features/booking/lib/validation";
@@ -22,8 +21,12 @@ function GuestDetailsFields({ initial }: { initial: GuestDetails }) {
   const [errors, setErrors] = useState<GuestDetailsErrors>({});
   const [submitted, setSubmitted] = useState(false);
 
+  // Once a submit has been attempted, re-check on every change so a fixed
+  // field's error clears as soon as it's fixed.
   const update = (field: keyof GuestDetails, value: string) => {
-    setValues((current) => ({ ...current, [field]: value }));
+    const next = { ...values, [field]: value };
+    setValues(next);
+    if (submitted) setErrors(validateGuestDetails(next));
   };
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -46,112 +49,132 @@ function GuestDetailsFields({ initial }: { initial: GuestDetails }) {
     router.push("/booking/review");
   };
 
+  const errorCount = submitted ? Object.keys(errors).length : 0;
+
   return (
-    <motion.form
-      onSubmit={handleSubmit}
-      noValidate
-      className="mt-8 grid gap-6"
-      variants={motionPrimitives.revealUp}
-      transition={{ duration: 0.5, delay: 0.14, ease: luxuryEase }}
-    >
-      <div className="grid grid-cols-2 gap-5">
-        <BookingFormField label="First name" htmlFor="first-name" required error={submitted ? errors.firstName : undefined}>
-          <input
-            id="first-name"
-            autoComplete="given-name"
-            value={values.firstName}
-            onChange={(event) => update("firstName", event.target.value)}
-            aria-describedby={errors.firstName ? "first-name-error" : undefined}
-            aria-invalid={Boolean(submitted && errors.firstName)}
-            className={bookingInputClassName}
-          />
-        </BookingFormField>
-        <BookingFormField label="Last name" htmlFor="last-name" required error={submitted ? errors.lastName : undefined}>
-          <input
-            id="last-name"
-            autoComplete="family-name"
-            value={values.lastName}
-            onChange={(event) => update("lastName", event.target.value)}
-            aria-describedby={errors.lastName ? "last-name-error" : undefined}
-            aria-invalid={Boolean(submitted && errors.lastName)}
-            className={bookingInputClassName}
-          />
-        </BookingFormField>
+    <form onSubmit={handleSubmit} noValidate className="mt-8">
+      <div className="form-panel">
+        <RequiredNote />
+
+        <FormGroup title="Guest information" description="The name the reservation will be under.">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <FormField label="First name" id="first-name" required error={submitted ? errors.firstName : undefined}>
+              {(control) => (
+                <input
+                  {...control}
+                  autoComplete="given-name"
+                  value={values.firstName}
+                  onChange={(event) => update("firstName", event.target.value)}
+                  className={fieldControlClass}
+                />
+              )}
+            </FormField>
+            <FormField label="Last name" id="last-name" required error={submitted ? errors.lastName : undefined}>
+              {(control) => (
+                <input
+                  {...control}
+                  autoComplete="family-name"
+                  value={values.lastName}
+                  onChange={(event) => update("lastName", event.target.value)}
+                  className={fieldControlClass}
+                />
+              )}
+            </FormField>
+          </div>
+
+          <FormField label="Country" id="country" required error={submitted ? errors.country : undefined}>
+            {(control) => (
+              <select
+                {...control}
+                autoComplete="country-name"
+                value={values.country}
+                onChange={(event) => update("country", event.target.value)}
+                className={fieldControlClass}
+              >
+                <option value="">Select your country</option>
+                {DEMO_COUNTRIES.map((country) => (
+                  <option key={country} value={country}>
+                    {country}
+                  </option>
+                ))}
+              </select>
+            )}
+          </FormField>
+        </FormGroup>
+
+        <FormGroup title="Contact information" description="We'll send your confirmation here and use it if we need to reach you.">
+          <FormField label="Email address" id="email" required error={submitted ? errors.email : undefined}>
+            {(control) => (
+              <input
+                {...control}
+                type="email"
+                autoComplete="email"
+                value={values.email}
+                onChange={(event) => update("email", event.target.value)}
+                className={fieldControlClass}
+              />
+            )}
+          </FormField>
+
+          <FormField
+            label="Phone number"
+            id="phone"
+            required
+            hint="Include the country code if you're outside Egypt."
+            error={submitted ? errors.phone : undefined}
+          >
+            {(control) => (
+              <input
+                {...control}
+                type="tel"
+                autoComplete="tel"
+                value={values.phone}
+                onChange={(event) => update("phone", event.target.value)}
+                className={fieldControlClass}
+              />
+            )}
+          </FormField>
+        </FormGroup>
+
+        <FormGroup title="Special requests" description="Optional. Tell us anything that would make your stay easier.">
+          <FormField label="Expected arrival time" id="arrival-time" hint="Helps us prepare for your arrival.">
+            {(control) => (
+              <select
+                {...control}
+                value={values.arrivalTime}
+                onChange={(event) => update("arrivalTime", event.target.value)}
+                className={fieldControlClass}
+              >
+                <option value="">No preference</option>
+                {DEMO_ARRIVAL_WINDOWS.map((window) => (
+                  <option key={window} value={window}>
+                    {window}
+                  </option>
+                ))}
+              </select>
+            )}
+          </FormField>
+
+          <FormField label="Requests or notes" id="special-requests" hint="For example: a quiet floor, early check-in, or a celebration.">
+            {(control) => (
+              <textarea
+                {...control}
+                rows={4}
+                value={values.specialRequests}
+                onChange={(event) => update("specialRequests", event.target.value)}
+                className={fieldControlClass}
+              />
+            )}
+          </FormField>
+        </FormGroup>
+
+        <FormErrorSummary
+          message={errorCount ? `Please fix ${errorCount} field${errorCount === 1 ? "" : "s"} above, then continue.` : null}
+        />
       </div>
 
-      <BookingFormField label="Email" htmlFor="email" required error={submitted ? errors.email : undefined}>
-        <input
-          id="email"
-          type="email"
-          autoComplete="email"
-          value={values.email}
-          onChange={(event) => update("email", event.target.value)}
-          aria-describedby={errors.email ? "email-error" : undefined}
-          aria-invalid={Boolean(submitted && errors.email)}
-          className={bookingInputClassName}
-        />
-      </BookingFormField>
-
-      <BookingFormField label="Phone" htmlFor="phone" required error={submitted ? errors.phone : undefined}>
-        <input
-          id="phone"
-          type="tel"
-          autoComplete="tel"
-          value={values.phone}
-          onChange={(event) => update("phone", event.target.value)}
-          aria-describedby={errors.phone ? "phone-error" : undefined}
-          aria-invalid={Boolean(submitted && errors.phone)}
-          className={bookingInputClassName}
-        />
-      </BookingFormField>
-
-      <BookingFormField label="Country" htmlFor="country" required error={submitted ? errors.country : undefined}>
-        <select
-          id="country"
-          autoComplete="country-name"
-          value={values.country}
-          onChange={(event) => update("country", event.target.value)}
-          aria-describedby={errors.country ? "country-error" : undefined}
-          aria-invalid={Boolean(submitted && errors.country)}
-          className={bookingInputClassName}
-        >
-          <option value="">Select country</option>
-          {DEMO_COUNTRIES.map((country) => (
-            <option key={country} value={country}>
-              {country}
-            </option>
-          ))}
-        </select>
-      </BookingFormField>
-
-      <BookingFormField label="Expected arrival time" htmlFor="arrival-time" hint="Optional — helps us prepare for you.">
-        <select
-          id="arrival-time"
-          value={values.arrivalTime}
-          onChange={(event) => update("arrivalTime", event.target.value)}
-          className={bookingInputClassName}
-        >
-          <option value="">No preference</option>
-          {DEMO_ARRIVAL_WINDOWS.map((window) => (
-            <option key={window} value={window}>
-              {window}
-            </option>
-          ))}
-        </select>
-      </BookingFormField>
-
-      <BookingFormField label="Special requests" htmlFor="special-requests" hint="Optional — quiet floor, early check-in, celebrations.">
-        <textarea
-          id="special-requests"
-          rows={3}
-          value={values.specialRequests}
-          onChange={(event) => update("specialRequests", event.target.value)}
-          className={`${bookingInputClassName} resize-none`}
-        />
-      </BookingFormField>
-
-      <BookingActions backHref="/booking/rooms" continueLabel="Continue to review ->" continueType="submit" />
-    </motion.form>
+      <BookingActions backHref="/booking/rooms" backLabel="Back to room selection" continueLabel="Review reservation" continueType="submit" />
+    </form>
   );
 }
 
@@ -168,7 +191,7 @@ export function GuestDetailsForm() {
     return (
       <BookingEmptyState
         title="Choose a room first"
-        message="Pick the room you'd like to reserve before adding your details."
+        message="Choose the room you'd like to reserve before adding your details."
         actionLabel="Choose a room"
         actionHref="/booking/rooms"
       />
@@ -176,28 +199,12 @@ export function GuestDetailsForm() {
   }
 
   return (
-    <motion.div
-      className="mx-auto max-w-[560px] px-[var(--page-x)] py-[clamp(2.5rem,5vw,3.75rem)]"
-      initial="hidden"
-      animate="show"
-      variants={motionPrimitives.staggerContainer}
-    >
-      <motion.p
-        className="label text-aged-gold"
-        variants={motionPrimitives.precisionDetail}
-        transition={{ duration: 0.4, ease: luxuryEase }}
-      >
-        Guest details
-      </motion.p>
-      <motion.h1
-        className="display mt-3 text-[clamp(1.7rem,5vw,2.1rem)] leading-[1.1] text-ink"
-        variants={motionPrimitives.editorialText}
-        transition={{ duration: 0.6, delay: 0.06, ease: luxuryEase }}
-      >
-        Who should we prepare the room for?
-      </motion.h1>
+    <div className="mx-auto max-w-[640px] px-[var(--page-x)] py-[clamp(2rem,5vw,3.5rem)]">
+      <BookingStepHeader step="Step 3 of 4" title="Tell us who the reservation is for">
+        We&apos;ll use these details to prepare your stay and send your confirmation.
+      </BookingStepHeader>
 
       <GuestDetailsFields initial={state.guest} />
-    </motion.div>
+    </div>
   );
 }
