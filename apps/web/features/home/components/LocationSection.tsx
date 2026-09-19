@@ -70,7 +70,7 @@ export function LocationSection() {
                 strokeWidth="0.62"
                 pathLength="1"
                 opacity="0.82"
-                className="location-route transition-all duration-500"
+                className="location-route transition-[stroke,opacity] duration-500"
               />
               <path d="M70 19 74 12 78 19M58 36 61 30 64 36" fill="none" stroke="#94703E" strokeWidth="0.72" opacity="0.72" />
               <circle cx={origin.x} cy={origin.y} r="1.1" fill="#94703E" opacity="0.7" />
@@ -87,7 +87,7 @@ export function LocationSection() {
                       r={selected ? 2.55 : 1.45}
                       fill={selected ? "#B08A51" : "#5A4A40"}
                       opacity={selected ? 1 : 0.48}
-                      className="transition-all duration-500"
+                      className="transition-[r,fill,opacity] duration-500"
                     />
                     {isLapis ? <circle cx={place.x} cy={y} r="0.72" fill="#264A59" /> : null}
                     <text

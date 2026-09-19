@@ -1,127 +1,66 @@
 import Image from "next/image";
 import Link from "next/link";
-import * as motion from "motion/react-client";
-import { luxuryEase, motionPrimitives } from "@/shared/components/motion/PremiumMotion";
+import { RoomFactList } from "@/features/rooms/components/RoomFactList";
 import type { Room } from "@/features/rooms/data/roomsData";
 
 type RoomPlateProps = {
   room: Room;
-  /** Grid rhythm position — purely a layout choice, never a factual claim about the room. */
-  layout?: "portrait" | "landscape";
-  /** Smaller, trimmed treatment for the related-rooms scroller. */
+  /** Trimmed treatment for the "You may also like" scroller. */
   compact?: boolean;
   priority?: boolean;
 };
 
-// The one card component every room uses, at any roster size — no per-room
-// layout branching. The thin brass rule along the image's edge is this
-// collection's one signature mark: a quiet architectural elevation line
-// carrying the room's position in the collection ("01", "02"...), the way a
-// site drawing annotates a datum rather than a decorative badge. Reveals in
-// three quiet beats — image, then identity, then facts and actions.
-export function RoomPlate({ room, layout = "portrait", compact, priority }: RoomPlateProps) {
-  const facts = [
-    room.sleeps ? `${room.sleeps} guests` : null,
-    room.bedType ?? null,
-    room.sizeSqm ? `${room.sizeSqm} m²` : null,
-    room.view ?? null,
-  ].filter((fact): fact is string => Boolean(fact));
-
-  const isLandscape = layout === "landscape" && !compact;
-
+// The one card every room uses, at one consistent proportion, so rooms are
+// easy to compare: image, name, price, the four key facts, then two clearly
+// different actions — "View room" (secondary) and "Reserve" (primary).
+export function RoomPlate({ room, compact, priority }: RoomPlateProps) {
   return (
-    <motion.div className="group" variants={motionPrimitives.staggerContainer}>
-      <Link href={`/rooms/${room.slug}`} className="block">
-        <motion.div
-          className={`image-frame relative origin-center ${isLandscape ? "aspect-[16/10]" : "aspect-[4/5]"}`}
-          variants={motionPrimitives.revealMask}
-          transition={{ duration: 0.8, ease: luxuryEase }}
-        >
+    <article className="group flex h-full flex-col">
+      <Link href={`/rooms/${room.slug}`} className="inner-focus block" tabIndex={-1} aria-hidden="true">
+        <div className="image-frame relative aspect-[4/3]">
           <Image
             src={room.image}
-            alt={room.imageAlt}
+            alt=""
             fill
             priority={priority}
             sizes={
               compact
                 ? "(max-width: 760px) 72vw, 30vw"
-                : isLandscape
-                  ? "(max-width: 760px) 92vw, 62vw"
-                  : "(max-width: 760px) 92vw, (max-width: 1280px) 44vw, 30vw"
+                : "(max-width: 760px) 92vw, (max-width: 1280px) 44vw, 30vw"
             }
-            className="object-cover transition-transform duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.028]"
+            className="object-cover transition-transform duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.02]"
             style={{ objectPosition: room.position }}
           />
-
-          <div aria-hidden="true" className="absolute inset-y-4 left-4 flex flex-col items-center sm:left-5">
-            <span className="text-[0.62rem] font-black uppercase tracking-[0.14em] text-ivory/80 transition-colors duration-500 [writing-mode:vertical-rl] group-hover:text-brass">
-              {room.number}
-            </span>
-            <span className="mt-2 w-px flex-1 bg-brass/45 transition-colors duration-500 group-hover:bg-brass/85" />
-          </div>
-        </motion.div>
-
-        <motion.div
-          variants={motionPrimitives.revealUp}
-          transition={{ duration: 0.5, delay: 0.1, ease: luxuryEase }}
-        >
-          <div
-            className={`flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-ink/12 pt-3 transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:-translate-y-0.5 ${isLandscape ? "mt-5" : "mt-4"}`}
-          >
-            <h3
-              className={`display leading-[1.1] ${compact ? "text-[1.05rem]" : isLandscape ? "text-[1.55rem]" : "text-[1.3rem]"}`}
-            >
-              {room.name}
-            </h3>
-            {room.priceFrom ? (
-              <p className="shrink-0 whitespace-nowrap text-[0.78rem] font-bold text-ink/64">
-                From <span className="text-ink/95">${room.priceFrom}</span>
-              </p>
-            ) : null}
-          </div>
-
-          {!compact ? (
-            <p
-              className={`mt-2 text-[0.86rem] leading-[1.6] text-ink/64 ${isLandscape ? "max-w-[520px]" : "line-clamp-2"}`}
-            >
-              {room.description}
-            </p>
-          ) : null}
-        </motion.div>
-
-        {facts.length ? (
-          <motion.p
-            className="mt-3 flex flex-wrap items-center text-[0.66rem] font-bold uppercase tracking-[0.08em] text-ink/56"
-            variants={motionPrimitives.precisionDetail}
-            transition={{ duration: 0.4, delay: 0.2, ease: luxuryEase }}
-          >
-            {facts.map((fact, index) => (
-              <span key={fact} className="flex items-center">
-                {index > 0 ? <span aria-hidden="true" className="mx-2.5 h-3 w-px bg-ink/22" /> : null}
-                {fact}
-              </span>
-            ))}
-          </motion.p>
-        ) : null}
+        </div>
       </Link>
 
-      <motion.div
-        className="mt-4 flex items-center gap-5"
-        variants={motionPrimitives.precisionDetail}
-        transition={{ duration: 0.4, delay: 0.26, ease: luxuryEase }}
-      >
-        <Link href={`/rooms/${room.slug}`} className="text-link text-ink/80 group-hover:text-ink">
-          View room -&gt;
+      <div className="mt-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h3 className="display text-[1.35rem] leading-[1.15]">
+          <Link href={`/rooms/${room.slug}`} className="inner-focus transition-colors hover:text-[var(--brass-ink)]">
+            {room.name}
+          </Link>
+        </h3>
+        {room.priceFrom ? (
+          <p className="text-[0.9375rem] text-ink/75">
+            From <span className="text-[1.125rem] font-bold text-ink">${room.priceFrom}</span> per night
+          </p>
+        ) : null}
+      </div>
+
+      {!compact ? <p className="mt-2 line-clamp-2 text-[0.9375rem] leading-[1.6] text-ink/75">{room.description}</p> : null}
+
+      <RoomFactList room={room} className="mt-4 border-t border-ink/12 pt-4" />
+
+      <div className={`mt-auto grid gap-3 pt-5 ${compact ? "grid-cols-1" : "grid-cols-2"}`}>
+        <Link href={`/rooms/${room.slug}`} className="btn btn-secondary" aria-label={`View room: ${room.name}`}>
+          View room
         </Link>
         {!compact ? (
-          <Link
-            href={`/booking?room=${room.slug}`}
-            className="text-link text-brass opacity-0 transition-opacity duration-500 group-hover:opacity-100"
-          >
-            Reserve -&gt;
+          <Link href={`/booking?room=${room.slug}`} className="btn btn-primary" aria-label={`Reserve ${room.name}`}>
+            Reserve
           </Link>
         ) : null}
-      </motion.div>
-    </motion.div>
+      </div>
+    </article>
   );
 }

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { PackageFormField, packageInputClassName } from "@/features/packages/components/PackageFormField";
+import { useEffect, useRef, useState } from "react";
+import { FormErrorSummary, FormField, FormGroup, RequiredNote, fieldControlClass } from "@/shared/components/ui/form";
+import { InfoSection } from "@/shared/components/ui/InfoSection";
 import { hasPackageInquiryErrors, validatePackageInquiry, type PackageInquiryErrors } from "@/features/packages/lib/validation";
 import { emptyPackageInquiryDetails, type Package, type PackageInquiryDetails } from "@/features/packages/types";
 
@@ -20,9 +21,18 @@ export function PackageInquiry({ pkg }: PackageInquiryProps) {
   const [errors, setErrors] = useState<PackageInquiryErrors>({});
   const [submitted, setSubmitted] = useState(false);
   const [sent, setSent] = useState(false);
+  const confirmationRef = useRef<HTMLParagraphElement>(null);
 
+  useEffect(() => {
+    if (sent) confirmationRef.current?.focus();
+  }, [sent]);
+
+  // Once a submit has been attempted, re-check on every change so a fixed
+  // field's error clears as soon as it's fixed.
   const update = (field: keyof PackageInquiryDetails, value: string) => {
-    setValues((current) => ({ ...current, [field]: value }));
+    const next = { ...values, [field]: value };
+    setValues(next);
+    if (submitted) setErrors(validatePackageInquiry(next));
   };
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -45,110 +55,118 @@ export function PackageInquiry({ pkg }: PackageInquiryProps) {
 
   if (sent) {
     return (
-      <section id="inquire" className="scroll-mt-24 border-t border-ink/10 bg-ivory py-[clamp(2.75rem,5vw,4rem)] text-ink">
-        <div className="mx-auto max-w-[480px] px-[var(--page-x)] text-center">
-          <span className="mx-auto flex h-12 w-12 items-center justify-center border border-brass text-brass" aria-hidden="true">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M4 12.5 9.5 18 20 6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </span>
-          <p className="label mt-4 text-aged-gold">Inquiry received</p>
-          <h2 className="display mt-3 text-[1.4rem] leading-[1.2] text-ink">We&apos;ll be in touch about {pkg.shortTitle}.</h2>
-          <p className="mt-3 text-[0.88rem] leading-[1.65] text-ink/64">
-            This is a demo confirmation for design review — no inquiry has actually been sent. Once connected, the
-            hotel would typically reply within one business day.
+      <InfoSection id="inquire" title="Inquiry received">
+        <div role="status" className="form-panel">
+          <p ref={confirmationRef} tabIndex={-1} className="group-title outline-none">
+            Thank you. We&apos;ll be in touch about {pkg.shortTitle}.
+          </p>
+          <p className="prose-body mt-3">
+            This is a demo confirmation for design review — no inquiry has actually been sent. Once connected, the hotel would
+            typically reply within one business day.
           </p>
         </div>
-      </section>
+      </InfoSection>
     );
   }
 
-  return (
-    <section id="inquire" className="scroll-mt-24 border-t border-ink/10 bg-ivory py-[clamp(2.75rem,5vw,4rem)] text-ink">
-      <div className="page-grid">
-        <div className="col-span-6 col-start-2 max-md:col-span-full">
-          <p className="label text-aged-gold">Enquire</p>
-          <h2 className="display mt-3 text-[1.4rem] leading-[1.2] text-ink">Ask about {pkg.shortTitle}.</h2>
-          <p className="mt-3 max-w-[440px] text-[0.88rem] leading-[1.65] text-ink/64">
-            Share a few details and the hotel will follow up to shape the route around your dates.
-          </p>
+  const errorCount = submitted ? Object.keys(errors).length : 0;
 
-          <form onSubmit={handleSubmit} noValidate className="mt-8 grid max-w-[440px] gap-6">
-            <PackageFormField label="Name" htmlFor="inquiry-name" required error={submitted ? errors.name : undefined}>
+  return (
+    <InfoSection
+      id="inquire"
+      title="Send an inquiry"
+      intro={`Tell us about your dates and group. The hotel will reply to shape ${pkg.shortTitle} around you.`}
+    >
+      <form onSubmit={handleSubmit} noValidate className="form-panel">
+        <RequiredNote />
+
+        <FormGroup title="Your details">
+          <FormField label="Full name" id="inquiry-name" required error={submitted ? errors.name : undefined}>
+            {(control) => (
               <input
-                id="inquiry-name"
+                {...control}
                 autoComplete="name"
                 value={values.name}
                 onChange={(event) => update("name", event.target.value)}
-                aria-describedby={errors.name ? "inquiry-name-error" : undefined}
-                aria-invalid={Boolean(submitted && errors.name)}
-                className={packageInputClassName}
+                className={fieldControlClass}
               />
-            </PackageFormField>
+            )}
+          </FormField>
 
-            <div className="grid grid-cols-2 gap-5">
-              <PackageFormField label="Email" htmlFor="inquiry-email" required error={submitted ? errors.email : undefined}>
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <FormField label="Email address" id="inquiry-email" required error={submitted ? errors.email : undefined}>
+              {(control) => (
                 <input
-                  id="inquiry-email"
+                  {...control}
                   type="email"
                   autoComplete="email"
                   value={values.email}
                   onChange={(event) => update("email", event.target.value)}
-                  aria-describedby={errors.email ? "inquiry-email-error" : undefined}
-                  aria-invalid={Boolean(submitted && errors.email)}
-                  className={packageInputClassName}
+                  className={fieldControlClass}
                 />
-              </PackageFormField>
-              <PackageFormField label="Phone" htmlFor="inquiry-phone" required error={submitted ? errors.phone : undefined}>
+              )}
+            </FormField>
+            <FormField label="Phone number" id="inquiry-phone" required error={submitted ? errors.phone : undefined}>
+              {(control) => (
                 <input
-                  id="inquiry-phone"
+                  {...control}
                   type="tel"
                   autoComplete="tel"
                   value={values.phone}
                   onChange={(event) => update("phone", event.target.value)}
-                  aria-describedby={errors.phone ? "inquiry-phone-error" : undefined}
-                  aria-invalid={Boolean(submitted && errors.phone)}
-                  className={packageInputClassName}
+                  className={fieldControlClass}
                 />
-              </PackageFormField>
-            </div>
+              )}
+            </FormField>
+          </div>
+        </FormGroup>
 
-            <div className="grid grid-cols-2 gap-5">
-              <PackageFormField label="Preferred dates" htmlFor="inquiry-dates" hint="Optional — a rough window is fine.">
+        <FormGroup title="Your journey" description="Optional. These help us plan, but you can send the inquiry without them.">
+          <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <FormField label="Preferred dates" id="inquiry-dates" hint="A rough window is fine, such as “early March”.">
+              {(control) => (
                 <input
-                  id="inquiry-dates"
+                  {...control}
                   value={values.preferredDates}
                   onChange={(event) => update("preferredDates", event.target.value)}
-                  className={packageInputClassName}
+                  className={fieldControlClass}
                 />
-              </PackageFormField>
-              <PackageFormField label="Party size" htmlFor="inquiry-party-size" hint="Optional">
+              )}
+            </FormField>
+            <FormField label="Number of guests" id="inquiry-party-size" hint="How many people are travelling.">
+              {(control) => (
                 <input
-                  id="inquiry-party-size"
+                  {...control}
                   inputMode="numeric"
                   value={values.partySize}
                   onChange={(event) => update("partySize", event.target.value)}
-                  className={packageInputClassName}
+                  className={fieldControlClass}
                 />
-              </PackageFormField>
-            </div>
+              )}
+            </FormField>
+          </div>
 
-            <PackageFormField label="Message" htmlFor="inquiry-message" hint="Optional — anything that helps shape the route.">
+          <FormField label="Message" id="inquiry-message" hint="Anything that helps us shape the journey.">
+            {(control) => (
               <textarea
-                id="inquiry-message"
-                rows={3}
+                {...control}
+                rows={4}
                 value={values.message}
                 onChange={(event) => update("message", event.target.value)}
-                className={`${packageInputClassName} resize-none`}
+                className={fieldControlClass}
               />
-            </PackageFormField>
+            )}
+          </FormField>
+        </FormGroup>
 
-            <button type="submit" className="brass-button mt-2 min-h-11 w-full sm:w-auto">
-              Send inquiry -&gt;
-            </button>
-          </form>
-        </div>
-      </div>
-    </section>
+        <FormErrorSummary
+          message={errorCount ? `Please fix ${errorCount} field${errorCount === 1 ? "" : "s"} above, then send your inquiry.` : null}
+        />
+
+        <button type="submit" className="btn btn-primary mt-6 w-full sm:w-auto sm:min-w-[14rem]">
+          Send inquiry
+        </button>
+      </form>
+    </InfoSection>
   );
 }

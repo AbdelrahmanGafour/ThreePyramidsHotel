@@ -1,3 +1,5 @@
+export const navItems = ["Stay", "Journeys", "Experiences", "Gallery", "Location"];
+
 export const rooms = [
   {
     number: "01",

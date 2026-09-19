@@ -11,20 +11,23 @@ export function PriceBreakdown({ breakdown }: PriceBreakdownProps) {
   const nightsLabel = `${breakdown.nights} night${breakdown.nights === 1 ? "" : "s"}`;
 
   return (
-    <div className="border-t border-ink/10 pt-4">
-      <div className="flex items-baseline justify-between gap-4 py-2 text-[0.86rem] text-ink/68">
+    <div>
+      <div className="flex items-baseline justify-between gap-4 py-2 text-[1rem] text-ink/80">
         <span>
-          {formatCurrency(breakdown.nightlyRate)} × {nightsLabel}
+          {formatCurrency(breakdown.nightlyRate)} per night &times; {nightsLabel}
         </span>
-        <span className="text-ink/86">{formatCurrency(breakdown.total)}</span>
+        <span className="font-semibold text-ink">{formatCurrency(breakdown.total)}</span>
       </div>
 
-      <div className="mt-1 flex items-baseline justify-between gap-4 border-t border-ink/12 pt-3">
-        <span className="text-[0.9rem] font-bold text-ink">Total</span>
-        <span className="display text-[1.4rem] leading-none text-ink">{formatCurrency(breakdown.total)}</span>
+      <div className="mt-2 flex items-baseline justify-between gap-4 border-t border-ink/20 pt-3">
+        <span className="text-[1.0625rem] font-bold text-ink">Total for your stay</span>
+        <span className="display text-[1.75rem] leading-none text-ink">{formatCurrency(breakdown.total)}</span>
       </div>
 
-      <p className="mt-3 text-[0.7rem] text-ink/40">Demo pricing shown for review only — not a confirmed rate.</p>
+      <p className="fine-print mt-3">
+        No payment is taken online. Payment is arranged directly with the hotel. Demo pricing shown for review only — not a
+        confirmed rate.
+      </p>
     </div>
   );
 }

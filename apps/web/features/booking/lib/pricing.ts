@@ -1,6 +1,9 @@
 import type { BookingCurrency, PriceBreakdown } from "@/features/booking/types";
 
-export const BOOKING_CURRENCY: BookingCurrency = "EGP";
+// PRESENTATION CURRENCY — matches the USD ("$") demo prices shown on the Rooms
+// and Journeys pages so the whole public flow reads consistently. Replace with
+// the client's confirmed pricing and currency before launch.
+export const BOOKING_CURRENCY: BookingCurrency = "USD";
 
 type CalculatePriceInput = {
   nightlyRate: number;
@@ -24,7 +27,7 @@ export function calculatePriceBreakdown({ nightlyRate, nights }: CalculatePriceI
   };
 }
 
-/** English UI representation of an EGP amount, e.g. "EGP 4,500". No conversion is applied. */
+/** English UI representation of a USD amount, e.g. "$4,500". No conversion is applied. */
 export function formatCurrency(amount: number): string {
-  return `${BOOKING_CURRENCY} ${amount.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+  return `$${amount.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 }

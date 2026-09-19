@@ -50,13 +50,13 @@ export function BookingStrip() {
               className="group relative grid content-center gap-1 border-r border-brass/20 px-4"
             >
               <span className="label text-ivory/48 transition-colors group-hover:text-brass group-focus-within:text-brass">{label}</span>
-              <button
-                type="button"
-                aria-label={label}
-                className="w-full text-left text-[0.78rem] text-ivory/92 outline-none transition-all duration-500 group-hover:translate-x-0.5 group-hover:text-ivory"
+              <Link
+                href="/booking"
+                aria-label={`${label} — go to booking`}
+                className="w-full text-left text-[0.78rem] text-ivory/92 outline-none transition-[color,transform] duration-500 group-hover:translate-x-0.5 group-hover:text-ivory"
               >
                 {value}
-              </button>
+              </Link>
               <span className="absolute bottom-2 left-4 right-7 h-px origin-left scale-x-0 bg-brass transition-transform duration-500 group-hover:scale-x-100 group-focus-within:scale-x-100" />
             </div>
           ))}

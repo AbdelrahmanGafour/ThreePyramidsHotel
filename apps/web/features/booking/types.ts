@@ -44,8 +44,8 @@ export type BookingState = {
   confirmation: BookingConfirmation | null;
 };
 
-/** V1 reservations are priced in EGP only. */
-export type BookingCurrency = "EGP";
+/** V1 presentation pricing is shown in USD only, matching the Rooms and Journeys demo data. */
+export type BookingCurrency = "USD";
 
 /** V1 price for one room: `total = nightlyRate × nights`. No taxes, fees, or multi-room pricing. */
 export type PriceBreakdown = {
