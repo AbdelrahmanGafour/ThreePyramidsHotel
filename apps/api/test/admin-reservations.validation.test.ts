@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseAdminReservationListQuery } from '../src/modules/admin-reservations/admin-reservations.validation';
 import {
+  parseAdminReservationListQuery,
+  parseBookingReferenceParam,
+} from '../src/modules/admin-reservations/admin-reservations.validation';
+import {
+  INVALID_BOOKING_REFERENCE_ERROR_CODE,
+  INVALID_BOOKING_REFERENCE_ERROR_MESSAGE,
   INVALID_PAGINATION_ERROR_CODE,
   INVALID_PAGINATION_ERROR_MESSAGE,
+  isInvalidBookingReferenceError,
   isInvalidPaginationError,
 } from '../src/modules/admin-reservations/admin-reservations.types';
+import { generateBookingReference } from '../src/modules/reservations/booking-reference';
 
 // Pure: the validation module imports no database code.
 
@@ -163,5 +170,73 @@ describe('parseAdminReservationListQuery', () => {
   it('rejects the whole query when either value is unusable', () => {
     assertRejected({ limit: '25', offset: '-5' }, 'valid limit with invalid offset');
     assertRejected({ limit: '0', offset: '10' }, 'invalid limit with valid offset');
+  });
+});
+
+describe('parseBookingReferenceParam', () => {
+  const VALID = 'TPH-A2B3C4D5E6F7';
+
+  function assertRejectedReference(value: unknown, label: string): void {
+    assert.throws(
+      () => parseBookingReferenceParam(value),
+      (error: unknown) => {
+        assert.ok(
+          isInvalidBookingReferenceError(error),
+          `expected a booking reference error for ${label}, got: ${String(error)}`,
+        );
+        assert.equal(error.code, INVALID_BOOKING_REFERENCE_ERROR_CODE);
+        // The message is part of the locked response contract, not free text.
+        assert.equal(error.message, INVALID_BOOKING_REFERENCE_ERROR_MESSAGE);
+        return true;
+      },
+      `expected ${label} to be rejected`,
+    );
+  }
+
+  it('returns a canonical reference unchanged', () => {
+    assert.equal(parseBookingReferenceParam(VALID), VALID);
+  });
+
+  it('accepts a freshly generated reference', () => {
+    const generated = generateBookingReference();
+
+    assert.equal(parseBookingReferenceParam(generated), generated);
+  });
+
+  it('rejects a lowercase reference rather than normalising it', () => {
+    assertRejectedReference(VALID.toLowerCase(), 'lowercase');
+  });
+
+  it('rejects padded input rather than trimming it', () => {
+    assertRejectedReference(` ${VALID}`, 'leading whitespace');
+    assertRejectedReference(`${VALID} `, 'trailing whitespace');
+  });
+
+  it('rejects malformed references', () => {
+    const invalid: [string, string][] = [
+      ['wrong prefix', 'ABC-A2B3C4D5E6F7'],
+      ['no prefix', 'A2B3C4D5E6F7'],
+      ['too short', 'TPH-A2B3C4D5E6F'],
+      ['too long', 'TPH-A2B3C4D5E6F7G'],
+      ['contains 0', 'TPH-A2B3C4D5E6F0'],
+      ['contains O', 'TPH-A2B3C4D5E6FO'],
+      ['contains 1', 'TPH-A2B3C4D5E6F1'],
+      ['contains I', 'TPH-A2B3C4D5E6FI'],
+      ['empty', ''],
+      ['injection shaped', "TPH-A2B3C4D5E6F7' OR '1'='1"],
+      ['wildcard', 'TPH-A2B3C4D5E6%'],
+    ];
+
+    for (const [label, value] of invalid) {
+      assertRejectedReference(value, label);
+    }
+  });
+
+  it('rejects a value that is not a string', () => {
+    // Express gives a string, but a repeated or missing parameter must not slip
+    // through as something the SQL layer then has to cope with.
+    for (const value of [undefined, null, 42, {}, [VALID]]) {
+      assertRejectedReference(value, String(value));
+    }
   });
 });

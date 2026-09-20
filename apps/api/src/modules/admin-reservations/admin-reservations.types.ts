@@ -37,6 +37,62 @@ export type AdminReservationListItem = {
   createdAt: string;
 };
 
+/**
+ * One reservation in full, for an administrator looking at a single booking.
+ *
+ * Wider than the list item on purpose: a receptionist needs the guest's phone,
+ * the party size, the special requests and which physical room was allocated.
+ * That last one appears nowhere else in the API — it is exposed here, behind an
+ * admin session, and nowhere a guest can reach.
+ *
+ * Still absent, deliberately: the database `id`, `roomId` and `roomTypeId`,
+ * which are internal join keys with no meaning outside the database, and
+ * `updatedAt`, which stays meaningless until something writes to it.
+ *
+ * Money is an exact decimal string and the stay dates are plain calendar days;
+ * neither is ever a number or a Date.
+ */
+export type AdminReservationDetail = {
+  bookingReference: string;
+  status: AdminReservationStatus;
+  guest: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    phone: string;
+    country: string;
+  };
+  stay: {
+    /** "YYYY-MM-DD". */
+    checkIn: string;
+    /** "YYYY-MM-DD". Half-open: the guest leaves on this day. */
+    checkOut: string;
+    nights: number;
+    adults: number;
+    children: number;
+  };
+  roomType: {
+    slug: string;
+    name: string;
+  };
+  room: {
+    number: string;
+  };
+  pricing: {
+    /** The rate accepted at booking time, not the room type's rate today. */
+    nightlyRate: string;
+    totalAmount: string;
+    currency: 'EGP';
+  };
+  specialRequests: string | null;
+  /** ISO 8601 instant. */
+  createdAt: string;
+};
+
+export type AdminReservationDetailResponse = {
+  data: AdminReservationDetail;
+};
+
 /** A validated window over the list. `total` is the full count, not the page's. */
 export type AdminReservationListPagination = {
   limit: number;
@@ -91,3 +147,49 @@ export class InvalidPaginationError extends Error {
 export function isInvalidPaginationError(error: unknown): error is InvalidPaginationError {
   return error instanceof InvalidPaginationError;
 }
+
+export const INVALID_BOOKING_REFERENCE_ERROR_CODE = 'INVALID_BOOKING_REFERENCE';
+
+/**
+ * Fixed for the same reason the pagination message is: a controller mapping
+ * `code`/`message` straight onto a 400 always produces the locked response
+ * body, and nothing about the expected format can leak into it later.
+ */
+export const INVALID_BOOKING_REFERENCE_ERROR_MESSAGE = 'Invalid booking reference';
+
+/**
+ * The route parameter is not a booking reference. Distinct from a reference
+ * that is well formed but unknown, which is a 404: one is a malformed request,
+ * the other a question with the answer "no".
+ */
+export class InvalidBookingReferenceError extends Error {
+  readonly code = INVALID_BOOKING_REFERENCE_ERROR_CODE;
+
+  constructor() {
+    super(INVALID_BOOKING_REFERENCE_ERROR_MESSAGE);
+    this.name = 'InvalidBookingReferenceError';
+  }
+}
+
+export function isInvalidBookingReferenceError(error: unknown): error is InvalidBookingReferenceError {
+  return error instanceof InvalidBookingReferenceError;
+}
+
+export const RESERVATION_NOT_FOUND_ERROR_CODE = 'RESERVATION_NOT_FOUND';
+export const RESERVATION_NOT_FOUND_ERROR_MESSAGE = 'Reservation not found';
+
+/**
+ * The one 404 body this module sends.
+ *
+ * Frozen and built once so a handler can only send the locked contract, never
+ * a hand-assembled near-copy. The requested reference is deliberately absent:
+ * echoing a caller's input back into an error body is how reflected content
+ * gets into places it was never meant to reach, and it tells them nothing they
+ * did not already know.
+ */
+export const RESERVATION_NOT_FOUND_RESPONSE = Object.freeze({
+  error: Object.freeze({
+    code: RESERVATION_NOT_FOUND_ERROR_CODE,
+    message: RESERVATION_NOT_FOUND_ERROR_MESSAGE,
+  }),
+});

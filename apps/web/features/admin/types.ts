@@ -80,6 +80,56 @@ export type AdminReservationList = {
   pagination: AdminReservationListPagination;
 };
 
+/**
+ * One reservation in full, exactly as the API's detail endpoint returns it.
+ *
+ * Wider than the list item on purpose: a receptionist needs the guest's phone,
+ * the party size, the special requests and which physical room was allocated.
+ * That last one is exposed nowhere else — not by the list, and never to a
+ * guest.
+ *
+ * Absent by design: the database `id`, `roomId` and `roomTypeId`, which are
+ * internal join keys, and `updatedAt`, which stays meaningless until something
+ * writes to it. Money is an exact decimal string and the stay dates are plain
+ * calendar days; neither is ever a number or a Date.
+ */
+export type AdminReservationDetail = {
+  bookingReference: string;
+  status: AdminReservationStatus;
+  guest: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    phone: string;
+    country: string;
+  };
+  stay: {
+    /** "YYYY-MM-DD". */
+    checkIn: string;
+    /** "YYYY-MM-DD". Half-open: the guest leaves on this day. */
+    checkOut: string;
+    nights: number;
+    adults: number;
+    children: number;
+  };
+  roomType: {
+    slug: string;
+    name: string;
+  };
+  room: {
+    number: string;
+  };
+  pricing: {
+    /** The rate accepted at booking time, not the room type's rate today. */
+    nightlyRate: string;
+    totalAmount: string;
+    currency: "EGP";
+  };
+  specialRequests: string | null;
+  /** ISO 8601 instant. */
+  createdAt: string;
+};
+
 /** The window a caller asks for. Validated before it reaches the API client. */
 export type AdminReservationListWindow = {
   limit: number;

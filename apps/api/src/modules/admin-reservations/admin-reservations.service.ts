@@ -1,5 +1,9 @@
-import { findAdminReservationPage, type AdminReservationListPage } from './admin-reservations.repository';
-import type { AdminReservationListQuery } from './admin-reservations.types';
+import {
+  findAdminReservationByReference,
+  findAdminReservationPage,
+  type AdminReservationListPage,
+} from './admin-reservations.repository';
+import type { AdminReservationDetail, AdminReservationListQuery } from './admin-reservations.types';
 
 /**
  * Reads one page of reservations for the administration list.
@@ -17,4 +21,21 @@ export async function listAdminReservations(
   query: AdminReservationListQuery,
 ): Promise<AdminReservationListPage> {
   return findAdminReservationPage(query);
+}
+
+/**
+ * Reads one reservation by its booking reference.
+ *
+ * Thin on purpose, and read-only. The reference arrives already validated, and
+ * is used exactly as given: normalising it here would mean looking up a value
+ * the caller never sent.
+ *
+ * Returns null only when no reservation has that reference. A stored row that
+ * cannot be trusted raises from the repository instead, so a data fault never
+ * reaches a caller disguised as a missing booking.
+ */
+export async function getAdminReservation(
+  bookingReference: string,
+): Promise<AdminReservationDetail | null> {
+  return findAdminReservationByReference(bookingReference);
 }

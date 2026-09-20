@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAdminSession } from '../admin-auth/admin-auth.middleware';
-import { listAdminReservationsHandler } from './admin-reservations.controller';
+import { getAdminReservationHandler, listAdminReservationsHandler } from './admin-reservations.controller';
 
 export const adminReservationsRouter = Router();
 
@@ -11,3 +11,6 @@ export const adminReservationsRouter = Router();
 // Read-only: reservations are created through the guest-facing endpoint, and
 // changing one is a later ticket.
 adminReservationsRouter.get('/', requireAdminSession, listAdminReservationsHandler);
+// The guard is repeated rather than hoisted to router.use(), so each route
+// states its own protection and none can be read as inheriting it by accident.
+adminReservationsRouter.get('/:bookingReference', requireAdminSession, getAdminReservationHandler);

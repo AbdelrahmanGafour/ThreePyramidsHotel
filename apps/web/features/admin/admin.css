@@ -575,6 +575,90 @@ a.adm-nav-item:hover {
   gap: 0.75rem;
 }
 
+/* ---- Reservation detail ------------------------------------------------ */
+.adm-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+.adm-detail-back {
+  margin-bottom: 0.15rem;
+}
+
+/* Hairline-separated pairs, the same treatment the metrics strip uses. */
+.adm-facts {
+  display: grid;
+  gap: 1px;
+  border-top: 1px solid var(--adm-rule);
+  background: var(--adm-rule-soft);
+}
+
+.adm-facts > div {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.8rem 1.25rem;
+  background: var(--adm-panel);
+}
+
+.adm-facts dt {
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+}
+
+.adm-facts dd {
+  margin: 0;
+  font-weight: 600;
+  /* Long references and emails must wrap rather than widen the panel. */
+  overflow-wrap: anywhere;
+}
+
+.adm-detail-note {
+  padding: 0.9rem 1.25rem 1.1rem;
+  border-top: 1px solid var(--adm-rule);
+  line-height: 1.6;
+}
+
+.adm-detail-empty {
+  color: var(--adm-muted);
+}
+
+.adm-detail-link {
+  text-decoration: underline;
+  text-decoration-color: rgba(30, 24, 21, 0.35);
+  text-underline-offset: 0.25em;
+}
+
+a.adm-detail-link:hover {
+  color: var(--brass-ink);
+  text-decoration-color: var(--brass-ink);
+}
+
+/* The booking reference in the list is the way into a reservation. */
+.adm-ref-link {
+  text-decoration: underline;
+  text-decoration-color: rgba(30, 24, 21, 0.35);
+  text-underline-offset: 0.25em;
+}
+
+a.adm-ref-link:hover {
+  color: var(--brass-ink);
+  text-decoration-color: var(--brass-ink);
+}
+
+@media (min-width: 900px) {
+  .adm-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .adm-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}
+
 /* ---- Pager ------------------------------------------------------------- */
 .adm-pager {
   display: flex;

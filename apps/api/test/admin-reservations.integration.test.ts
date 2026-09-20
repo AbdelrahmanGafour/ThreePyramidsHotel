@@ -3,6 +3,9 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
+// Safe to import statically: the booking-reference module reaches nothing but
+// node:crypto, unlike the src modules below that require DATABASE_URL on load.
+import { generateBookingReference } from '../src/modules/reservations/booking-reference';
 
 // Exercises GET /api/v1/admin/reservations over real HTTP against a real
 // PostgreSQL database: the real app, the real session guard, the real
@@ -46,6 +49,8 @@ const fixture = {
   guestFirstName: 'Amelia',
   guestLastName: 'Hartwell',
   guestEmail: `guest-${runId}@example.com`,
+  guestPhone: '+201000000000',
+  guestCountry: 'Egypt',
   roomNumbers: [`IT-AR-${runId}-1`, `IT-AR-${runId}-2`, `IT-AR-${runId}-3`],
 };
 
@@ -96,8 +101,12 @@ async function insertReservation(input: {
   checkOut: string;
   status: 'pending' | 'confirmed' | 'cancelled';
   createdAt: string;
+  specialRequests?: string | null;
 }): Promise<Fixture> {
-  const bookingReference = `ITAR-${randomUUID().slice(0, 12).toUpperCase()}`;
+  // Real references, from the same generator production uses: the detail
+  // endpoint only accepts the canonical format, and a fixture that could not
+  // exist in production would prove nothing about looking one up.
+  const bookingReference = generateBookingReference();
 
   const { rows } = await dbPool.query<{ id: string }>(
     `INSERT INTO reservations (
@@ -106,8 +115,8 @@ async function insertReservation(input: {
        adults, children, check_in, check_out,
        status, currency, nightly_rate_snapshot, total_amount, special_requests, created_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, '+201000000000', 'Egypt',
-             2, 0, $7::date, $8::date, $9, 'EGP', $10, $11, 'Late arrival', $12::timestamptz)
+     VALUES ($1, $2, $3, $4, $5, $6, $13, $14,
+             2, 0, $7::date, $8::date, $9, 'EGP', $10, $11, $15, $12::timestamptz)
      RETURNING id`,
     [
       bookingReference,
@@ -122,6 +131,9 @@ async function insertReservation(input: {
       fixture.nightlyRate,
       fixture.totalAmount,
       input.createdAt,
+      fixture.guestPhone,
+      fixture.guestCountry,
+      input.specialRequests === undefined ? 'Late arrival' : input.specialRequests,
     ],
   );
 
@@ -233,12 +245,15 @@ before(async () => {
     status: 'confirmed',
     createdAt: created.middle,
   });
+  // The one fixture with no special requests, so the detail contract's
+  // `string | null` is exercised in both directions.
   reservations.cancelled = await insertReservation({
     roomIndex: 2,
     checkIn: '2099-01-10',
     checkOut: '2099-01-12',
     status: 'cancelled',
     createdAt: created.tied,
+    specialRequests: null,
   });
   // Same created_at as `cancelled`, inserted after it, so a correct ORDER BY
   // must put this one first on the id tie-break alone.
@@ -562,6 +577,249 @@ describe('GET /api/v1/admin/reservations', () => {
       const row = await findFixture(reservations.confirmed.bookingReference);
 
       assert.deepEqual(row.roomType, { slug: fixture.slug, name: fixture.name });
+    });
+  });
+});
+
+// --- GET /api/v1/admin/reservations/:bookingReference -----------------------
+
+type DetailResponse = {
+  status: number;
+  json: {
+    data?: Record<string, any>;
+    error?: { code: string; message: string };
+  };
+};
+
+async function requestDetail(reference: string, headers: Record<string, string>): Promise<DetailResponse> {
+  const response = await fetch(`${baseUrl}/api/v1/admin/reservations/${encodeURIComponent(reference)}`, {
+    headers,
+  });
+
+  return { status: response.status, json: await response.json() };
+}
+
+/** Sends this suite's real signed-in session. */
+const detailAsAdmin = (reference: string) => requestDetail(reference, { Cookie: sessionCookie });
+/** Sends exactly the given Cookie header, whatever it is. */
+const detailWithCookie = (reference: string, cookie: string) => requestDetail(reference, { Cookie: cookie });
+/** Sends no Cookie header at all — the anonymous case. */
+const detailWithoutCookie = (reference: string) => requestDetail(reference, {});
+
+const NOT_AUTHENTICATED = { error: { code: 'NOT_AUTHENTICATED', message: 'Authentication required' } };
+const INVALID_BOOKING_REFERENCE = {
+  error: { code: 'INVALID_BOOKING_REFERENCE', message: 'Invalid booking reference' },
+};
+const RESERVATION_NOT_FOUND = {
+  error: { code: 'RESERVATION_NOT_FOUND', message: 'Reservation not found' },
+};
+
+describe('GET /api/v1/admin/reservations/:bookingReference', () => {
+  describe('authentication', () => {
+    it('refuses a request with no session cookie', async () => {
+      const response = await detailWithoutCookie(reservations.pending.bookingReference);
+
+      assert.equal(response.status, 401);
+      assert.deepEqual(response.json, NOT_AUTHENTICATED);
+    });
+
+    it('refuses an unrelated or malformed cookie identically', async () => {
+      for (const cookie of ['theme=dark', 'tph_admin_session=', 'tph_admin_session=not-a-token']) {
+        const response = await detailWithCookie(reservations.pending.bookingReference, cookie);
+
+        assert.equal(response.status, 401, `expected 401 for ${cookie.split('=')[0]}`);
+        assert.deepEqual(response.json, NOT_AUTHENTICATED);
+      }
+    });
+
+    it('refuses before deciding whether the reservation exists', async () => {
+      // An unauthenticated caller must not be able to tell a real reference
+      // from an invented one by the status it returns.
+      const unknown = await detailWithoutCookie(generateBookingReference());
+      const malformed = await detailWithoutCookie('not-a-reference');
+
+      assert.equal(unknown.status, 401);
+      assert.equal(malformed.status, 401);
+      assert.deepEqual(unknown.json, NOT_AUTHENTICATED);
+      assert.deepEqual(malformed.json, NOT_AUTHENTICATED);
+    });
+
+    it('refuses a revoked session', async () => {
+      const throwaway = await fetch(`${baseUrl}/api/v1/admin/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: admin.email, password: admin.password }),
+      });
+      const cookie = throwaway.headers
+        .getSetCookie()
+        .find((value) => value.startsWith('tph_admin_session='))!
+        .split(';')[0]!;
+
+      assert.equal(
+        (await detailWithCookie(reservations.pending.bookingReference, cookie)).status,
+        200,
+        'the throwaway session should start valid',
+      );
+
+      await fetch(`${baseUrl}/api/v1/admin/auth/logout`, { method: 'POST', headers: { Cookie: cookie } });
+
+      const response = await detailWithCookie(reservations.pending.bookingReference, cookie);
+      assert.equal(response.status, 401);
+      assert.deepEqual(response.json, NOT_AUTHENTICATED);
+    });
+  });
+
+  describe('rejects a malformed booking reference', () => {
+    const canonical = 'TPH-A2B3C4D5E6F7';
+    const malformed: [string, string][] = [
+      ['lowercase', canonical.toLowerCase()],
+      ['a lowercase token', 'TPH-a2b3c4d5e6f7'],
+      ['a wrong prefix', 'ABC-A2B3C4D5E6F7'],
+      ['no prefix', 'A2B3C4D5E6F7'],
+      ['leading whitespace', ` ${canonical}`],
+      ['trailing whitespace', `${canonical} `],
+      ['a token that is too short', 'TPH-A2B3C4D5E6F'],
+      ['a token that is too long', 'TPH-A2B3C4D5E6F7G'],
+      ['an excluded character', 'TPH-A2B3C4D5E6F0'],
+      ['an injection attempt', 'TPH-A2B3C4D5E6F7 OR 1=1'],
+    ];
+
+    for (const [label, reference] of malformed) {
+      it(`with 400 for ${label}`, async () => {
+        const response = await detailAsAdmin(reference);
+
+        assert.equal(response.status, 400, `expected 400 for ${label}`);
+        assert.deepEqual(response.json, INVALID_BOOKING_REFERENCE);
+      });
+    }
+
+    it('without echoing the rejected reference back', async () => {
+      const response = await detailAsAdmin('TPH-a2b3c4d5e6f7');
+
+      assert.ok(!JSON.stringify(response.json).includes('a2b3c4d5'), 'the input must not be reflected');
+    });
+  });
+
+  describe('reports an unknown reservation', () => {
+    it('with 404 for a canonical reference nobody booked', async () => {
+      const response = await detailAsAdmin(generateBookingReference());
+
+      assert.equal(response.status, 404);
+      assert.deepEqual(response.json, RESERVATION_NOT_FOUND);
+    });
+
+    it('with 404 rather than 400, keeping the two answers apart', async () => {
+      const unknown = await detailAsAdmin(generateBookingReference());
+      const malformed = await detailAsAdmin('tph-a2b3c4d5e6f7');
+
+      assert.equal(unknown.status, 404);
+      assert.equal(malformed.status, 400);
+    });
+  });
+
+  describe('returns the reservation', () => {
+    it('with exactly the detail contract', async () => {
+      const response = await detailAsAdmin(reservations.pending.bookingReference);
+
+      assert.equal(response.status, 200);
+      assert.deepEqual(Object.keys(response.json), ['data']);
+      assert.deepEqual(response.json.data, {
+        bookingReference: reservations.pending.bookingReference,
+        status: 'pending',
+        guest: {
+          firstName: fixture.guestFirstName,
+          lastName: fixture.guestLastName,
+          email: fixture.guestEmail,
+          phone: fixture.guestPhone,
+          country: fixture.guestCountry,
+        },
+        stay: {
+          checkIn: '2099-01-10',
+          checkOut: '2099-01-12',
+          // The real DATE subtraction: 12 - 10 = 2.
+          nights: 2,
+          adults: 2,
+          children: 0,
+        },
+        roomType: { slug: fixture.slug, name: fixture.name },
+        room: { number: fixture.roomNumbers[0] },
+        pricing: {
+          nightlyRate: fixture.nightlyRate,
+          totalAmount: fixture.totalAmount,
+          currency: 'EGP',
+        },
+        specialRequests: 'Late arrival',
+        createdAt: new Date(created.oldest).toISOString(),
+      });
+    });
+
+    it('including the physical room number, which the list never exposes', async () => {
+      const detail = (await detailAsAdmin(reservations.pending.bookingReference)).json.data!;
+
+      assert.equal(detail.room.number, fixture.roomNumbers[0]);
+      assert.deepEqual(Object.keys(detail.room), ['number']);
+
+      const listRow = requireData(await listReservationsAsAdmin('?limit=100')).reservations.find(
+        (row) => row.bookingReference === reservations.pending.bookingReference,
+      );
+      assert.ok(listRow, 'the fixture must also appear in the list');
+      assert.ok(!('room' in listRow), 'the list must not gain a room field');
+    });
+
+    it('omitting every internal identifier', async () => {
+      const detail = (await detailAsAdmin(reservations.pending.bookingReference)).json.data!;
+
+      for (const field of ['id', 'reservationId', 'roomId', 'roomTypeId', 'updatedAt']) {
+        assert.ok(!(field in detail), `${field} must not appear in the detail contract`);
+      }
+      assert.ok(!('id' in detail.roomType), 'the room type carries slug and name only');
+    });
+
+    it('with money as exact strings in EGP', async () => {
+      const { pricing } = (await detailAsAdmin(reservations.pending.bookingReference)).json.data!;
+
+      assert.equal(typeof pricing.nightlyRate, 'string');
+      assert.equal(typeof pricing.totalAmount, 'string');
+      assert.equal(pricing.nightlyRate, fixture.nightlyRate);
+      assert.equal(pricing.totalAmount, fixture.totalAmount);
+      assert.equal(pricing.currency, 'EGP');
+    });
+
+    it('with calendar dates, real nights and an ISO instant', async () => {
+      const { stay, createdAt } = (await detailAsAdmin(reservations.tiebreak.bookingReference)).json.data!;
+
+      assert.match(stay.checkIn, /^\d{4}-\d{2}-\d{2}$/);
+      assert.match(stay.checkOut, /^\d{4}-\d{2}-\d{2}$/);
+      assert.equal(stay.checkIn, '2099-02-10');
+      assert.equal(stay.checkOut, '2099-02-12');
+      assert.equal(stay.nights, 2);
+      assert.match(createdAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      assert.equal(createdAt, new Date(created.tied).toISOString());
+    });
+
+    it('with special requests as text when the guest left some', async () => {
+      const detail = (await detailAsAdmin(reservations.confirmed.bookingReference)).json.data!;
+
+      assert.equal(detail.specialRequests, 'Late arrival');
+    });
+
+    it('with special requests null when the guest left none', async () => {
+      const detail = (await detailAsAdmin(reservations.cancelled.bookingReference)).json.data!;
+
+      assert.equal(detail.specialRequests, null);
+    });
+
+    it('for every status the schema allows', async () => {
+      for (const [status, entry] of [
+        ['pending', reservations.pending],
+        ['confirmed', reservations.confirmed],
+        ['cancelled', reservations.cancelled],
+      ] as const) {
+        const response = await detailAsAdmin(entry.bookingReference);
+
+        assert.equal(response.status, 200, `expected 200 for the ${status} fixture`);
+        assert.equal(response.json.data!.status, status);
+      }
     });
   });
 });
