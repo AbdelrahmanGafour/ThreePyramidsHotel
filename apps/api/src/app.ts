@@ -1,5 +1,6 @@
 import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
+import { adminAuthRouter } from './modules/admin-auth/admin-auth.routes';
 import { availabilityRouter } from './modules/availability/availability.routes';
 import { healthRouter } from './modules/health/health.routes';
 import { reservationsRouter } from './modules/reservations/reservations.routes';
@@ -32,6 +33,7 @@ export function createApp(): Express {
   app.use('/api/v1/rooms', roomsRouter);
   app.use('/api/v1/availability', availabilityRouter);
   app.use('/api/v1/reservations', reservationsRouter);
+  app.use('/api/v1/admin/auth', adminAuthRouter);
 
   // Malformed JSON is a client mistake, so it gets a clear 400 instead of the
   // default HTML error page. Everything else continues to Express.
