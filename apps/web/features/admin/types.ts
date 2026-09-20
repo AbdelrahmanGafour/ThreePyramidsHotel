@@ -21,6 +21,16 @@ export type AdminNavItem = {
   available: boolean;
 };
 
+/**
+ * The signed-in administrator, exactly as the API's session endpoint reports
+ * them — these two fields and nothing else. V1 has a single permission level,
+ * so there is deliberately no role or permission field to model.
+ */
+export type AdminAccount = {
+  email: string;
+  displayName: string;
+};
+
 export type ReservationStatus = "confirmed" | "pending" | "cancelled" | "checked-in" | "checked-out";
 export type RoomAvailability = "available" | "occupied" | "blocked";
 export type InquiryStatus = "new" | "in-progress" | "replied";

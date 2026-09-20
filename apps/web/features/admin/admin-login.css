@@ -1,0 +1,160 @@
+/* Admin sign-in — the one admin screen with no shell around it.
+   Espresso ground, a single ivory card, square geometry and the same brass
+   top rule the admin panels use, so it reads as the front door to the same
+   building. Colour tokens come from globals.css; the shared `.field-*`,
+   `.btn-*` and `.eyebrow` classes are reused rather than restated. Every
+   selector is namespaced `adml-` so nothing here reaches another page. */
+
+.adml {
+  display: grid;
+  min-height: 100dvh;
+  align-items: center;
+  justify-items: center;
+  padding: clamp(1.5rem, 5vw, 3.5rem) 1.25rem;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(176, 138, 81, 0.16), transparent 32rem),
+    var(--espresso);
+  color: var(--ivory);
+  font-family: var(--font-body), Arial, sans-serif;
+  /* Covers the marketing body's gradient band + texture, as the admin shell does. */
+  position: relative;
+  z-index: 90;
+}
+
+.adml-card {
+  width: 100%;
+  max-width: 27rem;
+  padding: clamp(1.5rem, 4.5vw, 2.25rem);
+  border: 1px solid rgba(30, 24, 21, 0.14);
+  border-top: 2px solid var(--brass);
+  background: var(--panel-surface);
+  color: var(--ink);
+}
+
+.adml-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding-bottom: 1.15rem;
+  border-bottom: 1px solid rgba(30, 24, 21, 0.12);
+}
+
+.adml-brand-mark {
+  flex: none;
+  color: var(--brass-ink);
+}
+
+.adml-brand-name {
+  margin: 0;
+  font-family: var(--font-display), Georgia, serif;
+  font-size: 1.125rem;
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+.adml-brand-sub {
+  margin: 0.15rem 0 0;
+  color: rgba(30, 24, 21, 0.7);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+}
+
+.adml-head {
+  margin-top: 1.35rem;
+}
+
+.adml-title {
+  margin: 0.45rem 0 0;
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(1.6rem, 4vw, 1.9rem);
+  font-weight: 500;
+  line-height: 1.12;
+}
+
+.adml-lede {
+  margin: 0.5rem 0 0;
+  color: rgba(30, 24, 21, 0.78);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.adml-form {
+  display: grid;
+  gap: 1.15rem;
+  margin-top: 1.6rem;
+}
+
+.adml-field > .field-control {
+  margin-top: 0.4rem;
+}
+
+/* One message per attempt: a rejected sign-in and an unreachable system are
+   different problems and must not look alike. The icon carries the difference
+   as well as the colour. */
+.adml-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* Inside the form the grid gap spaces it; on its own it needs its own margin. */
+.adml-alert[data-standalone="true"] {
+  margin-top: 1.35rem;
+}
+
+.adml-alert[data-tone="rejected"] {
+  border-color: var(--danger);
+  background: rgba(155, 51, 36, 0.07);
+  color: var(--danger);
+}
+
+.adml-alert[data-tone="unavailable"] {
+  border-color: var(--aged-gold);
+  background: rgba(176, 138, 81, 0.12);
+  color: var(--brass-ink);
+}
+
+.adml-alert svg {
+  flex: none;
+  margin-top: 0.1rem;
+}
+
+.adml-submit {
+  width: 100%;
+}
+
+.adml-spinner {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: adml-spin 700ms linear infinite;
+}
+
+@keyframes adml-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.adml-foot {
+  margin-top: 1.35rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid rgba(30, 24, 21, 0.12);
+  color: rgba(30, 24, 21, 0.68);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adml-spinner {
+    animation-duration: 2.4s;
+  }
+}
