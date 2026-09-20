@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { formatDateWithYear, formatEgp, formatInstant } from "../lib/format";
-import { reservationsOffsetHref } from "../lib/reservationsWindow";
+import { reservationDetailHref, reservationsOffsetHref } from "../lib/reservationsWindow";
 import { adminReservationStatus } from "../lib/status";
 import type { AdminReservationList, AdminReservationListItem } from "../types";
 import { StatusBadge } from "./StatusBadge";
@@ -119,7 +119,11 @@ export function AdminReservationsTable({ data }: { data: AdminReservationList })
                 <th scope="row" className="adm-cell-primary">
                   <span className="adm-strong">{reservation.guestName}</span>
                   <span className="adm-sub">{reservation.guestEmail}</span>
-                  <span className="adm-sub">{reservation.bookingReference}</span>
+                  {/* The reference is the way in: one link per row, no click
+                      handler, and the whole row stays selectable text. */}
+                  <Link className="adm-sub adm-ref-link" href={reservationDetailHref(reservation.bookingReference)}>
+                    {reservation.bookingReference}
+                  </Link>
                 </th>
                 <td>{reservation.roomType.name}</td>
                 <td>
@@ -145,7 +149,10 @@ export function AdminReservationsTable({ data }: { data: AdminReservationList })
             </div>
             <p className="adm-sub">{reservation.guestEmail}</p>
             <p className="adm-sub">
-              {reservation.roomType.name}, {reservation.bookingReference}
+              {reservation.roomType.name},{" "}
+              <Link className="adm-ref-link" href={reservationDetailHref(reservation.bookingReference)}>
+                {reservation.bookingReference}
+              </Link>
             </p>
             <p className="adm-sub">{stay(reservation)}</p>
             <p className="adm-sub">Booked {formatInstant(reservation.createdAt)}</p>

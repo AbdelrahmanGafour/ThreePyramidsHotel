@@ -1,6 +1,8 @@
+import { isBookingReference } from '../reservations/booking-reference';
 import {
   DEFAULT_RESERVATION_LIST_LIMIT,
   DEFAULT_RESERVATION_LIST_OFFSET,
+  InvalidBookingReferenceError,
   InvalidPaginationError,
   MAX_RESERVATION_LIST_LIMIT,
   MIN_RESERVATION_LIST_LIMIT,
@@ -83,4 +85,23 @@ export function parseAdminReservationListQuery(
       : parseSuppliedWholeNumber(query.offset);
 
   return { limit, offset };
+}
+
+/**
+ * Validates the `:bookingReference` route parameter.
+ *
+ * The canonical reservation-domain rule decides what a reference looks like;
+ * this only turns a rejection into the admin module's own error. Nothing is
+ * trimmed and nothing is upper-cased: the lookup that follows is an exact
+ * match, so a value that needs tidying is not the value the database holds.
+ *
+ * Returns the reference unchanged, so a caller cannot accidentally use the raw
+ * parameter in place of the validated one.
+ */
+export function parseBookingReferenceParam(value: unknown): string {
+  if (typeof value !== 'string' || !isBookingReference(value)) {
+    throw new InvalidBookingReferenceError();
+  }
+
+  return value;
 }

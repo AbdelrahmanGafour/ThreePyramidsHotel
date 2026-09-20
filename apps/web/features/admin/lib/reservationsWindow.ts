@@ -52,3 +52,15 @@ export function parseReservationsOffset(
 export function reservationsOffsetHref(offset: number): string {
   return offset <= 0 ? RESERVATIONS_PATH : `${RESERVATIONS_PATH}?offset=${offset}`;
 }
+
+/**
+ * The address of one reservation. It lives here because this module already
+ * owns the route's path, and a second copy of that string is a second thing to
+ * keep in step.
+ *
+ * The reference is encoded as one path segment: it is data, and a stray slash
+ * in it must not become part of the URL's structure.
+ */
+export function reservationDetailHref(bookingReference: string): string {
+  return `${RESERVATIONS_PATH}/${encodeURIComponent(bookingReference)}`;
+}
