@@ -2,10 +2,14 @@ import Image from "next/image";
 import Link from "next/link";
 import { RoomFactList } from "@/features/rooms/components/RoomFactList";
 import { formatRoomRate } from "@/features/rooms/lib/money";
+import type { AvailabilityRoomType } from "@/features/booking/lib/availability";
 import type { RoomWithPresentation } from "@/features/rooms/api";
 
 type BookingRoomOptionProps = {
   room: RoomWithPresentation;
+  /** The live backend availability match for this room's slug, or null when unavailable/not yet searched. */
+  availability: AvailabilityRoomType | null;
+  nights: number;
   selected: boolean;
   unavailableReason: string | null;
   onSelect: () => void;
@@ -15,7 +19,14 @@ type BookingRoomOptionProps = {
 // unmistakable — heavier brass border, tinted surface, and a "Selected"
 // badge with a tick — and an unavailable room says plainly why, in text,
 // without dimming the whole row into illegibility.
-export function BookingRoomOption({ room, selected, unavailableReason, onSelect }: BookingRoomOptionProps) {
+export function BookingRoomOption({
+  room,
+  availability,
+  nights,
+  selected,
+  unavailableReason,
+  onSelect,
+}: BookingRoomOptionProps) {
   const unavailable = Boolean(unavailableReason);
   const isSelected = selected && !unavailable;
 
@@ -51,12 +62,22 @@ export function BookingRoomOption({ room, selected, unavailableReason, onSelect 
           ) : null}
         </div>
 
-        {!unavailable ? (
+        {!unavailable && availability ? (
           <p className="mt-2 text-[0.9375rem] text-ink/75">
             <span className="text-[1.125rem] font-bold text-ink">
-              {formatRoomRate(room.baseNightlyRate, room.currency)}
+              {formatRoomRate(availability.baseNightlyRate, availability.currency)}
             </span>{" "}
             per night
+            {nights > 0 ? (
+              <>
+                {" "}
+                &middot;{" "}
+                <span className="font-semibold text-ink">
+                  {formatRoomRate(availability.totalAmount, availability.currency)}
+                </span>{" "}
+                total for {nights} night{nights === 1 ? "" : "s"}
+              </>
+            ) : null}
           </p>
         ) : null}
 
@@ -82,7 +103,7 @@ export function BookingRoomOption({ room, selected, unavailableReason, onSelect 
             aria-pressed={isSelected}
             className={`btn w-full sm:w-auto ${isSelected ? "btn-secondary" : "btn-primary"}`}
           >
-            {unavailable ? "Not available for your party" : isSelected ? "Selected" : "Select this room"}
+            {unavailable ? "Not available" : isSelected ? "Selected" : "Select this room"}
           </button>
           <Link href={`/rooms/${room.slug}`} className="btn-link justify-center sm:justify-start">
             View room details

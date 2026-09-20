@@ -20,7 +20,3 @@ export function getRoomUnavailableReason(room: RoomWithPresentation, partySize: 
   }
   return null;
 }
-
-export function hasAnyEligibleRoom(rooms: RoomWithPresentation[], partySize: number): boolean {
-  return rooms.some((room) => !getRoomUnavailableReason(room, partySize));
-}
