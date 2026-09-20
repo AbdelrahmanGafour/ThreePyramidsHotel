@@ -1,6 +1,6 @@
 import "server-only";
 
-import { AdminAuthConfigurationError } from "./adminAuthApi";
+import { ApiConfigurationError } from "@/shared/server/apiBaseUrl";
 
 // Shared relay behaviour for the two browser-facing admin auth routes.
 //
@@ -49,7 +49,7 @@ export function relayAdminAuthResponse(upstream: Response): Response {
  * address, network detail or stack trace reaches the browser.
  */
 export function adminAuthGatewayResponse(error: unknown): Response {
-  const misconfigured = error instanceof AdminAuthConfigurationError;
+  const misconfigured = error instanceof ApiConfigurationError;
 
   return Response.json(
     {

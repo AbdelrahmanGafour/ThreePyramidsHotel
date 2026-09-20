@@ -1,7 +1,8 @@
 import "server-only";
 
 import { headers } from "next/headers";
-import { AdminAuthConfigurationError, fetchAdminSession, type AdminSessionResult } from "./adminAuthApi";
+import { ApiConfigurationError } from "@/shared/server/apiBaseUrl";
+import { fetchAdminSession, type AdminSessionResult } from "./adminAuthApi";
 
 // One way to ask "who is making this request?" on the server.
 //
@@ -27,7 +28,7 @@ export async function getCurrentAdminSession(): Promise<AdminSessionResult> {
   try {
     return await fetchAdminSession(cookie);
   } catch (error) {
-    if (error instanceof AdminAuthConfigurationError) {
+    if (error instanceof ApiConfigurationError) {
       // The deployment is wrong, which is nobody's sign-in problem. The
       // configured value is never echoed.
       return { state: "unavailable", reason: "The hotel system is not configured correctly." };

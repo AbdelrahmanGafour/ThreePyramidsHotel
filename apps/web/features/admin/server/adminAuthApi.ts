@@ -1,5 +1,7 @@
 import "server-only";
 
+import { ApiConfigurationError, resolveApiBaseUrl } from "@/shared/server/apiBaseUrl";
+
 // Server-only client for the hotel API's admin authentication endpoints.
 //
 // The import above is the boundary: importing this module from client code
@@ -11,7 +13,6 @@ import "server-only";
 //
 // It talks to Express directly and never to this app's own route handlers.
 
-const DEFAULT_API_BASE_URL = "http://127.0.0.1:4000";
 const ADMIN_AUTH_BASE_PATH = "/api/v1/admin/auth";
 
 /** The only endpoints this client may reach; never a caller-supplied URL. */
@@ -46,62 +47,6 @@ type AdminAuthRequest = {
   /** Content-Type to send with `rawBody`, normally the browser's own. */
   contentType?: string | undefined;
 };
-
-/**
- * The API address is wrong or missing. Distinct from an outage: it is a
- * deployment fault, and never an answer about who is signed in.
- */
-export class AdminAuthConfigurationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AdminAuthConfigurationError";
-  }
-}
-
-/**
- * Resolves the API base URL without a trailing slash, so paths join cleanly.
- *
- * The localhost default is a development convenience only; production must say
- * where its API lives rather than quietly calling itself. Messages never
- * include the configured value.
- */
-function resolveApiBaseUrl(): string {
-  const configured = process.env.API_BASE_URL?.trim();
-
-  if (!configured) {
-    if (process.env.NODE_ENV === "production") {
-      throw new AdminAuthConfigurationError("API_BASE_URL must be set in production");
-    }
-
-    return DEFAULT_API_BASE_URL;
-  }
-
-  let url: URL;
-
-  try {
-    url = new URL(configured);
-  } catch {
-    throw new AdminAuthConfigurationError("API_BASE_URL must be an absolute http:// or https:// URL");
-  }
-
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new AdminAuthConfigurationError("API_BASE_URL must use http:// or https://");
-  }
-
-  // A base URL is an address, not a request: credentials, a query string or a
-  // fragment would either leak into every call or be silently dropped.
-  if (url.username || url.password) {
-    throw new AdminAuthConfigurationError("API_BASE_URL must not contain credentials");
-  }
-  if (url.search) {
-    throw new AdminAuthConfigurationError("API_BASE_URL must not contain a query string");
-  }
-  if (url.hash) {
-    throw new AdminAuthConfigurationError("API_BASE_URL must not contain a fragment");
-  }
-
-  return configured.replace(/\/+$/, "");
-}
 
 /**
  * Performs one admin-auth request against Express.
@@ -175,7 +120,7 @@ export async function fetchAdminSession(cookie?: string): Promise<AdminSessionRe
   } catch (error) {
     // A misconfigured API address is a server fault: it must surface as an
     // error, not be softened into an outage or a signed-out administrator.
-    if (error instanceof AdminAuthConfigurationError) {
+    if (error instanceof ApiConfigurationError) {
       throw error;
     }
 
