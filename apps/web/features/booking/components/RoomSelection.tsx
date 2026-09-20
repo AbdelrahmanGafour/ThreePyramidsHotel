@@ -16,6 +16,7 @@ import {
   type AvailabilityRoomType,
 } from "@/features/booking/lib/availability";
 import { formatRoomRate } from "@/features/rooms/lib/money";
+import type { AvailabilitySnapshot } from "@/features/booking/types";
 import type { RoomWithPresentation } from "@/features/rooms/api";
 
 type RoomSelectionProps = {
@@ -24,15 +25,39 @@ type RoomSelectionProps = {
 
 // Backend/PostgreSQL is the sole source of truth for live availability and
 // pricing (capacity eligibility alone is still a legitimate, immediate,
-// no-network fact — see lib/eligibility.ts). This snapshot is never persisted
-// to BookingContext/sessionStorage: it is a live search result, not a second
-// inventory/pricing authority, and is re-fetched whenever dates or guests
-// change.
+// no-network fact — see lib/eligibility.ts). The full live search result
+// (`result`/`SearchState` below) is never persisted — it is re-fetched
+// whenever dates or guests change. Only the selected room's own display
+// snapshot is stored, session-scoped, via BookingContext's
+// `availabilitySnapshot` — informational for later steps, never proof of
+// current inventory; the backend remains authoritative.
 type SearchState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; nights: number; roomTypes: AvailabilityRoomType[] };
+
+// Built only from a live availability row — never reconstructed from static
+// room data, never locally calculated. `nights` must come from the same live
+// result (see call sites: `displayNights` when `availability` is present).
+function buildSnapshot(
+  stay: { checkIn: string | null; checkOut: string | null; adults: number; children: number },
+  availability: AvailabilityRoomType,
+  nights: number,
+): AvailabilitySnapshot {
+  return {
+    checkIn: stay.checkIn!,
+    checkOut: stay.checkOut!,
+    adults: stay.adults,
+    children: stay.children,
+    roomTypeSlug: availability.slug,
+    roomName: availability.name,
+    nightlyRate: availability.baseNightlyRate,
+    totalAmount: availability.totalAmount,
+    currency: availability.currency,
+    nights,
+  };
+}
 
 function toSearchState(result: AvailabilityResult | undefined): SearchState {
   if (!result) return { status: "loading" };
@@ -172,7 +197,10 @@ export function RoomSelection({ rooms }: RoomSelectionProps) {
               nights={displayNights}
               selected={state.selectedRoomSlug === room.slug}
               unavailableReason={unavailableReason}
-              onSelect={() => selectRoom(room.slug)}
+              onSelect={() => {
+                const snapshot = availability ? buildSnapshot(state, availability, displayNights) : null;
+                selectRoom(room.slug, snapshot);
+              }}
             />
           ))}
         </ul>
@@ -215,7 +243,16 @@ export function RoomSelection({ rooms }: RoomSelectionProps) {
             </>
           ) : null
         }
-        onContinue={() => router.push("/booking/guest-details")}
+        onContinue={() => {
+          // Covers a provisional ?room= preselection, an old v2 session's
+          // restored slug with no snapshot, and a refreshed room-selection
+          // page: whatever is about to be carried forward is re-captured
+          // from the CURRENT live result immediately before navigating,
+          // never from a possibly-stale earlier click.
+          if (!canContinue || !selectedRow || !selectedRow.availability) return;
+          selectRoom(selectedRow.room.slug, buildSnapshot(state, selectedRow.availability, displayNights));
+          router.push("/booking/guest-details");
+        }}
       />
 
       <p className="fine-print mt-3 text-center">

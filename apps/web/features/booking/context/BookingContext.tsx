@@ -2,9 +2,18 @@
 
 import { createContext, useContext, useEffect, useMemo, useReducer, type ReactNode } from "react";
 import { isValidStayRange } from "@/features/booking/lib/dates";
-import { emptyGuestDetails, type BookingConfirmation, type BookingState, type GuestDetails } from "@/features/booking/types";
+import {
+  emptyGuestDetails,
+  type AvailabilitySnapshot,
+  type BookingConfirmation,
+  type BookingState,
+  type GuestDetails,
+} from "@/features/booking/types";
 
 // Versioned so a session saved under the old multi-room shape isn't restored into the one-room model.
+// WFI-T05 adds `availabilitySnapshot` (purely additive, nullable): an old v2
+// session restored via HYDRATE's `{...initialState, ...parsed}` merge simply
+// gets `null` for it from initialState, so no version bump is needed here.
 const STORAGE_KEY = "tph-booking-state:v2";
 
 const initialState: BookingState = {
@@ -13,6 +22,7 @@ const initialState: BookingState = {
   adults: 2,
   children: 0,
   selectedRoomSlug: null,
+  availabilitySnapshot: null,
   guest: emptyGuestDetails,
   termsAccepted: false,
   confirmation: null,
@@ -20,7 +30,7 @@ const initialState: BookingState = {
 
 type BookingAction =
   | { type: "SET_STAY"; checkIn: string | null; checkOut: string | null; adults: number; children: number }
-  | { type: "SELECT_ROOM"; slug: string }
+  | { type: "SELECT_ROOM"; slug: string; snapshot: AvailabilitySnapshot | null }
   | { type: "SET_GUEST"; guest: GuestDetails }
   | { type: "SET_TERMS_ACCEPTED"; accepted: boolean }
   | { type: "CONFIRM_BOOKING"; confirmation: BookingConfirmation }
@@ -29,20 +39,34 @@ type BookingAction =
 
 function bookingReducer(state: BookingState, action: BookingAction): BookingState {
   switch (action.type) {
-    case "SET_STAY":
+    case "SET_STAY": {
+      const unchanged =
+        state.checkIn === action.checkIn &&
+        state.checkOut === action.checkOut &&
+        state.adults === action.adults &&
+        state.children === action.children;
+
       return {
         ...state,
         checkIn: action.checkIn,
         checkOut: action.checkOut,
         adults: action.adults,
         children: action.children,
+        // `selectedRoomSlug` is preserved either way (keeps a provisional
+        // ?room= preselection or a prior choice visible/highlighted). Only
+        // the live snapshot is invalidated when criteria actually changed —
+        // `hasSelectedRoom` below requires a snapshot matching the CURRENT
+        // stay, so a changed stay can never count as a completed selection
+        // even though the slug is still remembered.
+        availabilitySnapshot: unchanged ? state.availabilitySnapshot : null,
         // Editing the stay after a previous confirmation (without resetting
         // via "Return to the hotel") means this is a new attempt — the old
         // reference must not carry over and render as if it were current.
         confirmation: null,
       };
+    }
     case "SELECT_ROOM":
-      return { ...state, selectedRoomSlug: action.slug, confirmation: null };
+      return { ...state, selectedRoomSlug: action.slug, availabilitySnapshot: action.snapshot, confirmation: null };
     case "SET_GUEST":
       return { ...state, guest: action.guest, confirmation: null };
     case "SET_TERMS_ACCEPTED":
@@ -62,7 +86,7 @@ type BookingContextValue = {
   state: BookingState;
   hydrated: boolean;
   setStay: (input: { checkIn: string; checkOut: string; adults: number; children: number }) => void;
-  selectRoom: (slug: string) => void;
+  selectRoom: (slug: string, snapshot?: AvailabilitySnapshot | null) => void;
   setGuest: (guest: GuestDetails) => void;
   setTermsAccepted: (accepted: boolean) => void;
   confirmBooking: (confirmation: BookingConfirmation) => void;
@@ -71,6 +95,27 @@ type BookingContextValue = {
   hasSelectedRoom: boolean;
   hasGuestDetails: boolean;
 };
+
+/**
+ * A selection only counts as complete once a live availability snapshot
+ * backs it for the CURRENT stay — a bare `selectedRoomSlug` (from a
+ * provisional ?room= preselection, or an old v2 session restored without a
+ * snapshot) is not enough. This lets both cases recover safely instead of
+ * being treated as an already-confirmed choice. The snapshot is workflow/
+ * display state only — never proof of current inventory.
+ */
+function hasCompleteRoomSelection(state: BookingState): boolean {
+  const { selectedRoomSlug, availabilitySnapshot: snapshot } = state;
+  if (!selectedRoomSlug || !snapshot) return false;
+
+  return (
+    snapshot.roomTypeSlug === selectedRoomSlug &&
+    snapshot.checkIn === state.checkIn &&
+    snapshot.checkOut === state.checkOut &&
+    snapshot.adults === state.adults &&
+    snapshot.children === state.children
+  );
+}
 
 const BookingContext = createContext<BookingContextValue | null>(null);
 
@@ -106,7 +151,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       state,
       hydrated,
       setStay: (input) => dispatch({ type: "SET_STAY", ...input }),
-      selectRoom: (slug) => dispatch({ type: "SELECT_ROOM", slug }),
+      selectRoom: (slug, snapshot = null) => dispatch({ type: "SELECT_ROOM", slug, snapshot }),
       setGuest: (guest) => dispatch({ type: "SET_GUEST", guest }),
       setTermsAccepted: (accepted) => dispatch({ type: "SET_TERMS_ACCEPTED", accepted }),
       confirmBooking: (confirmation) => dispatch({ type: "CONFIRM_BOOKING", confirmation }),
@@ -114,7 +159,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       // Same rule as the stay form: complete dates, none in the past, check-out after check-in.
       // A restored session whose dates have since passed is therefore treated as having no stay.
       hasValidStay: isValidStayRange(state.checkIn, state.checkOut),
-      hasSelectedRoom: Boolean(state.selectedRoomSlug),
+      hasSelectedRoom: hasCompleteRoomSelection(state),
       hasGuestDetails: Boolean(state.guest.firstName && state.guest.lastName && state.guest.email),
     }),
     [state, hydrated],
