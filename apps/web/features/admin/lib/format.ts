@@ -19,6 +19,25 @@ export const formatLongDate = (iso: string) => longDate.format(toUtc(iso));
 export const daysBetween = (fromIso: string, toIso: string) =>
   Math.round((toUtc(toIso).getTime() - toUtc(fromIso).getTime()) / DAY_MS);
 
+/**
+ * Initials for the identity mark, from whatever the account's display name
+ * happens to be: one letter for a single word, first and last for several,
+ * nothing at all if the name is blank. Split by code point, so an accented or
+ * non-Latin first character survives intact.
+ */
+export function initialsFromName(displayName: string): string {
+  const words = displayName.trim().split(/\s+/).filter(Boolean);
+
+  if (words.length === 0) {
+    return "";
+  }
+
+  const first = [...words[0]!][0] ?? "";
+  const last = words.length > 1 ? ([...words[words.length - 1]!][0] ?? "") : "";
+
+  return `${first}${last}`.toUpperCase();
+}
+
 /** "Today, 09:12" / "Yesterday, 16:25" / "16 Sep, 18:30". */
 export function formatReceived(receivedAt: string, todayIso: string) {
   const time = receivedAt.slice(11, 16);

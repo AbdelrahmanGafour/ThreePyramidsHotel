@@ -347,6 +347,55 @@ a.adm-nav-item:hover {
   font-size: 0.8125rem;
 }
 
+/* ---- Sign out ---------------------------------------------------------- */
+/* Sits in the top bar at every width, so it keeps the secondary-button
+   treatment of `.adm-menu-btn` rather than inventing a new one. */
+.adm-signout {
+  position: relative;
+  flex: none;
+}
+
+.adm-signout-btn {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  padding: 0 0.9rem;
+  border: 1px solid rgba(30, 24, 21, 0.5);
+  background: transparent;
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.adm-signout-btn:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+.adm-signout-btn:disabled {
+  cursor: progress;
+  border-color: rgba(30, 24, 21, 0.2);
+  color: rgba(30, 24, 21, 0.55);
+}
+
+/* Anchored to the button and grown leftwards, so it never pushes the bar's
+   layout around or runs off a narrow screen. */
+.adm-signout-error {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 50;
+  width: max-content;
+  max-width: min(19rem, calc(100vw - 2rem));
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--danger);
+  background: var(--adm-panel);
+  color: var(--danger);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
 /* ---- Workspace --------------------------------------------------------- */
 .adm-main {
   max-width: 82rem;
@@ -633,6 +682,19 @@ a.adm-nav-item:hover {
 }
 
 /* ---- Breakpoints ------------------------------------------------------- */
+@media (max-width: 719px) {
+  /* Sign out shares the bar at every width, so on a phone the breadcrumb keeps
+     only the current section — the ancestor is decorative context, and leaving
+     it in squeezes the section name off the screen. */
+  .adm-crumbs li:not([aria-current="page"]) {
+    display: none;
+  }
+
+  .adm-crumbs li + li::before {
+    content: none;
+  }
+}
+
 @media (min-width: 720px) {
   .adm-table-wrap {
     display: block;

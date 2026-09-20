@@ -9,11 +9,8 @@ import type { AdminInquiry, AdminReservation, AdminRoomInventory } from "../type
 /** The "current day" for all demo data — fixed so server and client always agree. */
 export const demoToday = "2026-09-18";
 
-export const demoAdministrator = {
-  name: "Hotel manager",
-  role: "Administrator",
-  initials: "HM",
-};
+// The invented administrator that used to sit here is gone: the signed-in
+// identity now comes from the API's session endpoint via the protected layout.
 
 export const demoReservations: AdminReservation[] = [
   { id: "RSV-2418", guestName: "Amelia Hartwell", guestCount: 2, roomSlug: "room-concept-02", arrival: "2026-09-18", departure: "2026-09-21", status: "confirmed" },
