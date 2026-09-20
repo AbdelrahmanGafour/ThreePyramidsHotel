@@ -27,46 +27,54 @@ type DemoRoomType = {
   roomNumbers: string[];
 };
 
+// Slugs and provisional facts below are aligned with the frontend's existing
+// room concepts (apps/web/features/rooms/data/roomsData.ts) so both sides
+// refer to the same development room identities, with no translation layer
+// between them. These remain PROVISIONAL DEVELOPMENT CONTENT, not confirmed
+// hotel facts: `description` duplicates the frontend's editorial description
+// (there is no second approved backend-owned long-description source yet),
+// and `baseNightlyRate`/`roomNumbers` are unchanged, backend-only development
+// placeholders — never derived from the frontend's demo USD prices.
 /** DEMO — placeholder room types and their placeholder physical rooms. */
 const DEMO_ROOM_TYPES: DemoRoomType[] = [
   {
-    slug: 'demo-standard',
-    name: 'Demo Standard Room',
-    shortDescription: 'Development placeholder room type.',
-    description: 'Development-only placeholder data. Replace with real hotel content later.',
+    slug: 'room-concept-01',
+    name: 'Room concept 01',
+    shortDescription: 'Linen, warm stone, and a shaded outlook arranged for quiet mornings.',
+    description: 'Linen, warm stone, and a shaded outlook arranged for quiet mornings.',
     capacity: 2,
-    bedType: 'Queen',
+    bedType: 'Queen bed',
     bedCount: 1,
-    sizeSqm: 24,
-    view: 'Demo city view',
+    sizeSqm: 30,
+    view: 'Courtyard view',
     baseNightlyRate: 1000,
     sortOrder: 1,
     roomNumbers: ['D-101', 'D-102'],
   },
   {
-    slug: 'demo-deluxe',
-    name: 'Demo Deluxe Room',
-    shortDescription: 'Development placeholder room type.',
-    description: 'Development-only placeholder data. Replace with real hotel content later.',
+    slug: 'room-concept-02',
+    name: 'Room concept 02',
+    shortDescription: 'An upper-floor suite with softened evening light and a private place to pause.',
+    description: 'An upper-floor suite with softened evening light and a private place to pause.',
     capacity: 2,
-    bedType: 'King',
+    bedType: 'King bed',
     bedCount: 1,
-    sizeSqm: 30,
-    view: 'Demo pyramid view',
+    sizeSqm: 42,
+    view: 'Terrace & plateau view',
     baseNightlyRate: 1500,
     sortOrder: 2,
     roomNumbers: ['D-201', 'D-202'],
   },
   {
-    slug: 'demo-suite',
-    name: 'Demo Suite',
-    shortDescription: 'Development placeholder room type.',
-    description: 'Development-only placeholder data. Replace with real hotel content later.',
+    slug: 'room-concept-03',
+    name: 'Room concept 03',
+    shortDescription: 'A composed family room with stone texture, low light, and room to settle.',
+    description: 'A composed family room with stone texture, low light, and room to settle.',
     capacity: 3,
-    bedType: 'King',
-    bedCount: 1,
-    sizeSqm: 40,
-    view: 'Demo pyramid view',
+    bedType: 'Queen bed + daybed',
+    bedCount: 2,
+    sizeSqm: 38,
+    view: 'Courtyard view',
     baseNightlyRate: 2000,
     sortOrder: 3,
     roomNumbers: ['D-301', 'D-302'],
