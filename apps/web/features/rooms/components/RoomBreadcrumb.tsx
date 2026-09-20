@@ -1,6 +1,6 @@
 import { Breadcrumb } from "@/shared/components/ui/Breadcrumb";
-import type { Room } from "@/features/rooms/data/roomsData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
-export function RoomBreadcrumb({ room }: { room: Room }) {
+export function RoomBreadcrumb({ room }: { room: RoomWithPresentation }) {
   return <Breadcrumb parent={{ href: "/rooms", label: "All rooms" }} current={room.name} />;
 }

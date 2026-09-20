@@ -1,10 +1,11 @@
 import Image from "next/image";
 import Link from "next/link";
 import { RoomFactList } from "@/features/rooms/components/RoomFactList";
-import type { Room } from "@/features/rooms/data/roomsData";
+import { formatRoomRate } from "@/features/rooms/lib/money";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 type RoomPlateProps = {
-  room: Room;
+  room: RoomWithPresentation;
   /** Trimmed treatment for the "You may also like" scroller. */
   compact?: boolean;
   priority?: boolean;
@@ -40,11 +41,13 @@ export function RoomPlate({ room, compact, priority }: RoomPlateProps) {
             {room.name}
           </Link>
         </h3>
-        {room.priceFrom ? (
-          <p className="text-[0.9375rem] text-ink/75">
-            From <span className="text-[1.125rem] font-bold text-ink">${room.priceFrom}</span> per night
-          </p>
-        ) : null}
+        <p className="text-[0.9375rem] text-ink/75">
+          From{" "}
+          <span className="text-[1.125rem] font-bold text-ink">
+            {formatRoomRate(room.baseNightlyRate, room.currency)}
+          </span>{" "}
+          per night
+        </p>
       </div>
 
       {!compact ? <p className="mt-2 line-clamp-2 text-[0.9375rem] leading-[1.6] text-ink/75">{room.description}</p> : null}

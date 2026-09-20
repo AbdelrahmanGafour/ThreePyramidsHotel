@@ -156,10 +156,64 @@ export const demoStayPolicies: StayPolicies = {
 // End DEMO CONTENT.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// LEGACY / TEMPORARY COMPATIBILITY (WFI-T03 Phase 5A): `rooms` still carries
+// business facts (name, description, capacity/sleeps, bed info, size, view,
+// price) that are now backend-authoritative via GET /api/v1/rooms and
+// GET /api/v1/rooms/:slug (see features/rooms/api.ts). It remains exported
+// only because booking review/confirmation have not migrated to real API
+// data yet and are out of this phase's scope — new T03 code MUST NOT read
+// business facts from this array. Once every consumer has migrated, this
+// export (and the DEMO CONTENT block above it) should be removed.
 export const rooms: Room[] = roomBases.map((base) => ({ ...base, ...demoRoomDetails[base.slug] }));
 
-/** Distinct categories, or `[]` while the roster only spans one — components use this to hide a pointless single-tab filter. */
-export function getRoomCategories(list: Room[]): string[] {
+/**
+ * Distinct categories, or `[]` while the roster only spans one — components
+ * use this to hide a pointless single-tab filter.
+ *
+ * Generic over anything with an optional `category`, not just the legacy
+ * `Room` type, so it works identically for real API-backed room data
+ * (`RoomWithPresentation`, see features/rooms/api.ts) without a translation
+ * or a second implementation.
+ */
+export function getRoomCategories<T extends { category?: string }>(list: T[]): string[] {
   const distinct = Array.from(new Set(list.map((room) => room.category).filter(Boolean))) as string[];
   return distinct.length > 1 ? distinct : [];
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRESENTATION-ONLY LOOKUP (WFI-T03 Phase 5A).
+//
+// Keyed by the SAME canonical backend room-type slug (room-concept-01/02/03)
+// — this is a lookup by an already-correct identifier, never a translation
+// between two different slug systems, and never a substitute for one.
+//
+// The backend/API remains the sole source of truth for every booking/
+// business fact (name, description, capacity, bed info, size, view, rate,
+// currency). This lookup carries ONLY frontend-owned decoration that has no
+// backend equivalent at all: image, gallery, imageAlt, position, story,
+// amenities, category. features/rooms/api.ts merges a validated backend room
+// response with the entry here (matched by slug) before handing display data
+// to UI code — it must never merge across mismatched slugs.
+//
+// Derived directly from the existing `rooms` array above rather than
+// re-typing the same image/gallery/story/amenity content a second time.
+// ═══════════════════════════════════════════════════════════════════════════
+export type RoomPresentation = Pick<
+  Room,
+  "image" | "gallery" | "imageAlt" | "position" | "story" | "amenities" | "category"
+>;
+
+export const roomPresentationBySlug: Record<string, RoomPresentation> = Object.fromEntries(
+  rooms.map((room) => [
+    room.slug,
+    {
+      image: room.image,
+      gallery: room.gallery,
+      imageAlt: room.imageAlt,
+      position: room.position,
+      story: room.story,
+      amenities: room.amenities,
+      category: room.category,
+    },
+  ]),
+);

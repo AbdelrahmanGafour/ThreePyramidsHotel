@@ -1,9 +1,9 @@
 import { RoomPlate } from "@/features/rooms/components/RoomPlate";
-import type { Room } from "@/features/rooms/data/roomsData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 // A horizontal scroller rather than a fixed grid, so this reads the same
 // whether there are 2 other rooms or 19 of them.
-export function RelatedRooms({ rooms }: { rooms: Room[] }) {
+export function RelatedRooms({ rooms }: { rooms: RoomWithPresentation[] }) {
   if (!rooms.length) return null;
 
   return (

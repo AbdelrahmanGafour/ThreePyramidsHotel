@@ -2,10 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { RoomPlate } from "@/features/rooms/components/RoomPlate";
-import { getRoomCategories, type Room } from "@/features/rooms/data/roomsData";
+import { getRoomCategories } from "@/features/rooms/data/roomsData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 type RoomCatalogueProps = {
-  rooms: Room[];
+  rooms: RoomWithPresentation[];
 };
 
 const INITIAL_VISIBLE = 12;

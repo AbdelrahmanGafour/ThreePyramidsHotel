@@ -9,11 +9,11 @@ import { BookingStepHeader } from "@/features/booking/components/BookingStepHead
 import { useBooking } from "@/features/booking/context/BookingContext";
 import { formatDateLabel, nightsBetween } from "@/features/booking/lib/dates";
 import { getRoomUnavailableReason, hasAnyEligibleRoom } from "@/features/booking/lib/eligibility";
-import { calculatePriceBreakdown, formatCurrency } from "@/features/booking/lib/pricing";
-import type { Room } from "@/features/rooms/data/roomsData";
+import { formatRoomRate } from "@/features/rooms/lib/money";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 type RoomSelectionProps = {
-  rooms: Room[];
+  rooms: RoomWithPresentation[];
 };
 
 export function RoomSelection({ rooms }: RoomSelectionProps) {
@@ -41,15 +41,14 @@ export function RoomSelection({ rooms }: RoomSelectionProps) {
   // after the fact (e.g. going back to step 1 and adding a guest) — that must
   // block continuing, not just look wrong.
   const canContinue = selectedRoom ? !getRoomUnavailableReason(selectedRoom, totalGuests) : false;
-  const selectedTotal =
-    selectedRoom?.priceFrom && canContinue
-      ? calculatePriceBreakdown({ nightlyRate: selectedRoom.priceFrom, nights }).total
-      : null;
+  // No total is computed here — the accepted price/total is a backend
+  // fact (see the reservation ticket), not something derived from
+  // baseNightlyRate via floating-point arithmetic on the frontend.
 
   return (
     <div className="mx-auto max-w-[760px] px-[var(--page-x)] py-[clamp(2rem,5vw,3.5rem)]">
       <BookingStepHeader step="Step 2 of 4" title="Choose your room">
-        Choose one room to continue. Prices are per night, with the total for your stay shown too.
+        Choose one room to continue. Prices shown are per night.
       </BookingStepHeader>
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-1 border-y border-ink/15 py-3">
@@ -73,7 +72,6 @@ export function RoomSelection({ rooms }: RoomSelectionProps) {
             <BookingRoomOption
               key={room.slug}
               room={room}
-              nights={nights}
               selected={state.selectedRoomSlug === room.slug}
               unavailableReason={getRoomUnavailableReason(room, totalGuests)}
               onSelect={() => selectRoom(room.slug)}
@@ -109,7 +107,7 @@ export function RoomSelection({ rooms }: RoomSelectionProps) {
           selectedRoom && canContinue ? (
             <>
               <span className="font-semibold text-ink">{selectedRoom.name}</span>
-              {selectedTotal !== null ? <> &middot; {formatCurrency(selectedTotal)} total</> : null}
+              {" "}&middot; {formatRoomRate(selectedRoom.baseNightlyRate, selectedRoom.currency)} per night
             </>
           ) : null
         }

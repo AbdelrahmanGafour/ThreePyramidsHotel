@@ -1,12 +1,11 @@
 import Image from "next/image";
 import Link from "next/link";
 import { RoomFactList } from "@/features/rooms/components/RoomFactList";
-import { calculatePriceBreakdown, formatCurrency } from "@/features/booking/lib/pricing";
-import type { Room } from "@/features/rooms/data/roomsData";
+import { formatRoomRate } from "@/features/rooms/lib/money";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 type BookingRoomOptionProps = {
-  room: Room;
-  nights: number;
+  room: RoomWithPresentation;
   selected: boolean;
   unavailableReason: string | null;
   onSelect: () => void;
@@ -16,10 +15,9 @@ type BookingRoomOptionProps = {
 // unmistakable — heavier brass border, tinted surface, and a "Selected"
 // badge with a tick — and an unavailable room says plainly why, in text,
 // without dimming the whole row into illegibility.
-export function BookingRoomOption({ room, nights, selected, unavailableReason, onSelect }: BookingRoomOptionProps) {
+export function BookingRoomOption({ room, selected, unavailableReason, onSelect }: BookingRoomOptionProps) {
   const unavailable = Boolean(unavailableReason);
   const isSelected = selected && !unavailable;
-  const total = room.priceFrom ? calculatePriceBreakdown({ nightlyRate: room.priceFrom, nights }).total : null;
 
   return (
     <li
@@ -53,16 +51,12 @@ export function BookingRoomOption({ room, nights, selected, unavailableReason, o
           ) : null}
         </div>
 
-        {room.priceFrom && !unavailable ? (
+        {!unavailable ? (
           <p className="mt-2 text-[0.9375rem] text-ink/75">
-            <span className="text-[1.125rem] font-bold text-ink">{formatCurrency(room.priceFrom)}</span> per night
-            {total !== null && nights > 0 ? (
-              <>
-                {" "}
-                &middot; <span className="font-semibold text-ink">{formatCurrency(total)}</span> total for {nights} night
-                {nights === 1 ? "" : "s"}
-              </>
-            ) : null}
+            <span className="text-[1.125rem] font-bold text-ink">
+              {formatRoomRate(room.baseNightlyRate, room.currency)}
+            </span>{" "}
+            per night
           </p>
         ) : null}
 
