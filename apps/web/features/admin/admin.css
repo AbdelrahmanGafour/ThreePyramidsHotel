@@ -575,6 +575,55 @@ a.adm-nav-item:hover {
   gap: 0.75rem;
 }
 
+/* ---- Pager ------------------------------------------------------------- */
+.adm-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--adm-rule);
+}
+
+.adm-pager-count {
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+}
+
+.adm-pager-links {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.adm-pager-link {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  padding: 0 0.9rem;
+  border: 1px solid rgba(30, 24, 21, 0.5);
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+a.adm-pager-link:hover {
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+/* No page to go to — a non-link, dimmed but still readable. */
+.adm-pager-link[data-state="unavailable"] {
+  border-color: rgba(30, 24, 21, 0.18);
+  color: rgba(30, 24, 21, 0.5);
+}
+
+/* Money lines up on the decimal for scanning down a column. */
+.adm-table .adm-cell-money {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ---- Status ------------------------------------------------------------ */
 .adm-status {
   display: inline-flex;

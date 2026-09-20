@@ -15,7 +15,7 @@ export const adminNavigation: AdminNavItem[] = [
     label: "Reservations",
     href: "/admin/reservations",
     description: "Bookings and guest details for every stay.",
-    available: false,
+    available: true,
   },
   {
     key: "rooms",
