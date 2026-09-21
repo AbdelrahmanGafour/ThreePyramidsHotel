@@ -117,6 +117,27 @@ function hasCompleteRoomSelection(state: BookingState): boolean {
   );
 }
 
+/**
+ * WFI-T06 removed `arrivalTime` from `GuestDetails` while keeping the same
+ * session key — an old v2 session could still restore it as a stray runtime
+ * property via the shallow `{...initialState, ...parsed}` merge. Sanitizes
+ * the restored `guest` to exactly the current shape (only this nested
+ * object, not the whole session) rather than wiping anything.
+ */
+function sanitizeGuest(guest: unknown): GuestDetails {
+  const raw = (guest && typeof guest === "object" ? guest : {}) as Partial<Record<keyof GuestDetails, unknown>>;
+  const asString = (value: unknown): string => (typeof value === "string" ? value : "");
+
+  return {
+    firstName: asString(raw.firstName),
+    lastName: asString(raw.lastName),
+    email: asString(raw.email),
+    phone: asString(raw.phone),
+    country: asString(raw.country),
+    specialRequests: asString(raw.specialRequests),
+  };
+}
+
 const BookingContext = createContext<BookingContextValue | null>(null);
 
 export function BookingProvider({ children }: { children: ReactNode }) {
@@ -129,7 +150,10 @@ export function BookingProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       const raw = window.sessionStorage.getItem(STORAGE_KEY);
-      if (raw) dispatch({ type: "HYDRATE", state: { ...initialState, ...JSON.parse(raw) } });
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        dispatch({ type: "HYDRATE", state: { ...initialState, ...parsed, guest: sanitizeGuest(parsed.guest) } });
+      }
     } catch {
       // Ignore unavailable/blocked storage — booking simply starts empty.
     } finally {
@@ -160,7 +184,15 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       // A restored session whose dates have since passed is therefore treated as having no stay.
       hasValidStay: isValidStayRange(state.checkIn, state.checkOut),
       hasSelectedRoom: hasCompleteRoomSelection(state),
-      hasGuestDetails: Boolean(state.guest.firstName && state.guest.lastName && state.guest.email),
+      // Completeness guard only (for restored/direct-entry state) — not a
+      // duplicate of validation.ts's detailed format/regex checks.
+      hasGuestDetails: Boolean(
+        state.guest.firstName &&
+          state.guest.lastName &&
+          state.guest.email &&
+          state.guest.phone &&
+          state.guest.country,
+      ),
     }),
     [state, hydrated],
   );

@@ -3,13 +3,17 @@
 // elsewhere in `features/booking/` for real calls without changing these
 // shapes, and the UI components keep working unchanged.
 
+// WFI-T06: fields limited to exactly what the reservation contract needs
+// (roomTypeSlug/dates/adults/children live elsewhere in BookingState).
+// `arrivalTime` was removed — it has no equivalent in
+// apps/api/src/modules/reservations/reservations.types.ts and must not be
+// sent as, or replaced by, an unsupported field.
 export type GuestDetails = {
   firstName: string;
   lastName: string;
   email: string;
   phone: string;
   country: string;
-  arrivalTime: string;
   specialRequests: string;
 };
 
@@ -19,7 +23,6 @@ export const emptyGuestDetails: GuestDetails = {
   email: "",
   phone: "",
   country: "",
-  arrivalTime: "",
   specialRequests: "",
 };
 

@@ -2,21 +2,23 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { type ReactNode } from "react";
 import { BookingActions } from "@/features/booking/components/BookingActions";
 import { BookingEmptyState } from "@/features/booking/components/BookingEmptyState";
 import { BookingStepHeader } from "@/features/booking/components/BookingStepHeader";
-import { PriceBreakdown } from "@/features/booking/components/PriceBreakdown";
 import { useBooking } from "@/features/booking/context/BookingContext";
-import { generateDemoBookingReference } from "@/features/booking/data/bookingDemoData";
-import { formatDateLabel, nightsBetween } from "@/features/booking/lib/dates";
-import { calculatePriceBreakdown, formatCurrency } from "@/features/booking/lib/pricing";
-import { demoStayPolicies, type Room } from "@/features/rooms/data/roomsData";
+import { formatDateLabel } from "@/features/booking/lib/dates";
+import { formatRoomRate } from "@/features/rooms/lib/money";
+import { demoStayPolicies, roomPresentationBySlug } from "@/features/rooms/data/roomsData";
 
-type BookingSummaryProps = {
-  rooms: Room[];
-};
+// WFI-T06: reads the room type only through BookingContext's
+// `availabilitySnapshot` (WFI-T05) â€” never the legacy static `rooms` array
+// or its `priceFrom` field. `hasSelectedRoom` already requires a snapshot
+// that matches the current stay exactly (see BookingContext.tsx), so once
+// that guard passes, `state.availabilitySnapshot` is guaranteed present and
+// consistent; no separate "room not found" fallback is needed. The only
+// thing still read from `roomsData.ts` is the presentation-only image
+// lookup, by the same canonical slug â€” never a business fact.
 
 type ReviewSectionProps = {
   title: string;
@@ -25,7 +27,7 @@ type ReviewSectionProps = {
   children: ReactNode;
 };
 
-// One labelled block per topic — Stay, Room, Guest, Price, Policies — each
+// One labelled block per topic â€” Stay, Room, Guest, Price, Policies â€” each
 // with its own quiet "Edit" link, so nothing on the review screen is a
 // mystery and every correction is one click away.
 function ReviewSection({ title, editHref, editLabel, children }: ReviewSectionProps) {
@@ -53,11 +55,8 @@ function Fact({ label, children, wide }: { label: string; children: ReactNode; w
   );
 }
 
-export function BookingSummary({ rooms }: BookingSummaryProps) {
-  const router = useRouter();
-  const { state, hydrated, hasValidStay, hasSelectedRoom, hasGuestDetails, setTermsAccepted, confirmBooking } =
-    useBooking();
-  const [submitError, setSubmitError] = useState(false);
+export function BookingSummary() {
+  const { state, hydrated, hasValidStay, hasSelectedRoom, hasGuestDetails, setTermsAccepted } = useBooking();
 
   if (!hydrated) return null;
 
@@ -85,42 +84,14 @@ export function BookingSummary({ rooms }: BookingSummaryProps) {
     );
   }
 
-  const room = rooms.find((item) => item.slug === state.selectedRoomSlug);
-  if (!room) {
-    return (
-      <BookingEmptyState
-        title="That room isn't available"
-        message="Please choose a room again to continue."
-        actionLabel="Choose a room"
-        actionHref="/booking/rooms"
-      />
-    );
-  }
-
-  const nights = nightsBetween(state.checkIn, state.checkOut);
-  const totalGuests = state.adults + state.children;
-  const breakdown = calculatePriceBreakdown({
-    nightlyRate: room.priceFrom ?? 0,
-    nights,
-  });
-
-  const handleConfirm = () => {
-    if (!state.termsAccepted) {
-      setSubmitError(true);
-      return;
-    }
-    setSubmitError(false);
-    // DEMO BOOKING DATA — FRONTEND-ONLY PLACEHOLDER. Replace with the backend's
-    // created-reservation response before production. This never calls a real
-    // reservations or payment system and does not check availability.
-    confirmBooking({ reference: generateDemoBookingReference(), confirmedAt: new Date().toISOString() });
-    router.push("/booking/confirmation");
-  };
+  // Guaranteed present and consistent with the current stay by hasSelectedRoom above.
+  const snapshot = state.availabilitySnapshot!;
+  const presentation = roomPresentationBySlug[snapshot.roomTypeSlug];
 
   return (
     <div className="mx-auto max-w-[720px] px-[var(--page-x)] py-[clamp(2rem,5vw,3.5rem)]">
       <BookingStepHeader step="Step 4 of 4" title="Review your reservation">
-        Check the details below. Nothing is confirmed until you choose &ldquo;Confirm reservation&rdquo;.
+        Check the details below. Nothing is booked yet.
       </BookingStepHeader>
 
       <div className="mt-8 grid gap-7">
@@ -129,29 +100,39 @@ export function BookingSummary({ rooms }: BookingSummaryProps) {
             <Fact label="Check-in">{formatDateLabel(state.checkIn)}</Fact>
             <Fact label="Check-out">{formatDateLabel(state.checkOut)}</Fact>
             <Fact label="Length and guests">
-              {nights} night{nights === 1 ? "" : "s"}, {totalGuests} guest{totalGuests === 1 ? "" : "s"}
+              {snapshot.nights} night{snapshot.nights === 1 ? "" : "s"} &middot; {state.adults} adult
+              {state.adults === 1 ? "" : "s"}
+              {" "}
+              &middot; {state.children} {state.children === 1 ? "child" : "children"}
             </Fact>
           </dl>
         </ReviewSection>
 
         <ReviewSection title="Room" editHref="/booking/rooms" editLabel="Edit room">
           <div className="grid grid-cols-[110px_1fr] gap-4 sm:grid-cols-[150px_1fr] sm:gap-5">
-            <div className="image-frame relative aspect-[4/3]">
-              <Image
-                src={room.image}
-                alt={room.imageAlt}
-                fill
-                sizes="150px"
-                className="object-cover"
-                style={{ objectPosition: room.position }}
-              />
-            </div>
+            {presentation ? (
+              <div className="image-frame relative aspect-[4/3]">
+                <Image
+                  src={presentation.image}
+                  alt={presentation.imageAlt}
+                  fill
+                  sizes="150px"
+                  className="object-cover"
+                  style={{ objectPosition: presentation.position }}
+                />
+              </div>
+            ) : null}
             <div>
-              <p className="display text-[1.25rem] leading-[1.15]">{room.name}</p>
-              {room.priceFrom ? (
-                <p className="mt-1.5 text-[1rem] text-ink/80">{formatCurrency(room.priceFrom)} per night</p>
-              ) : null}
-              <Link href={`/rooms/${room.slug}`} className="btn-link" target="_blank" rel="noopener noreferrer">
+              <p className="display text-[1.25rem] leading-[1.15]">{snapshot.roomName}</p>
+              <p className="mt-1.5 text-[1rem] text-ink/80">
+                {formatRoomRate(snapshot.nightlyRate, snapshot.currency)} per night
+              </p>
+              <Link
+                href={`/rooms/${snapshot.roomTypeSlug}`}
+                className="btn-link"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 View room details<span className="sr-only"> (opens in a new tab)</span>
               </Link>
             </div>
@@ -166,7 +147,6 @@ export function BookingSummary({ rooms }: BookingSummaryProps) {
             <Fact label="Country">{state.guest.country}</Fact>
             <Fact label="Email">{state.guest.email}</Fact>
             <Fact label="Phone">{state.guest.phone}</Fact>
-            {state.guest.arrivalTime ? <Fact label="Expected arrival">{state.guest.arrivalTime}</Fact> : null}
             {state.guest.specialRequests ? (
               <Fact label="Special requests" wide>
                 <span className="font-normal">{state.guest.specialRequests}</span>
@@ -176,7 +156,23 @@ export function BookingSummary({ rooms }: BookingSummaryProps) {
         </ReviewSection>
 
         <ReviewSection title="Price">
-          <PriceBreakdown breakdown={breakdown} />
+          <div className="flex items-baseline justify-between gap-4 py-2 text-[1rem] text-ink/80">
+            <span>
+              {formatRoomRate(snapshot.nightlyRate, snapshot.currency)} per night &times; {snapshot.nights} night
+              {snapshot.nights === 1 ? "" : "s"}
+            </span>
+            <span className="font-semibold text-ink">{formatRoomRate(snapshot.totalAmount, snapshot.currency)}</span>
+          </div>
+          <div className="mt-2 flex items-baseline justify-between gap-4 border-t border-ink/20 pt-3">
+            <span className="text-[1.0625rem] font-bold text-ink">Total for your stay</span>
+            <span className="display text-[1.75rem] leading-none text-ink">
+              {formatRoomRate(snapshot.totalAmount, snapshot.currency)}
+            </span>
+          </div>
+          <p className="fine-print mt-3">
+            This is the latest availability price shown to you. Final booking values are confirmed by the hotel when
+            your reservation is created.
+          </p>
         </ReviewSection>
 
         <ReviewSection title="Policies and terms">
@@ -192,38 +188,28 @@ export function BookingSummary({ rooms }: BookingSummaryProps) {
               <input
                 type="checkbox"
                 checked={state.termsAccepted}
-                onChange={(event) => {
-                  setTermsAccepted(event.target.checked);
-                  if (event.target.checked) setSubmitError(false);
-                }}
+                onChange={(event) => setTermsAccepted(event.target.checked)}
                 className="inner-focus mt-0.5 h-6 w-6 shrink-0 accent-[#7a5a2b]"
-                aria-describedby={submitError ? "terms-error" : undefined}
-                aria-invalid={submitError || undefined}
-                aria-required="true"
               />
               <span>I agree to the hotel&apos;s reservation terms and cancellation policy.</span>
             </label>
             <Link href="/policies" target="_blank" rel="noopener noreferrer" className="btn-link ml-9">
               Read the hotel policies<span className="sr-only"> (opens in a new tab)</span>
             </Link>
-            {submitError ? (
-              <p id="terms-error" role="alert" className="field-error ml-9">
-                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" className="mt-[3px] shrink-0">
-                  <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
-                  <path d="M8 4.5v4.2M8 10.9v.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                </svg>
-                <span>Tick the box to accept the reservation terms, then confirm.</span>
-              </p>
-            ) : null}
           </div>
         </ReviewSection>
       </div>
 
+      {/* WFI-T06: reservation submission is not implemented yet â€” the
+          previous fake local "confirm" (a random reference + navigation to
+          a fake confirmation screen) has been removed rather than replaced
+          with a real POST, which is later-ticket work. */}
       <BookingActions
         backHref="/booking/guest-details"
         backLabel="Back to guest details"
         continueLabel="Confirm reservation"
-        onContinue={handleConfirm}
+        disabled
+        disabledHint="Reservation submission isn't available yet."
       />
     </div>
   );

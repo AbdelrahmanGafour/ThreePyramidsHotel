@@ -7,7 +7,7 @@ import { BookingActions } from "@/features/booking/components/BookingActions";
 import { BookingEmptyState } from "@/features/booking/components/BookingEmptyState";
 import { BookingStepHeader } from "@/features/booking/components/BookingStepHeader";
 import { useBooking } from "@/features/booking/context/BookingContext";
-import { DEMO_ARRIVAL_WINDOWS, DEMO_COUNTRIES } from "@/features/booking/data/bookingDemoData";
+import { DEMO_COUNTRIES } from "@/features/booking/data/bookingDemoData";
 import { hasGuestDetailsErrors, validateGuestDetails, type GuestDetailsErrors } from "@/features/booking/lib/validation";
 import type { GuestDetails } from "@/features/booking/types";
 
@@ -137,24 +137,6 @@ function GuestDetailsFields({ initial }: { initial: GuestDetails }) {
         </FormGroup>
 
         <FormGroup title="Special requests" description="Optional. Tell us anything that would make your stay easier.">
-          <FormField label="Expected arrival time" id="arrival-time" hint="Helps us prepare for your arrival.">
-            {(control) => (
-              <select
-                {...control}
-                value={values.arrivalTime}
-                onChange={(event) => update("arrivalTime", event.target.value)}
-                className={fieldControlClass}
-              >
-                <option value="">No preference</option>
-                {DEMO_ARRIVAL_WINDOWS.map((window) => (
-                  <option key={window} value={window}>
-                    {window}
-                  </option>
-                ))}
-              </select>
-            )}
-          </FormField>
-
           <FormField label="Requests or notes" id="special-requests" hint="For example: a quiet floor, early check-in, or a celebration.">
             {(control) => (
               <textarea
