@@ -26,9 +26,25 @@ export const emptyGuestDetails: GuestDetails = {
   specialRequests: "",
 };
 
+/**
+ * WFI-T07: exactly the backend's 201 response from POST /api/v1/reservations
+ * (see features/booking/lib/reservations.ts's CreatedReservation) — nothing
+ * added, calculated, or fabricated by the frontend.
+ */
 export type BookingConfirmation = {
-  reference: string;
-  confirmedAt: string;
+  bookingReference: string;
+  status: "pending";
+  roomType: { slug: string; name: string };
+  checkIn: string;
+  checkOut: string;
+  nights: number;
+  adults: number;
+  children: number;
+  /** Backend's exact decimal string — never parsed to a number. */
+  nightlyRate: string;
+  /** Backend's exact decimal string — never parsed to a number. */
+  totalAmount: string;
+  currency: "EGP";
 };
 
 /**

@@ -12,11 +12,11 @@ type BookingConfirmationProps = {
   rooms: Room[];
 };
 
-// Frontend demo confirmation only — `state.confirmation` is set locally by
-// `BookingSummary` via `generateDemoBookingReference()`. No reservation or
-// payment has actually been created; a real integration replaces that call
-// with the backend's create-reservation response before this screen can be
-// trusted as a real confirmation.
+// WFI-T07: `state.confirmation` is now set only from the backend's real 201
+// response to POST /api/v1/reservations (see BookingSummary.tsx) — not
+// fabricated locally. This screen's own presentation (e.g. sourcing room
+// image/details via the legacy `rooms` prop below) is unchanged here; T08
+// owns any further confirmation-screen redesign.
 export function BookingConfirmation({ rooms }: BookingConfirmationProps) {
   const { state, hydrated, reset } = useBooking();
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -69,7 +69,8 @@ export function BookingConfirmation({ rooms }: BookingConfirmationProps) {
 
       <div className="mt-8 border border-ink/20 border-t-2 border-t-brass bg-[var(--panel-surface)] p-5 text-center">
         <p className="text-[0.9375rem] text-ink/75">Your reservation reference</p>
-        <p className="mt-1 text-[1.5rem] font-bold tracking-[0.08em] text-ink">{state.confirmation.reference}</p>
+        {/* WFI-T07 compatibility rename only (reference -> bookingReference, matching the real backend field); no other change. */}
+        <p className="mt-1 text-[1.5rem] font-bold tracking-[0.08em] text-ink">{state.confirmation.bookingReference}</p>
         <p className="fine-print mt-1">Keep this reference for your records.</p>
       </div>
 

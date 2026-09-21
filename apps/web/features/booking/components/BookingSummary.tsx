@@ -2,23 +2,32 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { BookingActions } from "@/features/booking/components/BookingActions";
 import { BookingEmptyState } from "@/features/booking/components/BookingEmptyState";
 import { BookingStepHeader } from "@/features/booking/components/BookingStepHeader";
 import { useBooking } from "@/features/booking/context/BookingContext";
 import { formatDateLabel } from "@/features/booking/lib/dates";
+import { submitReservation } from "@/features/booking/lib/reservations";
 import { formatRoomRate } from "@/features/rooms/lib/money";
 import { demoStayPolicies, roomPresentationBySlug } from "@/features/rooms/data/roomsData";
 
 // WFI-T06: reads the room type only through BookingContext's
-// `availabilitySnapshot` (WFI-T05) â€” never the legacy static `rooms` array
+// `availabilitySnapshot` (WFI-T05) — never the legacy static `rooms` array
 // or its `priceFrom` field. `hasSelectedRoom` already requires a snapshot
 // that matches the current stay exactly (see BookingContext.tsx), so once
 // that guard passes, `state.availabilitySnapshot` is guaranteed present and
 // consistent; no separate "room not found" fallback is needed. The only
 // thing still read from `roomsData.ts` is the presentation-only image
-// lookup, by the same canonical slug â€” never a business fact.
+// lookup, by the same canonical slug — never a business fact.
+//
+// WFI-T07: submits the real POST /api/v1/reservations (via
+// features/booking/lib/reservations.ts, the same-origin bridge). The
+// snapshot above is display-only and is never sent in the request body —
+// only roomTypeSlug/dates/adults/children/guest fields are, exactly the
+// approved contract. On success, only the backend's own response populates
+// BookingContext's `confirmation`; nothing is fabricated.
 
 type ReviewSectionProps = {
   title: string;
@@ -27,7 +36,7 @@ type ReviewSectionProps = {
   children: ReactNode;
 };
 
-// One labelled block per topic â€” Stay, Room, Guest, Price, Policies â€” each
+// One labelled block per topic — Stay, Room, Guest, Price, Policies — each
 // with its own quiet "Edit" link, so nothing on the review screen is a
 // mystery and every correction is one click away.
 function ReviewSection({ title, editHref, editLabel, children }: ReviewSectionProps) {
@@ -55,8 +64,22 @@ function Fact({ label, children, wide }: { label: string; children: ReactNode; w
   );
 }
 
+type SubmitError = {
+  code: "INVALID_RESERVATION" | "ROOM_TYPE_NOT_FOUND" | "NO_AVAILABILITY" | null;
+  message: string;
+};
+
 export function BookingSummary() {
-  const { state, hydrated, hasValidStay, hasSelectedRoom, hasGuestDetails, setTermsAccepted } = useBooking();
+  const router = useRouter();
+  const { state, hydrated, hasValidStay, hasSelectedRoom, hasGuestDetails, setTermsAccepted, confirmBooking } =
+    useBooking();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [termsError, setTermsError] = useState(false);
+  const [submitError, setSubmitError] = useState<SubmitError | null>(null);
+  // Synchronous guard against a true double-click race — React state alone
+  // updates on the next render, which is not early enough to stop a second
+  // click fired before that render commits.
+  const submittingRef = useRef(false);
 
   if (!hydrated) return null;
 
@@ -87,6 +110,72 @@ export function BookingSummary() {
   // Guaranteed present and consistent with the current stay by hasSelectedRoom above.
   const snapshot = state.availabilitySnapshot!;
   const presentation = roomPresentationBySlug[snapshot.roomTypeSlug];
+
+  const handleSubmit = async () => {
+    if (submittingRef.current) return;
+
+    if (!state.termsAccepted) {
+      setTermsError(true);
+      return;
+    }
+    setTermsError(false);
+    setSubmitError(null);
+
+    // Re-validate workflow state at submit time, not just at initial render.
+    if (!hasValidStay || !hasSelectedRoom || !hasGuestDetails || !state.checkIn || !state.checkOut) {
+      setSubmitError({ code: null, message: "Some details are missing. Please review your reservation and try again." });
+      return;
+    }
+
+    submittingRef.current = true;
+    setIsSubmitting(true);
+
+    const result = await submitReservation({
+      roomTypeSlug: snapshot.roomTypeSlug,
+      checkIn: state.checkIn,
+      checkOut: state.checkOut,
+      adults: state.adults,
+      children: state.children,
+      guestFirstName: state.guest.firstName,
+      guestLastName: state.guest.lastName,
+      guestEmail: state.guest.email,
+      guestPhone: state.guest.phone,
+      guestCountry: state.guest.country,
+      specialRequests: state.guest.specialRequests,
+    });
+
+    if (!result.ok) {
+      submittingRef.current = false;
+      setIsSubmitting(false);
+      const message =
+        result.code === "INVALID_RESERVATION"
+          ? result.message || "Some details aren't valid. Please review and try again."
+          : result.code === "ROOM_TYPE_NOT_FOUND"
+            ? "This room is no longer recognized. Please choose a room again."
+            : result.code === "NO_AVAILABILITY"
+              ? "This room just became unavailable for your dates. Please choose another room."
+              : "We couldn't submit your reservation. Please try again.";
+      setSubmitError({ code: result.code, message });
+      return;
+    }
+
+    // Only the backend's own response populates confirmation state.
+    confirmBooking({
+      bookingReference: result.data.bookingReference,
+      status: result.data.status,
+      roomType: result.data.roomType,
+      checkIn: result.data.checkIn,
+      checkOut: result.data.checkOut,
+      nights: result.data.nights,
+      adults: result.data.adults,
+      children: result.data.children,
+      nightlyRate: result.data.nightlyRate,
+      totalAmount: result.data.totalAmount,
+      currency: result.data.currency,
+    });
+    router.push("/booking/confirmation");
+    // submittingRef/isSubmitting intentionally left true — this component is unmounting.
+  };
 
   return (
     <div className="mx-auto max-w-[720px] px-[var(--page-x)] py-[clamp(2rem,5vw,3.5rem)]">
@@ -188,28 +277,51 @@ export function BookingSummary() {
               <input
                 type="checkbox"
                 checked={state.termsAccepted}
-                onChange={(event) => setTermsAccepted(event.target.checked)}
+                onChange={(event) => {
+                  setTermsAccepted(event.target.checked);
+                  if (event.target.checked) setTermsError(false);
+                }}
                 className="inner-focus mt-0.5 h-6 w-6 shrink-0 accent-[#7a5a2b]"
+                aria-describedby={termsError ? "terms-error" : undefined}
+                aria-invalid={termsError || undefined}
+                aria-required="true"
               />
               <span>I agree to the hotel&apos;s reservation terms and cancellation policy.</span>
             </label>
             <Link href="/policies" target="_blank" rel="noopener noreferrer" className="btn-link ml-9">
               Read the hotel policies<span className="sr-only"> (opens in a new tab)</span>
             </Link>
+            {termsError ? (
+              <p id="terms-error" role="alert" className="field-error ml-9">
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" fill="none" className="mt-[3px] shrink-0">
+                  <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M8 4.5v4.2M8 10.9v.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+                <span>Tick the box to accept the reservation terms, then confirm.</span>
+              </p>
+            ) : null}
           </div>
         </ReviewSection>
+
+        {submitError ? (
+          <div role="alert" className="field-error border border-[var(--danger)]/40 bg-[var(--danger)]/[0.06] px-3.5 py-3">
+            <span>{submitError.message}</span>
+            {submitError.code === "ROOM_TYPE_NOT_FOUND" || submitError.code === "NO_AVAILABILITY" ? (
+              <Link href="/booking/rooms" className="btn-link mt-2 block">
+                Choose a room again
+              </Link>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
-      {/* WFI-T06: reservation submission is not implemented yet â€” the
-          previous fake local "confirm" (a random reference + navigation to
-          a fake confirmation screen) has been removed rather than replaced
-          with a real POST, which is later-ticket work. */}
       <BookingActions
         backHref="/booking/guest-details"
         backLabel="Back to guest details"
-        continueLabel="Confirm reservation"
-        disabled
-        disabledHint="Reservation submission isn't available yet."
+        continueLabel={isSubmitting ? "Submitting…" : "Confirm reservation"}
+        disabled={isSubmitting}
+        disabledHint={isSubmitting ? "Submitting your reservation…" : undefined}
+        onContinue={handleSubmit}
       />
     </div>
   );
