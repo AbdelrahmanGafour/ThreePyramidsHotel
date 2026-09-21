@@ -27,6 +27,16 @@ export const adminReservationStatus: Record<AdminReservationStatus, StatusMeta> 
   cancelled: { label: "Cancelled", tone: "danger", shape: "square" },
 };
 
+/**
+ * A room type is either offered or it is not. Archived types stay visible to
+ * an administrator but are hidden from the public site, availability and new
+ * bookings.
+ */
+export const roomTypeStatus = {
+  active: { label: "Active", tone: "moss", shape: "filled" },
+  archived: { label: "Archived", tone: "muted", shape: "ring" },
+} satisfies Record<string, StatusMeta>;
+
 export const roomStatus: Record<RoomAvailability, StatusMeta> = {
   available: { label: "Available", tone: "moss", shape: "ring" },
   occupied: { label: "Occupied", tone: "lapis", shape: "filled" },
