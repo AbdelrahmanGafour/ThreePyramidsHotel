@@ -72,7 +72,12 @@ function bookingReducer(state: BookingState, action: BookingAction): BookingStat
     case "SET_TERMS_ACCEPTED":
       return { ...state, termsAccepted: action.accepted };
     case "CONFIRM_BOOKING":
-      return { ...state, confirmation: action.confirmation };
+      // WFI-T08: a successful backend confirmation is the point at which
+      // transient guest PII (and the terms checkbox) is no longer needed —
+      // cleared in the same transition so it never lingers in
+      // sessionStorage past a successful submission. The confirmation
+      // object itself carries no PII and is left untouched.
+      return { ...state, confirmation: action.confirmation, guest: emptyGuestDetails, termsAccepted: false };
     case "RESET":
       return initialState;
     case "HYDRATE":
@@ -138,6 +143,65 @@ function sanitizeGuest(guest: unknown): GuestDetails {
   };
 }
 
+const DECIMAL_STRING_PATTERN = /^-?\d+(?:\.\d{1,2})?$/;
+
+function isFiniteInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value);
+}
+
+/**
+ * WFI-T08: a session saved before T07 (or otherwise corrupted) may still
+ * carry a legacy/fake confirmation shape under this same storage key.
+ * Restores `confirmation` only if it structurally matches the real backend
+ * 201 response exactly (see lib/reservations.ts's isCreatedReservation,
+ * which this mirrors) — otherwise treats it as no confirmation at all,
+ * never fabricating or migrating an old fake reference. Invalid confirmation
+ * does not wipe the rest of the restored booking state.
+ */
+function sanitizeConfirmation(confirmation: unknown): BookingConfirmation | null {
+  if (typeof confirmation !== "object" || confirmation === null) return null;
+  const c = confirmation as Record<string, unknown>;
+  const roomType = c.roomType as Record<string, unknown> | null | undefined;
+
+  const valid =
+    typeof c.bookingReference === "string" &&
+    c.bookingReference.length > 0 &&
+    c.status === "pending" &&
+    typeof roomType === "object" &&
+    roomType !== null &&
+    typeof roomType.slug === "string" &&
+    typeof roomType.name === "string" &&
+    typeof c.checkIn === "string" &&
+    typeof c.checkOut === "string" &&
+    isFiniteInt(c.nights) &&
+    (c.nights as number) > 0 &&
+    isFiniteInt(c.adults) &&
+    (c.adults as number) >= 1 &&
+    isFiniteInt(c.children) &&
+    (c.children as number) >= 0 &&
+    typeof c.nightlyRate === "string" &&
+    DECIMAL_STRING_PATTERN.test(c.nightlyRate) &&
+    typeof c.totalAmount === "string" &&
+    DECIMAL_STRING_PATTERN.test(c.totalAmount) &&
+    c.currency === "EGP";
+
+  if (!valid) return null;
+
+  return {
+    bookingReference: c.bookingReference as string,
+    status: "pending",
+    roomType: { slug: roomType.slug as string, name: roomType.name as string },
+    checkIn: c.checkIn as string,
+    checkOut: c.checkOut as string,
+    nights: c.nights as number,
+    adults: c.adults as number,
+    children: c.children as number,
+    nightlyRate: c.nightlyRate as string,
+    totalAmount: c.totalAmount as string,
+    currency: "EGP",
+  };
+}
+
 const BookingContext = createContext<BookingContextValue | null>(null);
 
 export function BookingProvider({ children }: { children: ReactNode }) {
@@ -152,7 +216,15 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       const raw = window.sessionStorage.getItem(STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
-        dispatch({ type: "HYDRATE", state: { ...initialState, ...parsed, guest: sanitizeGuest(parsed.guest) } });
+        dispatch({
+          type: "HYDRATE",
+          state: {
+            ...initialState,
+            ...parsed,
+            guest: sanitizeGuest(parsed.guest),
+            confirmation: sanitizeConfirmation(parsed.confirmation),
+          },
+        });
       }
     } catch {
       // Ignore unavailable/blocked storage — booking simply starts empty.
