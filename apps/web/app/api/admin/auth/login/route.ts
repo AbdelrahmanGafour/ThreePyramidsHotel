@@ -1,5 +1,7 @@
 import {
   adminAuthGatewayResponse,
+  crossOriginLoginResponse,
+  isSameOriginRequest,
   relayAdminAuthResponse,
 } from "@/features/admin/server/adminAuthProxy";
 import { requestAdminAuth } from "@/features/admin/server/adminAuthApi";
@@ -15,6 +17,15 @@ import { requestAdminAuth } from "@/features/admin/server/adminAuthApi";
 export const runtime = "nodejs";
 
 export async function POST(request: Request): Promise<Response> {
+  // First, before the body is even read. A cross-site page must not be able to
+  // post its own credentials here and leave the browser holding a session for
+  // an account the visitor never chose — SameSite=Lax stops a cookie being
+  // sent cross-site, but not one being set. Refused requests never reach
+  // Express, so nothing is attempted against the API on their behalf.
+  if (!isSameOriginRequest(request)) {
+    return crossOriginLoginResponse();
+  }
+
   // Deliberately text(), never json(): the body is carried across byte for
   // byte. Parsing here would turn a malformed body into this route's verdict,
   // when the API's INVALID_JSON answer is the one the browser should see.
