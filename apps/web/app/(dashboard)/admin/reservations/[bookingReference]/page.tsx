@@ -22,10 +22,59 @@ export const metadata: Metadata = { title: "Reservation" };
 
 type PageProps = {
   params: Promise<{ bookingReference: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default async function AdminReservationDetailPage({ params }: PageProps) {
+/**
+ * Feedback the status action left behind, as a fixed token.
+ *
+ * Allowlisted, and only ever used to choose one of the messages below: the
+ * value in the URL is never rendered, and the reservation's status always comes
+ * from the API, never from here. Anything unrecognised shows nothing.
+ */
+const STATUS_NOTICES = {
+  updated: {
+    tone: "done",
+    text: "The reservation status has been updated.",
+  },
+  conflict: {
+    tone: "warn",
+    text:
+      "This reservation changed before that action was applied, so nothing was altered. " +
+      "The status below has been refreshed.",
+  },
+  uncertain: {
+    tone: "warn",
+    text:
+      "The result of the status change could not be confirmed. Review the current reservation " +
+      "status below before trying again.",
+  },
+  invalid: {
+    tone: "warn",
+    text: "That action could not be applied. The status below has been refreshed.",
+  },
+} as const;
+
+function StatusNotice({ notice }: { notice: string | string[] | undefined }) {
+  const known =
+    typeof notice === "string" && Object.hasOwn(STATUS_NOTICES, notice)
+      ? STATUS_NOTICES[notice as keyof typeof STATUS_NOTICES]
+      : null;
+
+  if (!known) {
+    return null;
+  }
+
+  return (
+    <p className="adm-notice" data-tone={known.tone} role="status">
+      {known.text}
+    </p>
+  );
+}
+
+export default async function AdminReservationDetailPage({ params, searchParams }: PageProps) {
   const { bookingReference } = await params;
+  const { statusAction } = await searchParams;
 
   // The browser's own Cookie header, forwarded verbatim: this app never parses
   // it and never decides whether the session is valid.
@@ -70,6 +119,7 @@ export default async function AdminReservationDetailPage({ params }: PageProps) 
   return (
     <>
       <PageHeader reference={data.bookingReference} guestName={`${data.guest.firstName} ${data.guest.lastName}`} />
+      <StatusNotice notice={statusAction} />
       <AdminReservationDetailView reservation={data} />
     </>
   );

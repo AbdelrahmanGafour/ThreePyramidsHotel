@@ -8,6 +8,16 @@
 export type AdminReservationStatus = 'pending' | 'confirmed' | 'cancelled';
 
 /**
+ * What an administrator may ask a reservation to become.
+ *
+ * Deliberately narrower than `AdminReservationStatus`: `pending` is where a
+ * booking starts, never somewhere it can be sent. A reservation that has been
+ * confirmed or cancelled cannot be returned to pending, so the request type
+ * makes that unaskable rather than leaving it to be refused later.
+ */
+export type AdminReservationStatusTarget = 'confirmed' | 'cancelled';
+
+/**
  * One row of the admin reservations list — deliberately narrow.
  *
  * The database id, the allocated physical room, the nightly rate, the party
@@ -191,5 +201,51 @@ export const RESERVATION_NOT_FOUND_RESPONSE = Object.freeze({
   error: Object.freeze({
     code: RESERVATION_NOT_FOUND_ERROR_CODE,
     message: RESERVATION_NOT_FOUND_ERROR_MESSAGE,
+  }),
+});
+
+export const INVALID_RESERVATION_STATUS_ERROR_CODE = 'INVALID_RESERVATION_STATUS';
+export const INVALID_RESERVATION_STATUS_ERROR_MESSAGE = 'Invalid reservation status';
+
+/**
+ * The request body does not name a status a reservation can be moved to.
+ *
+ * Fixed message, like the other validation errors here, so a controller mapping
+ * `code`/`message` onto a 400 always produces the locked body. It never reports
+ * which statuses are accepted: a caller of this endpoint has the contract, and
+ * an error body is not the place to enumerate the domain.
+ */
+export class InvalidReservationStatusError extends Error {
+  readonly code = INVALID_RESERVATION_STATUS_ERROR_CODE;
+
+  constructor() {
+    super(INVALID_RESERVATION_STATUS_ERROR_MESSAGE);
+    this.name = 'InvalidReservationStatusError';
+  }
+}
+
+export function isInvalidReservationStatusError(error: unknown): error is InvalidReservationStatusError {
+  return error instanceof InvalidReservationStatusError;
+}
+
+export const INVALID_STATUS_TRANSITION_ERROR_CODE = 'INVALID_STATUS_TRANSITION';
+export const INVALID_STATUS_TRANSITION_ERROR_MESSAGE = 'Reservation status transition is not allowed';
+
+/**
+ * The one 409 body this module sends, built once from the constants above and
+ * frozen, so a handler can only send the locked contract rather than a
+ * hand-assembled near-copy.
+ *
+ * There is no error class beside it, unlike the two 400s: a refused transition
+ * is an ordinary answer the service returns as an outcome, not something it
+ * throws, so the controller maps a value and sends this body. The body carries
+ * neither the current status, the requested one nor the booking reference — an
+ * administrator making this request already knows all three, and an error body
+ * is a poor place to restate the state of a booking.
+ */
+export const INVALID_STATUS_TRANSITION_RESPONSE = Object.freeze({
+  error: Object.freeze({
+    code: INVALID_STATUS_TRANSITION_ERROR_CODE,
+    message: INVALID_STATUS_TRANSITION_ERROR_MESSAGE,
   }),
 });

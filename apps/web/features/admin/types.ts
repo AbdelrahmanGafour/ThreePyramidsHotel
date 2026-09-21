@@ -42,6 +42,27 @@ export type AdminAccount = {
 export type AdminReservationStatus = "pending" | "confirmed" | "cancelled";
 
 /**
+ * What an administrator may ask a reservation to become.
+ *
+ * Derived from the status union rather than restated, so the two cannot drift:
+ * `pending` is where a booking starts, never somewhere it can be sent, and a
+ * reservation that has been confirmed or cancelled never returns to it.
+ */
+export type AdminReservationStatusTarget = Exclude<AdminReservationStatus, "pending">;
+
+/**
+ * What the API reports after a status change: what changed, and what identifies
+ * it. No ids, no guest, no room, no pricing, and no echo of the previous status
+ * — a caller that asked for a change already knows what it asked from.
+ */
+export type AdminReservationStatusChange = {
+  bookingReference: string;
+  status: AdminReservationStatusTarget;
+  /** ISO 8601 instant, as the API reported it. */
+  updatedAt: string;
+};
+
+/**
  * One row of the admin reservations list, exactly as the API returns it.
  *
  * Declared here rather than beside the server-only client so a table component
