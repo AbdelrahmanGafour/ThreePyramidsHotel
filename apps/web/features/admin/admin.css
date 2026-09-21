@@ -347,6 +347,55 @@ a.adm-nav-item:hover {
   font-size: 0.8125rem;
 }
 
+/* ---- Sign out ---------------------------------------------------------- */
+/* Sits in the top bar at every width, so it keeps the secondary-button
+   treatment of `.adm-menu-btn` rather than inventing a new one. */
+.adm-signout {
+  position: relative;
+  flex: none;
+}
+
+.adm-signout-btn {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  padding: 0 0.9rem;
+  border: 1px solid rgba(30, 24, 21, 0.5);
+  background: transparent;
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.adm-signout-btn:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+.adm-signout-btn:disabled {
+  cursor: progress;
+  border-color: rgba(30, 24, 21, 0.2);
+  color: rgba(30, 24, 21, 0.55);
+}
+
+/* Anchored to the button and grown leftwards, so it never pushes the bar's
+   layout around or runs off a narrow screen. */
+.adm-signout-error {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 50;
+  width: max-content;
+  max-width: min(19rem, calc(100vw - 2rem));
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--danger);
+  background: var(--adm-panel);
+  color: var(--danger);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
 /* ---- Workspace --------------------------------------------------------- */
 .adm-main {
   max-width: 82rem;
@@ -526,6 +575,218 @@ a.adm-nav-item:hover {
   gap: 0.75rem;
 }
 
+/* ---- Reservation detail ------------------------------------------------ */
+.adm-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+.adm-detail-back {
+  margin-bottom: 0.15rem;
+}
+
+/* Hairline-separated pairs, the same treatment the metrics strip uses. */
+.adm-facts {
+  display: grid;
+  gap: 1px;
+  border-top: 1px solid var(--adm-rule);
+  background: var(--adm-rule-soft);
+}
+
+.adm-facts > div {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.8rem 1.25rem;
+  background: var(--adm-panel);
+}
+
+.adm-facts dt {
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+}
+
+.adm-facts dd {
+  margin: 0;
+  font-weight: 600;
+  /* Long references and emails must wrap rather than widen the panel. */
+  overflow-wrap: anywhere;
+}
+
+/* ---- Reservation actions ----------------------------------------------- */
+.adm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.9rem 1.25rem 1.1rem;
+  border-top: 1px solid var(--adm-rule);
+}
+
+.adm-action-btn {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0 1.1rem;
+  border: 1px solid;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Confirming is the ordinary administrative act: the brass affirmative. */
+.adm-action-btn[data-tone="confirm"] {
+  border-color: var(--aged-gold);
+  background: var(--brass);
+  color: var(--ink);
+}
+
+.adm-action-btn[data-tone="confirm"]:hover:not(:disabled) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+/* Cancelling is irreversible, so it reads as a warning rather than a peer of
+   Confirm: outlined in danger, filled only on deliberate hover. */
+.adm-action-btn[data-tone="cancel"] {
+  border-color: var(--danger);
+  background: transparent;
+  color: var(--danger);
+}
+
+.adm-action-btn[data-tone="cancel"]:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--ivory);
+}
+
+.adm-action-btn:disabled {
+  cursor: progress;
+  border-color: rgba(30, 24, 21, 0.2);
+  background: rgba(30, 24, 21, 0.06);
+  color: rgba(30, 24, 21, 0.55);
+}
+
+/* Feedback from the last action, above the reservation it refers to. */
+.adm-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 1.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.adm-notice[data-tone="done"] {
+  border-color: var(--adm-moss);
+  background: rgba(74, 106, 60, 0.08);
+  color: var(--adm-moss);
+}
+
+.adm-notice[data-tone="warn"] {
+  border-color: var(--aged-gold);
+  background: rgba(176, 138, 81, 0.12);
+  color: var(--brass-ink);
+}
+
+.adm-detail-note {
+  padding: 0.9rem 1.25rem 1.1rem;
+  border-top: 1px solid var(--adm-rule);
+  line-height: 1.6;
+}
+
+.adm-detail-empty {
+  color: var(--adm-muted);
+}
+
+.adm-detail-link {
+  text-decoration: underline;
+  text-decoration-color: rgba(30, 24, 21, 0.35);
+  text-underline-offset: 0.25em;
+}
+
+a.adm-detail-link:hover {
+  color: var(--brass-ink);
+  text-decoration-color: var(--brass-ink);
+}
+
+/* The booking reference in the list is the way into a reservation. */
+.adm-ref-link {
+  text-decoration: underline;
+  text-decoration-color: rgba(30, 24, 21, 0.35);
+  text-underline-offset: 0.25em;
+}
+
+a.adm-ref-link:hover {
+  color: var(--brass-ink);
+  text-decoration-color: var(--brass-ink);
+}
+
+@media (min-width: 900px) {
+  .adm-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  .adm-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}
+
+/* ---- Pager ------------------------------------------------------------- */
+.adm-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--adm-rule);
+}
+
+.adm-pager-count {
+  color: var(--adm-muted);
+  font-size: 0.875rem;
+}
+
+.adm-pager-links {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.adm-pager-link {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  padding: 0 0.9rem;
+  border: 1px solid rgba(30, 24, 21, 0.5);
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+a.adm-pager-link:hover {
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+/* No page to go to — a non-link, dimmed but still readable. */
+.adm-pager-link[data-state="unavailable"] {
+  border-color: rgba(30, 24, 21, 0.18);
+  color: rgba(30, 24, 21, 0.5);
+}
+
+/* Money lines up on the decimal for scanning down a column. */
+.adm-table .adm-cell-money {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ---- Status ------------------------------------------------------------ */
 .adm-status {
   display: inline-flex;
@@ -633,6 +894,19 @@ a.adm-nav-item:hover {
 }
 
 /* ---- Breakpoints ------------------------------------------------------- */
+@media (max-width: 719px) {
+  /* Sign out shares the bar at every width, so on a phone the breadcrumb keeps
+     only the current section — the ancestor is decorative context, and leaving
+     it in squeezes the section name off the screen. */
+  .adm-crumbs li:not([aria-current="page"]) {
+    display: none;
+  }
+
+  .adm-crumbs li + li::before {
+    content: none;
+  }
+}
+
 @media (min-width: 720px) {
   .adm-table-wrap {
     display: block;

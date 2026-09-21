@@ -3,13 +3,22 @@
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { adminNavigation } from "../data/adminNavigation";
+import type { AdminAccount } from "../types";
 import { AdminSidebar } from "./AdminSidebar";
 import { AdminTopBar } from "./AdminTopBar";
 
 const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const DESKTOP = "(min-width: 1024px)";
 
-export function AdminShell({ children }: { children: React.ReactNode }) {
+// `administrator` arrives from the protected layout, which got it from the API.
+// The shell only displays it; it is never fetched or stored on the client.
+export function AdminShell({
+  administrator,
+  children,
+}: {
+  administrator: AdminAccount;
+  children: React.ReactNode;
+}) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -78,6 +87,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       <div className="adm-scrim" data-open={open} onClick={closeMenu} aria-hidden="true" />
       <div className="adm-frame">
         <AdminTopBar
+          administrator={administrator}
           sectionLabel={section.label}
           menuOpen={open}
           onMenuClick={() => setOpen(true)}

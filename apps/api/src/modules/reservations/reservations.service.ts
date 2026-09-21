@@ -1,5 +1,5 @@
-import { randomInt } from 'node:crypto';
 import { dbPool } from '../../db/pool';
+import { generateBookingReference } from './booking-reference';
 import {
   findActiveRoomTypeBySlug,
   findAndLockAvailableRoom,
@@ -226,27 +226,9 @@ function multiplyMoney(amount: string, factor: number): string {
   return fromMinorUnits(toMinorUnits(amount) * BigInt(factor));
 }
 
-// Unambiguous when read aloud or written down: no 0/O or 1/I.
-const BOOKING_REFERENCE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-const BOOKING_REFERENCE_LENGTH = 12;
 const MAX_BOOKING_REFERENCE_ATTEMPTS = 5;
 // PostgreSQL exclusion_violation.
 const EXCLUSION_VIOLATION_SQLSTATE = '23P01';
-
-/**
- * Server-owned booking reference. `crypto.randomInt` is a CSPRNG and is
- * unbiased across the alphabet — no timestamps, counters or guest data, so a
- * reference can't be guessed from a known booking.
- */
-function generateBookingReference(): string {
-  let token = '';
-
-  for (let index = 0; index < BOOKING_REFERENCE_LENGTH; index += 1) {
-    token += BOOKING_REFERENCE_ALPHABET[randomInt(BOOKING_REFERENCE_ALPHABET.length)];
-  }
-
-  return `TPH-${token}`;
-}
 
 function isExclusionViolation(error: unknown): boolean {
   return (
