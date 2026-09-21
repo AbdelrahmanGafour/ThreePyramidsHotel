@@ -94,6 +94,16 @@ export type BookingState = {
   guest: GuestDetails;
   termsAccepted: boolean;
   confirmation: BookingConfirmation | null;
+  /**
+   * PR #17: set when a reservation submission from this session came back
+   * `uncertain` (the client could not prove whether PostgreSQL committed it).
+   * Persisted (not local component state) so the lock survives a
+   * BookingSummary remount/navigation/refresh within the same session — an
+   * uncertain reservation may already exist, and editing fields afterward
+   * does not prove that it doesn't. Cleared only by a full reset or a
+   * subsequent successful confirmation.
+   */
+  reservationSubmissionUncertain: boolean;
 };
 
 /** V1 presentation pricing is shown in USD only, matching the Rooms and Journeys demo data. */

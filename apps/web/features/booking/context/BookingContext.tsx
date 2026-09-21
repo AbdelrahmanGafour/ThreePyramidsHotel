@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useReducer, type ReactNode } from "react";
 import { isValidStayRange } from "@/features/booking/lib/dates";
+import { isCreatedReservation } from "@/features/booking/lib/reservationContract";
 import {
   emptyGuestDetails,
   type AvailabilitySnapshot,
@@ -26,6 +27,7 @@ const initialState: BookingState = {
   guest: emptyGuestDetails,
   termsAccepted: false,
   confirmation: null,
+  reservationSubmissionUncertain: false,
 };
 
 type BookingAction =
@@ -33,11 +35,17 @@ type BookingAction =
   | { type: "SELECT_ROOM"; slug: string; snapshot: AvailabilitySnapshot | null }
   | { type: "SET_GUEST"; guest: GuestDetails }
   | { type: "SET_TERMS_ACCEPTED"; accepted: boolean }
+  | { type: "MARK_RESERVATION_UNCERTAIN" }
   | { type: "CONFIRM_BOOKING"; confirmation: BookingConfirmation }
   | { type: "RESET" }
   | { type: "HYDRATE"; state: BookingState };
 
-function bookingReducer(state: BookingState, action: BookingAction): BookingState {
+/**
+ * Exported for the reducer test only — `BookingProvider` is the sole
+ * production caller, via `dispatch`. Kept pure (no storage, no React
+ * lifecycle) on purpose.
+ */
+export function bookingReducer(state: BookingState, action: BookingAction): BookingState {
   switch (action.type) {
     case "SET_STAY": {
       const unchanged =
@@ -71,13 +79,28 @@ function bookingReducer(state: BookingState, action: BookingAction): BookingStat
       return { ...state, guest: action.guest, confirmation: null };
     case "SET_TERMS_ACCEPTED":
       return { ...state, termsAccepted: action.accepted };
+    case "MARK_RESERVATION_UNCERTAIN":
+      // PR #17: an uncertain POST outcome may already have committed a
+      // reservation server-side. Deliberately touches ONLY this one field —
+      // guest, terms and confirmation are left exactly as they were, and
+      // nothing here counts as a new attempt the way SET_STAY/SELECT_ROOM/
+      // SET_GUEST do. Persisted (not component state), so it survives a
+      // BookingSummary remount/navigation/refresh in the same session.
+      return { ...state, reservationSubmissionUncertain: true };
     case "CONFIRM_BOOKING":
       // WFI-T08: a successful backend confirmation is the point at which
       // transient guest PII (and the terms checkbox) is no longer needed —
       // cleared in the same transition so it never lingers in
       // sessionStorage past a successful submission. The confirmation
-      // object itself carries no PII and is left untouched.
-      return { ...state, confirmation: action.confirmation, guest: emptyGuestDetails, termsAccepted: false };
+      // object itself carries no PII and is left untouched. A successful
+      // confirmation also resolves any prior uncertainty for this session.
+      return {
+        ...state,
+        confirmation: action.confirmation,
+        guest: emptyGuestDetails,
+        termsAccepted: false,
+        reservationSubmissionUncertain: false,
+      };
     case "RESET":
       return initialState;
     case "HYDRATE":
@@ -94,6 +117,8 @@ type BookingContextValue = {
   selectRoom: (slug: string, snapshot?: AvailabilitySnapshot | null) => void;
   setGuest: (guest: GuestDetails) => void;
   setTermsAccepted: (accepted: boolean) => void;
+  /** PR #17: persists the uncertain-outcome lock so it survives a BookingSummary remount/navigation/refresh. */
+  markReservationUncertain: () => void;
   confirmBooking: (confirmation: BookingConfirmation) => void;
   reset: () => void;
   hasValidStay: boolean;
@@ -143,62 +168,48 @@ function sanitizeGuest(guest: unknown): GuestDetails {
   };
 }
 
-const DECIMAL_STRING_PATTERN = /^-?\d+(?:\.\d{1,2})?$/;
-
-function isFiniteInt(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value);
-}
-
 /**
  * WFI-T08: a session saved before T07 (or otherwise corrupted) may still
  * carry a legacy/fake confirmation shape under this same storage key.
  * Restores `confirmation` only if it structurally matches the real backend
- * 201 response exactly (see lib/reservations.ts's isCreatedReservation,
- * which this mirrors) — otherwise treats it as no confirmation at all,
- * never fabricating or migrating an old fake reference. Invalid confirmation
- * does not wipe the rest of the restored booking state.
+ * 201 response exactly — the SAME check the POST response itself goes
+ * through (features/booking/lib/reservationContract.ts's
+ * isCreatedReservation), so the two validators can never drift apart —
+ * otherwise treats it as no confirmation at all, never fabricating or
+ * migrating an old fake reference. Invalid confirmation does not wipe the
+ * rest of the restored booking state.
  */
 function sanitizeConfirmation(confirmation: unknown): BookingConfirmation | null {
-  if (typeof confirmation !== "object" || confirmation === null) return null;
-  const c = confirmation as Record<string, unknown>;
-  const roomType = c.roomType as Record<string, unknown> | null | undefined;
+  return isCreatedReservation(confirmation) ? confirmation : null;
+}
 
-  const valid =
-    typeof c.bookingReference === "string" &&
-    c.bookingReference.length > 0 &&
-    c.status === "pending" &&
-    typeof roomType === "object" &&
-    roomType !== null &&
-    typeof roomType.slug === "string" &&
-    typeof roomType.name === "string" &&
-    typeof c.checkIn === "string" &&
-    typeof c.checkOut === "string" &&
-    isFiniteInt(c.nights) &&
-    (c.nights as number) > 0 &&
-    isFiniteInt(c.adults) &&
-    (c.adults as number) >= 1 &&
-    isFiniteInt(c.children) &&
-    (c.children as number) >= 0 &&
-    typeof c.nightlyRate === "string" &&
-    DECIMAL_STRING_PATTERN.test(c.nightlyRate) &&
-    typeof c.totalAmount === "string" &&
-    DECIMAL_STRING_PATTERN.test(c.totalAmount) &&
-    c.currency === "EGP";
+/**
+ * PR #17: only a literal `true` restores as locked. Anything else — missing
+ * (an old pre-this-fix session), `false`, or a malformed value like the
+ * string `"true"`, `1`, or `{}` — restores as `false`. A truthy-but-wrong
+ * value here must never be treated as a genuine, proven lock.
+ */
+function sanitizeUncertainFlag(value: unknown): boolean {
+  return value === true;
+}
 
-  if (!valid) return null;
+/**
+ * Builds the state HYDRATE restores from a raw parsed sessionStorage value.
+ * Pure (no storage, no dispatch) so it's unit-testable without React —
+ * exactly what the mount effect below feeds into `dispatch`. An invalid
+ * `confirmation` becomes `null` here without affecting any other restored
+ * field: `sanitizeConfirmation`/`sanitizeGuest`/`sanitizeUncertainFlag` only
+ * ever replace their own key in the spread.
+ */
+export function buildHydratedState(parsed: unknown): BookingState {
+  const raw = (parsed && typeof parsed === "object" ? parsed : {}) as Partial<BookingState>;
 
   return {
-    bookingReference: c.bookingReference as string,
-    status: "pending",
-    roomType: { slug: roomType.slug as string, name: roomType.name as string },
-    checkIn: c.checkIn as string,
-    checkOut: c.checkOut as string,
-    nights: c.nights as number,
-    adults: c.adults as number,
-    children: c.children as number,
-    nightlyRate: c.nightlyRate as string,
-    totalAmount: c.totalAmount as string,
-    currency: "EGP",
+    ...initialState,
+    ...raw,
+    guest: sanitizeGuest(raw.guest),
+    confirmation: sanitizeConfirmation(raw.confirmation),
+    reservationSubmissionUncertain: sanitizeUncertainFlag(raw.reservationSubmissionUncertain),
   };
 }
 
@@ -215,16 +226,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
     try {
       const raw = window.sessionStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw);
-        dispatch({
-          type: "HYDRATE",
-          state: {
-            ...initialState,
-            ...parsed,
-            guest: sanitizeGuest(parsed.guest),
-            confirmation: sanitizeConfirmation(parsed.confirmation),
-          },
-        });
+        dispatch({ type: "HYDRATE", state: buildHydratedState(JSON.parse(raw)) });
       }
     } catch {
       // Ignore unavailable/blocked storage — booking simply starts empty.
@@ -250,6 +252,7 @@ export function BookingProvider({ children }: { children: ReactNode }) {
       selectRoom: (slug, snapshot = null) => dispatch({ type: "SELECT_ROOM", slug, snapshot }),
       setGuest: (guest) => dispatch({ type: "SET_GUEST", guest }),
       setTermsAccepted: (accepted) => dispatch({ type: "SET_TERMS_ACCEPTED", accepted }),
+      markReservationUncertain: () => dispatch({ type: "MARK_RESERVATION_UNCERTAIN" }),
       confirmBooking: (confirmation) => dispatch({ type: "CONFIRM_BOOKING", confirmation }),
       reset: () => dispatch({ type: "RESET" }),
       // Same rule as the stay form: complete dates, none in the past, check-out after check-in.

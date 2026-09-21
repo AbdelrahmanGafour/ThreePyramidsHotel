@@ -9,7 +9,7 @@ import { BookingEmptyState } from "@/features/booking/components/BookingEmptySta
 import { BookingStepHeader } from "@/features/booking/components/BookingStepHeader";
 import { useBooking } from "@/features/booking/context/BookingContext";
 import { formatDateLabel } from "@/features/booking/lib/dates";
-import { submitReservation } from "@/features/booking/lib/reservations";
+import { submitReservation, UNCERTAIN_RESERVATION_MESSAGE } from "@/features/booking/lib/reservations";
 import { formatRoomRate } from "@/features/rooms/lib/money";
 import { demoStayPolicies, roomPresentationBySlug } from "@/features/rooms/data/roomsData";
 
@@ -28,6 +28,16 @@ import { demoStayPolicies, roomPresentationBySlug } from "@/features/rooms/data/
 // only roomTypeSlug/dates/adults/children/guest fields are, exactly the
 // approved contract. On success, only the backend's own response populates
 // BookingContext's `confirmation`; nothing is fabricated.
+//
+// PR #17: submitReservation resolves to one of three outcomes — success,
+// refused (a known backend domain rejection the guest can correct) or
+// uncertain (the client cannot prove whether the reservation was created).
+// An uncertain outcome must never be treated as failure: it permanently
+// blocks another submission from THIS booking session rather than risk a
+// duplicate reservation/room consumption. The lock is BookingContext's
+// persisted `reservationSubmissionUncertain` (not local component state),
+// so it survives a BookingSummary remount/navigation/refresh; `submittingRef`
+// is only a same-mount fast path on top of it.
 
 type ReviewSectionProps = {
   title: string;
@@ -71,14 +81,27 @@ type SubmitError = {
 
 export function BookingSummary() {
   const router = useRouter();
-  const { state, hydrated, hasValidStay, hasSelectedRoom, hasGuestDetails, setTermsAccepted, confirmBooking } =
-    useBooking();
+  const {
+    state,
+    hydrated,
+    hasValidStay,
+    hasSelectedRoom,
+    hasGuestDetails,
+    setTermsAccepted,
+    markReservationUncertain,
+    confirmBooking,
+  } = useBooking();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [termsError, setTermsError] = useState(false);
   const [submitError, setSubmitError] = useState<SubmitError | null>(null);
   // Synchronous guard against a true double-click race — React state alone
   // updates on the next render, which is not early enough to stop a second
-  // click fired before that render commits.
+  // click fired before that render commits. Also left permanently `true`
+  // after an uncertain outcome, blocking any further POST from THIS mounted
+  // instance. It does NOT survive a remount, though — `state.
+  // reservationSubmissionUncertain` (persisted via BookingContext) is the
+  // authoritative lock across a remount/navigation/refresh; this ref is only
+  // a same-mount fast path on top of it.
   const submittingRef = useRef(false);
 
   if (!hydrated) return null;
@@ -112,7 +135,11 @@ export function BookingSummary() {
   const presentation = roomPresentationBySlug[snapshot.roomTypeSlug];
 
   const handleSubmit = async () => {
-    if (submittingRef.current) return;
+    // `reservationSubmissionUncertain` is the authoritative lock — it's
+    // persisted, so it's still true even on a freshly mounted instance of
+    // this component after a remount/navigation/refresh, unlike
+    // `submittingRef`.
+    if (submittingRef.current || state.reservationSubmissionUncertain) return;
 
     if (!state.termsAccepted) {
       setTermsError(true);
@@ -144,7 +171,20 @@ export function BookingSummary() {
       specialRequests: state.guest.specialRequests,
     });
 
-    if (!result.ok) {
+    if (result.outcome === "uncertain") {
+      // Deliberately does NOT reset submittingRef, and does NOT clear guest,
+      // termsAccepted, or create a confirmation: the outcome is unproven, so
+      // this session must not offer another POST for this reservation.
+      // isSubmitting is released only so the button stops reading
+      // "Submitting…" — the persisted `reservationSubmissionUncertain` flag
+      // is what actually keeps it disabled, permanently, for this session
+      // (including across a remount/navigation/refresh).
+      setIsSubmitting(false);
+      markReservationUncertain();
+      return;
+    }
+
+    if (result.outcome === "refused") {
       submittingRef.current = false;
       setIsSubmitting(false);
       const message =
@@ -152,9 +192,7 @@ export function BookingSummary() {
           ? result.message || "Some details aren't valid. Please review and try again."
           : result.code === "ROOM_TYPE_NOT_FOUND"
             ? "This room is no longer recognized. Please choose a room again."
-            : result.code === "NO_AVAILABILITY"
-              ? "This room just became unavailable for your dates. Please choose another room."
-              : "We couldn't submit your reservation. Please try again.";
+            : "This room just became unavailable for your dates. Please choose another room.";
       setSubmitError({ code: result.code, message });
       return;
     }
@@ -303,7 +341,14 @@ export function BookingSummary() {
           </div>
         </ReviewSection>
 
-        {submitError ? (
+        {state.reservationSubmissionUncertain ? (
+          <div role="alert" className="field-error border border-[var(--danger)]/40 bg-[var(--danger)]/[0.06] px-3.5 py-3">
+            <span>{UNCERTAIN_RESERVATION_MESSAGE}</span>
+            <Link href="/contact" className="btn-link mt-2 block">
+              Contact the hotel
+            </Link>
+          </div>
+        ) : submitError ? (
           <div role="alert" className="field-error border border-[var(--danger)]/40 bg-[var(--danger)]/[0.06] px-3.5 py-3">
             <span>{submitError.message}</span>
             {submitError.code === "ROOM_TYPE_NOT_FOUND" || submitError.code === "NO_AVAILABILITY" ? (
@@ -319,8 +364,14 @@ export function BookingSummary() {
         backHref="/booking/guest-details"
         backLabel="Back to guest details"
         continueLabel={isSubmitting ? "Submitting…" : "Confirm reservation"}
-        disabled={isSubmitting}
-        disabledHint={isSubmitting ? "Submitting your reservation…" : undefined}
+        disabled={isSubmitting || state.reservationSubmissionUncertain}
+        disabledHint={
+          isSubmitting
+            ? "Submitting your reservation…"
+            : state.reservationSubmissionUncertain
+              ? "Contact the hotel to confirm your reservation status."
+              : undefined
+        }
         onContinue={handleSubmit}
       />
     </div>
