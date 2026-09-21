@@ -613,6 +613,85 @@ a.adm-nav-item:hover {
   overflow-wrap: anywhere;
 }
 
+/* ---- Reservation actions ----------------------------------------------- */
+.adm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.9rem 1.25rem 1.1rem;
+  border-top: 1px solid var(--adm-rule);
+}
+
+.adm-action-btn {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0 1.1rem;
+  border: 1px solid;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Confirming is the ordinary administrative act: the brass affirmative. */
+.adm-action-btn[data-tone="confirm"] {
+  border-color: var(--aged-gold);
+  background: var(--brass);
+  color: var(--ink);
+}
+
+.adm-action-btn[data-tone="confirm"]:hover:not(:disabled) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+/* Cancelling is irreversible, so it reads as a warning rather than a peer of
+   Confirm: outlined in danger, filled only on deliberate hover. */
+.adm-action-btn[data-tone="cancel"] {
+  border-color: var(--danger);
+  background: transparent;
+  color: var(--danger);
+}
+
+.adm-action-btn[data-tone="cancel"]:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--ivory);
+}
+
+.adm-action-btn:disabled {
+  cursor: progress;
+  border-color: rgba(30, 24, 21, 0.2);
+  background: rgba(30, 24, 21, 0.06);
+  color: rgba(30, 24, 21, 0.55);
+}
+
+/* Feedback from the last action, above the reservation it refers to. */
+.adm-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-bottom: 1.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.adm-notice[data-tone="done"] {
+  border-color: var(--adm-moss);
+  background: rgba(74, 106, 60, 0.08);
+  color: var(--adm-moss);
+}
+
+.adm-notice[data-tone="warn"] {
+  border-color: var(--aged-gold);
+  background: rgba(176, 138, 81, 0.12);
+  color: var(--brass-ink);
+}
+
 .adm-detail-note {
   padding: 0.9rem 1.25rem 1.1rem;
   border-top: 1px solid var(--adm-rule);

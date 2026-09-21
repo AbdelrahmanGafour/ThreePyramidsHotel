@@ -1,9 +1,11 @@
+import type { PoolClient } from 'pg';
 import { dbPool } from '../../db/pool';
 import type {
   AdminReservationDetail,
   AdminReservationListItem,
   AdminReservationListQuery,
   AdminReservationStatus,
+  AdminReservationStatusTarget,
 } from './admin-reservations.types';
 
 /**
@@ -351,4 +353,99 @@ export async function findAdminReservationByReference(
 
   // booking_reference is unique, so there is at most one row to find.
   return row ? toAdminReservationDetail(row) : null;
+}
+
+/**
+ * The narrow result of a status change. Only what changed and what identifies
+ * it: no ids, no guest, no room, no pricing, and no echo of the previous
+ * status — a caller that asked for a change already knows what it asked from.
+ */
+export type AdminReservationStatusChange = {
+  bookingReference: string;
+  status: AdminReservationStatus;
+  /** ISO 8601 instant. */
+  updatedAt: string;
+};
+
+type LockedReservationRow = {
+  status: string;
+};
+
+type StatusChangeRow = {
+  booking_reference: string;
+  status: string;
+  updated_at: Date;
+};
+
+/**
+ * Locks one reservation for the caller's transaction and reports its status.
+ *
+ * `FOR UPDATE` is the whole point: it holds the row until the transaction ends,
+ * so a second request asking for the same reservation waits here and then reads
+ * the status the first one left behind, rather than deciding against a value
+ * that is already stale. Reading without the lock and updating afterwards would
+ * let two administrators both see `pending` and both believe they won.
+ *
+ * Matched exactly, as everywhere else: the reference is generated uppercase and
+ * stored as given, so no LOWER, UPPER or ILIKE is involved.
+ *
+ * Takes the caller's client so it runs inside the caller's transaction — the
+ * lock means nothing outside one. It begins, commits and rolls back nothing.
+ */
+export async function lockReservationForStatusChange(
+  client: PoolClient,
+  bookingReference: string,
+): Promise<{ status: AdminReservationStatus } | null> {
+  const { rows } = await client.query<LockedReservationRow>(
+    `SELECT status
+       FROM reservations
+      WHERE booking_reference = $1
+        FOR UPDATE`,
+    [bookingReference],
+  );
+
+  const row = rows[0];
+
+  // booking_reference is unique, so there is at most one row to lock.
+  return row ? { status: toReservationStatus(requireText('status', row.status)) } : null;
+}
+
+/**
+ * Writes the new status onto the reservation the caller already locked.
+ *
+ * Only `status` and `updated_at` change. The allocated room, the stay dates and
+ * the snapshotted price are all left exactly as they were: cancelling a booking
+ * releases its room to the exclusion constraint by changing what the constraint
+ * looks at, never by moving the reservation somewhere else.
+ *
+ * `updated_at` is set here because the schema gives it a DEFAULT and no trigger
+ * — nothing else would move it.
+ */
+export async function updateReservationStatus(
+  client: PoolClient,
+  bookingReference: string,
+  status: AdminReservationStatusTarget,
+): Promise<AdminReservationStatusChange> {
+  const { rows } = await client.query<StatusChangeRow>(
+    `UPDATE reservations
+        SET status = $2,
+            updated_at = now()
+      WHERE booking_reference = $1
+      RETURNING booking_reference, status, updated_at`,
+    [bookingReference, status],
+  );
+
+  const row = rows[0];
+
+  if (!row) {
+    // Unreachable: the caller holds this row's lock inside this transaction.
+    // If it ever fires, something removed a locked reservation.
+    throw new Error('Reservation disappeared while its status was being changed');
+  }
+
+  return {
+    bookingReference: requireText('booking_reference', row.booking_reference),
+    status: toReservationStatus(requireText('status', row.status)),
+    updatedAt: requireInstant('updated_at', row.updated_at).toISOString(),
+  };
 }

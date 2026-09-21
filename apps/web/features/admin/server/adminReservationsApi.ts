@@ -8,6 +8,8 @@ import type {
   AdminReservationListPagination,
   AdminReservationListWindow,
   AdminReservationStatus,
+  AdminReservationStatusChange,
+  AdminReservationStatusTarget,
 } from "../types";
 
 // Server-only client for the hotel API's admin reservations list.
@@ -542,6 +544,232 @@ export async function fetchAdminReservation(
 
   if (!data) {
     return { state: "unavailable", reason: "The hotel API returned an unexpected reservation response." };
+  }
+
+  return { state: "ok", data };
+}
+
+// --- Changing one reservation's status --------------------------------------
+
+// The two further error bodies this endpoint is contracted to send, alongside
+// the malformed-reference and not-found ones above. A status that matches but a
+// body that does not is some other failure wearing the same number, so it is
+// reported as an outage rather than as an answer about this booking.
+const INVALID_RESERVATION_STATUS_ERROR = {
+  code: "INVALID_RESERVATION_STATUS",
+  message: "Invalid reservation status",
+} as const;
+
+const INVALID_STATUS_TRANSITION_ERROR = {
+  code: "INVALID_STATUS_TRANSITION",
+  message: "Reservation status transition is not allowed",
+} as const;
+
+/** The only statuses a request may ask for; `pending` is deliberately absent. */
+const STATUS_TARGETS: readonly AdminReservationStatusTarget[] = ["confirmed", "cancelled"];
+
+const UNEXPECTED_RESPONSE_REASON = "The hotel API returned an unexpected reservation response.";
+const UNREADABLE_RESPONSE_REASON = "The hotel API returned an unreadable response.";
+
+/**
+ * Six outcomes, kept apart on purpose.
+ *
+ * A reference that is not a reference, a status that is not a status, a booking
+ * nobody made, and a move this booking cannot make are four different facts,
+ * and none of them is an outage or a refused session. A page may well present
+ * some of them the same way, but that is the page's decision — this client
+ * reports what the API actually said.
+ */
+export type AdminReservationStatusUpdateResult =
+  | { state: "ok"; data: AdminReservationStatusChange }
+  | { state: "unauthenticated" }
+  | { state: "invalid-reference" }
+  | { state: "invalid-status" }
+  | { state: "not-found" }
+  | { state: "invalid-transition" }
+  | { state: "unavailable"; reason: string };
+
+/**
+ * Narrows to a status a reservation can be moved to. `pending` is refused even
+ * here: a successful mutation cannot have produced it.
+ */
+function toStatusTarget(value: unknown): AdminReservationStatusTarget | null {
+  // find(), not some(): it returns the matched literal, so the union is reached
+  // by narrowing rather than by an unchecked assertion.
+  return STATUS_TARGETS.find((candidate) => candidate === value) ?? null;
+}
+
+/**
+ * The canonical ISO instant the API produces: `YYYY-MM-DDTHH:mm:ss.sssZ`.
+ *
+ * The round trip is the contract. `Date` parses far more than the API ever
+ * sends — a bare day, a locale-shaped string, an offset like `+02:00` — and
+ * merely parsing proves only that JavaScript coped, not that the value came
+ * from the mapper this client is talking to. Re-serialising and demanding the
+ * exact same string admits only what `toISOString()` itself produces.
+ *
+ * The parsed date is used for the check and discarded: the caller keeps the
+ * original string, which by then is known to be identical anyway.
+ */
+function isInstant(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const parsed = new Date(value);
+
+  // Checked first: toISOString() throws on an invalid date rather than
+  // returning something comparable.
+  if (Number.isNaN(parsed.getTime())) {
+    return false;
+  }
+
+  return parsed.toISOString() === value;
+}
+
+/**
+ * Rebuilds the change from the payload, field by field.
+ *
+ * `requested` is checked against what came back, the same way the detail client
+ * checks the reservation it asked for: a response describing a different
+ * booking, or a different status than the one requested, cannot be interpreted.
+ * Whatever it is, it is not the answer to this request, and showing it as one
+ * would tell an administrator their change succeeded when something else
+ * entirely happened.
+ */
+function toStatusChange(
+  payload: unknown,
+  requested: { bookingReference: string; status: AdminReservationStatusTarget },
+): AdminReservationStatusChange | null {
+  if (!isRecord(payload) || !isRecord(payload.data)) {
+    return null;
+  }
+
+  const { bookingReference, status, updatedAt } = payload.data;
+
+  if (typeof bookingReference !== "string" || bookingReference !== requested.bookingReference) {
+    return null;
+  }
+
+  const changedTo = toStatusTarget(status);
+
+  if (!changedTo || changedTo !== requested.status) {
+    return null;
+  }
+
+  // The instant the API recorded, carried across as it sent it: never
+  // reformatted, never re-zoned, and never replaced with this server's clock.
+  if (!isInstant(updatedAt)) {
+    return null;
+  }
+
+  return { bookingReference, status: changedTo, updatedAt };
+}
+
+/**
+ * Asks the API to change one reservation's status, on behalf of the signed-in
+ * administrator.
+ *
+ * The reference is passed through untouched — never trimmed, never upper-cased.
+ * The API owns what a booking reference is, and what transitions a booking may
+ * make; this client states neither rule and only reports the answer.
+ *
+ * The body is built here from the one validated status, not forwarded from a
+ * caller's object, so nothing a caller happens to be holding can reach the API.
+ *
+ * The Cookie header is forwarded verbatim: this app never parses it, names the
+ * session cookie, or decides whether it is valid — Express and PostgreSQL do.
+ */
+export async function updateAdminReservationStatus(
+  bookingReference: string,
+  status: AdminReservationStatusTarget,
+  cookie?: string,
+): Promise<AdminReservationStatusUpdateResult> {
+  let baseUrl: string;
+
+  // Resolved outside the fetch below so a configuration fault cannot be caught
+  // by, and mistaken for, a network failure.
+  try {
+    baseUrl = resolveApiBaseUrl();
+  } catch (error) {
+    if (error instanceof ApiConfigurationError) {
+      return { state: "unavailable", reason: MISCONFIGURED_REASON };
+    }
+
+    throw error;
+  }
+
+  // Encoded as exactly one path segment: the reference is caller input, and a
+  // slash or a query character in it must not become part of the URL's
+  // structure. Both path constants around it are fixed.
+  const url = `${baseUrl}${ADMIN_RESERVATIONS_PATH}/${encodeURIComponent(bookingReference)}/status`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+
+  if (cookie) {
+    headers.Cookie = cookie;
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ status }),
+      // A mutation is never cacheable.
+      cache: "no-store",
+    });
+  } catch {
+    // The request may never have arrived — or may have arrived and committed
+    // before the connection failed. Reported as an outage, never as a refusal
+    // and never as success.
+    return { state: "unavailable", reason: UNREACHABLE_REASON };
+  }
+
+  // Identified by status alone, matching the existing auth boundary.
+  if (response.status === 401) {
+    return { state: "unauthenticated" };
+  }
+
+  // For these three the status alone is not enough: each has a contracted body,
+  // and anything else answering with the same number is not this contract.
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    const payload = await readJson(response);
+
+    if (response.status === 400) {
+      if (matchesApiError(payload, INVALID_BOOKING_REFERENCE_ERROR)) {
+        return { state: "invalid-reference" };
+      }
+      if (matchesApiError(payload, INVALID_RESERVATION_STATUS_ERROR)) {
+        return { state: "invalid-status" };
+      }
+    }
+
+    if (response.status === 404 && matchesApiError(payload, RESERVATION_NOT_FOUND_ERROR)) {
+      return { state: "not-found" };
+    }
+
+    if (response.status === 409 && matchesApiError(payload, INVALID_STATUS_TRANSITION_ERROR)) {
+      return { state: "invalid-transition" };
+    }
+
+    return { state: "unavailable", reason: `The hotel API returned ${response.status}.` };
+  }
+
+  if (!response.ok) {
+    return { state: "unavailable", reason: `The hotel API returned ${response.status}.` };
+  }
+
+  const payload = await readJson(response);
+
+  if (payload === undefined) {
+    return { state: "unavailable", reason: UNREADABLE_RESPONSE_REASON };
+  }
+
+  const data = toStatusChange(payload, { bookingReference, status });
+
+  if (!data) {
+    return { state: "unavailable", reason: UNEXPECTED_RESPONSE_REASON };
   }
 
   return { state: "ok", data };

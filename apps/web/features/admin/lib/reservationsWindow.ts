@@ -9,7 +9,7 @@
 
 export const RESERVATIONS_PAGE_SIZE = 25;
 
-const RESERVATIONS_PATH = "/admin/reservations";
+export const RESERVATIONS_PATH = "/admin/reservations";
 
 // Digits only: the whole value must be the number, so "25abc", "2.5", "-1" and
 // "" are rejected rather than coerced into something surprising.

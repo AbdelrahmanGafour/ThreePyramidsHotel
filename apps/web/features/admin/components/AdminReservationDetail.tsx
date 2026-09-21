@@ -1,6 +1,7 @@
 import { formatDateWithYear, formatEgp, formatInstant } from "../lib/format";
 import { adminReservationStatus } from "../lib/status";
 import type { AdminReservationDetail as Reservation } from "../types";
+import { AdminReservationActions } from "./AdminReservationActions";
 import { PanelHeader } from "./PanelHeader";
 import { StatusBadge } from "./StatusBadge";
 
@@ -40,6 +41,11 @@ export function AdminReservationDetailView({ reservation }: { reservation: Reser
 
   return (
     <div className="adm-detail-grid">
+      <AdminReservationActions
+        bookingReference={reservation.bookingReference}
+        status={reservation.status}
+      />
+
       <Section id="detail-booking" title="Booking">
         <Fact label="Booking reference">{reservation.bookingReference}</Fact>
         <Fact label="Status">
