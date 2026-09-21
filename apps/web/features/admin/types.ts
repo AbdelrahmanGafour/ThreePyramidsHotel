@@ -157,6 +157,75 @@ export type AdminReservationListWindow = {
   offset: number;
 };
 
+/**
+ * One row of the admin room-type list.
+ *
+ * `roomCount` is how many physical rooms belong to this type — inventory, not
+ * availability. It says nothing about what is bookable tonight, and a type
+ * showing zero can never be booked at all.
+ *
+ * Money and measurements are exact decimal strings, as the API returned them;
+ * neither is ever a number.
+ */
+export type AdminRoomTypeListItem = {
+  slug: string;
+  name: string;
+  capacity: number;
+  baseNightlyRate: string;
+  currency: "EGP";
+  isActive: boolean;
+  sortOrder: number;
+  roomCount: number;
+  /** ISO 8601 instant. */
+  updatedAt: string;
+};
+
+/**
+ * One room type in full. The database `id` is absent by design — it is an
+ * internal join key with no meaning outside the database.
+ */
+export type AdminRoomTypeDetail = {
+  slug: string;
+  name: string;
+  shortDescription: string | null;
+  description: string | null;
+  capacity: number;
+  bedType: string | null;
+  bedCount: number | null;
+  sizeSqm: string | null;
+  view: string | null;
+  baseNightlyRate: string;
+  currency: "EGP";
+  isActive: boolean;
+  sortOrder: number;
+  roomCount: number;
+  /** ISO 8601 instant. */
+  createdAt: string;
+  /** ISO 8601 instant. */
+  updatedAt: string;
+};
+
+/**
+ * What an administrator may change about a room type in V1: these nine fields
+ * and nothing else.
+ *
+ * `slug`, `capacity` and `isActive` are absent by decision — the slug is the
+ * public identifier, capacity governs availability and reservation limits, and
+ * archiving is consequential enough to deserve its own action. `id`,
+ * `currency`, `roomCount` and the timestamps are the server's own.
+ */
+export type AdminRoomTypeUpdate = {
+  name?: string;
+  shortDescription?: string | null;
+  description?: string | null;
+  bedType?: string | null;
+  bedCount?: number | null;
+  sizeSqm?: string | null;
+  view?: string | null;
+  baseNightlyRate?: string;
+  sortOrder?: number;
+};
+
 export type ReservationStatus = "confirmed" | "pending" | "cancelled" | "checked-in" | "checked-out";
 export type RoomAvailability = "available" | "occupied" | "blocked";
 export type InquiryStatus = "new" | "in-progress" | "replied";

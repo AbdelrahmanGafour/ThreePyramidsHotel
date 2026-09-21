@@ -613,6 +613,49 @@ a.adm-nav-item:hover {
   overflow-wrap: anywhere;
 }
 
+/* ---- Room type form ---------------------------------------------------- */
+/* A plain edit form inside a panel. It borrows the site-wide .field-* controls
+   rather than restyling inputs for the admin, so a text box is the same object
+   everywhere; only the spacing belongs to the panel. */
+.adm-form {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.1rem 1.25rem 0;
+  border-top: 1px solid var(--adm-rule);
+}
+
+.adm-field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+/* The field's own hint carries its top margin from .field-hint, which would
+   double up against the grid gap above. */
+.adm-field .field-hint {
+  margin-top: 0;
+}
+
+/* Short, related fields pair up once there is room; they stack below that
+   rather than shrinking into two unusable boxes. */
+.adm-field-row {
+  display: grid;
+  gap: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .adm-field-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* The form's footer is the shared action bar, whose padding already separates
+   it from the last field. */
+.adm-form .adm-actions {
+  margin-top: 0.15rem;
+  padding-left: 0;
+  padding-right: 0;
+}
+
 /* ---- Reservation actions ----------------------------------------------- */
 .adm-actions {
   display: flex;

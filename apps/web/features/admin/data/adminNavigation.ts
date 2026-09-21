@@ -19,10 +19,13 @@ export const adminNavigation: AdminNavItem[] = [
   },
   {
     key: "rooms",
-    label: "Rooms",
-    href: "/admin/rooms",
-    description: "Room types, availability and blocked dates.",
-    available: false,
+    // Repointed rather than duplicated: this is the entry the dashboard
+    // foundation reserved for room management. It now names what the page
+    // actually does — room types, not physical rooms or blocked dates.
+    label: "Room types",
+    href: "/admin/room-types",
+    description: "The rooms guests can book, and what each one costs.",
+    available: true,
   },
   {
     key: "journeys",

@@ -2,6 +2,7 @@ import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { adminAuthRouter } from './modules/admin-auth/admin-auth.routes';
 import { adminReservationsRouter } from './modules/admin-reservations/admin-reservations.routes';
+import { adminRoomTypesRouter } from './modules/admin-room-types/admin-room-types.routes';
 import { availabilityRouter } from './modules/availability/availability.routes';
 import { healthRouter } from './modules/health/health.routes';
 import { reservationsRouter } from './modules/reservations/reservations.routes';
@@ -37,6 +38,7 @@ export function createApp(): Express {
   app.use('/api/v1/admin/auth', adminAuthRouter);
   // Administration reads, guarded inside the router itself.
   app.use('/api/v1/admin/reservations', adminReservationsRouter);
+  app.use('/api/v1/admin/room-types', adminRoomTypesRouter);
 
   // Malformed JSON is a client mistake, so it gets a clear 400 instead of the
   // default HTML error page. Everything else continues to Express.
