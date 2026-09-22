@@ -9,7 +9,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test --conditions=react-server features/admin/lib/inventoryForms.test.ts features/admin/lib/inventoryOutcomes.test.ts features/admin/lib/noticeSurfaces.test.ts features/admin/lib/physicalRooms.test.ts features/admin/server/adminRoomTypesApi.test.ts features/admin/server/adminRoomsApi.test.ts"
+    "test": "tsx --test --conditions=react-server features/admin/lib/inventoryForms.test.ts features/admin/lib/inventoryOutcomes.test.ts features/admin/lib/noticeSurfaces.test.ts features/admin/lib/physicalRooms.test.ts features/admin/server/adminRoomTypesApi.test.ts features/admin/server/adminRoomsApi.test.ts features/packages/api/contracts.test.ts features/packages/api/reservationClient.test.ts features/packages/server/packageBridge.test.ts"
   },
   "dependencies": {
     "@tailwindcss/postcss": "4.3.3",
