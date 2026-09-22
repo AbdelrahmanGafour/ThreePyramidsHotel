@@ -9,6 +9,7 @@ import {
   isInvalidRoomTypeSlugError,
   isInvalidRoomTypeUpdateError,
 } from '../src/modules/admin-room-types/admin-room-types.types';
+import { PG_INT4_MAX } from '../src/modules/admin-room-types/admin-room-types.fields';
 import {
   parseAdminRoomTypeUpdate,
   parseRoomTypeSlugParam,
@@ -310,6 +311,16 @@ describe('parseAdminRoomTypeUpdate', () => {
       assertRejectedUpdate({ bedCount: Number.NaN }, 'NaN bedCount');
       assertRejectedUpdate({ bedCount: Number.POSITIVE_INFINITY }, 'infinite bedCount');
     });
+
+    it('accepts the integer column maximum and rejects one past it', () => {
+      // bed_count is an int4 column, so this is the real ceiling.
+      assert.equal(parseAdminRoomTypeUpdate({ bedCount: PG_INT4_MAX }).bedCount, PG_INT4_MAX);
+      assertRejectedUpdate({ bedCount: PG_INT4_MAX + 1 }, 'bedCount past int4');
+    });
+
+    it('still accepts an explicit null', () => {
+      assert.equal(parseAdminRoomTypeUpdate({ bedCount: null }).bedCount, null);
+    });
   });
 
   describe('sortOrder', () => {
@@ -325,6 +336,12 @@ describe('parseAdminRoomTypeUpdate', () => {
       assertRejectedUpdate({ sortOrder: 1.5 }, 'fractional sortOrder');
       assertRejectedUpdate({ sortOrder: '1' }, 'string sortOrder');
       assertRejectedUpdate({ sortOrder: Number.MAX_SAFE_INTEGER + 2 }, 'unsafe sortOrder');
+    });
+
+    it('accepts the integer column maximum and rejects one past it', () => {
+      // sort_order is an int4 column, so this is the real ceiling.
+      assert.equal(parseAdminRoomTypeUpdate({ sortOrder: PG_INT4_MAX }).sortOrder, PG_INT4_MAX);
+      assertRejectedUpdate({ sortOrder: PG_INT4_MAX + 1 }, 'sortOrder past int4');
     });
   });
 

@@ -3,6 +3,7 @@ import type { Express, NextFunction, Request, Response } from 'express';
 import { adminAuthRouter } from './modules/admin-auth/admin-auth.routes';
 import { adminReservationsRouter } from './modules/admin-reservations/admin-reservations.routes';
 import { adminRoomTypesRouter } from './modules/admin-room-types/admin-room-types.routes';
+import { adminRoomsRouter } from './modules/admin-rooms/admin-rooms.routes';
 import { availabilityRouter } from './modules/availability/availability.routes';
 import { healthRouter } from './modules/health/health.routes';
 import { reservationsRouter } from './modules/reservations/reservations.routes';
@@ -39,6 +40,9 @@ export function createApp(): Express {
   // Administration reads, guarded inside the router itself.
   app.use('/api/v1/admin/reservations', adminReservationsRouter);
   app.use('/api/v1/admin/room-types', adminRoomTypesRouter);
+  // Physical rooms, addressed by room number. A different namespace from the
+  // public /api/v1/rooms above, which serves room types to guests.
+  app.use('/api/v1/admin/rooms', adminRoomsRouter);
 
   // Malformed JSON is a client mistake, so it gets a clear 400 instead of the
   // default HTML error page. Everything else continues to Express.

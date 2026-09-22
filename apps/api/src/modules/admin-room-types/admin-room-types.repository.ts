@@ -1,5 +1,7 @@
+import type { PoolClient } from 'pg';
 import { dbPool } from '../../db/pool';
 import type {
+  AdminRoomTypeCreate,
   AdminRoomTypeDetail,
   AdminRoomTypeListItem,
   AdminRoomTypeUpdate,
@@ -325,6 +327,272 @@ export async function updateAdminRoomType(
      RETURNING ${DETAIL_COLUMNS},
                ${ROOM_COUNT_SQL} AS room_count`,
     values,
+  );
+
+  const row = rows[0];
+
+  return row ? toAdminRoomTypeDetail(row) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Creation, and the primitives a guarded capacity change is assembled from.
+// ---------------------------------------------------------------------------
+
+/**
+ * Digits only, at least one, no leading zero: the form a `bigserial` takes on
+ * its way out of the pg driver, which returns `int8` as a string rather than
+ * risk a value past `Number.MAX_SAFE_INTEGER`.
+ */
+const INTERNAL_ID_PATTERN = /^[1-9]\d*$/;
+
+/** Digits only, as `COUNT(*)::text` always produces. */
+const WHOLE_NUMBER_PATTERN = /^\d+$/;
+
+/**
+ * An internal primary key, kept as the string the driver produced.
+ *
+ * Never converted to a number: `bigint` outruns exact integer arithmetic in
+ * JavaScript, and a key that has been through a float is a key that may no
+ * longer identify the row it came from. It is carried back into the next query
+ * as a parameter, which is the only thing it is for.
+ */
+function requireInternalId(column: string, value: unknown): string {
+  if (typeof value !== 'string' || !INTERNAL_ID_PATTERN.test(value)) {
+    throw new Error(`Unexpected room type ${column} from the database: expected an internal identifier`);
+  }
+
+  return value;
+}
+
+/**
+ * Turns a counted bigint into a plain number.
+ *
+ * Counted as text rather than `::int` so a count past `int4` is refused here
+ * instead of raising a cast error inside PostgreSQL, and so the overflow check
+ * belongs to this module. Mirrors `parseTotalCount` in the reservations
+ * repository, which answers the same question about the same driver.
+ */
+export function parseReservationConflictCount(value: unknown): number {
+  if (typeof value !== 'string' || !WHOLE_NUMBER_PATTERN.test(value)) {
+    throw new Error(`Unexpected reservation count from the database: ${String(value)}`);
+  }
+
+  const count = Number(value);
+
+  if (!Number.isSafeInteger(count)) {
+    throw new Error(`Reservation count exceeds exact integer arithmetic: ${value}`);
+  }
+
+  return count;
+}
+
+/**
+ * One room type, locked for the caller's transaction.
+ *
+ * Repository-private. `roomTypeId` is an internal join key and must never
+ * reach an HTTP response — it exists so the statements that follow the lock
+ * can address the row they locked by primary key rather than by re-resolving
+ * the slug, which would be a second chance to resolve it differently.
+ */
+export type LockedAdminRoomType = {
+  roomTypeId: string;
+  slug: string;
+  capacity: number;
+  isActive: boolean;
+};
+
+type LockedAdminRoomTypeRow = {
+  id: string;
+  slug: string;
+  capacity: number;
+  is_active: boolean;
+};
+
+/**
+ * Maps a locked row, field by field. Exported for the same reason the other
+ * mappers are: it is the pure part of this module, and the only part a test
+ * can hold to account without a database.
+ */
+export function toLockedAdminRoomType(row: LockedAdminRoomTypeRow): LockedAdminRoomType {
+  return {
+    roomTypeId: requireInternalId('id', row.id),
+    slug: requireText('slug', row.slug),
+    // capacity > 0 is a CHECK constraint, so anything less is impossible data.
+    capacity: requireCount('capacity', row.capacity, 1),
+    isActive: requireBoolean('is_active', row.is_active),
+  };
+}
+
+/**
+ * Creates one room type, always as a draft.
+ *
+ * `is_active` is written as a literal `false`, never as a parameter: creation
+ * is the one operation where a caller could publish a room type with no
+ * physical rooms behind it, so the value is not something this statement can
+ * be told. `AdminRoomTypeCreate` carries no `isActive` field to supply either
+ * — the absence is enforced by the type and stated again by the SQL.
+ *
+ * No physical room is created. A new room type has none, which is precisely
+ * why it is not yet bookable, and `room_count` therefore comes back as 0 —
+ * asked for through the same subquery the other two detail statements use, so
+ * all three produce an identical shape by identical means.
+ *
+ * `created_at` and `updated_at` are left to their column defaults; nothing
+ * here decides what time it is.
+ *
+ * One statement. Uniqueness is `room_types_slug_key`'s to enforce; a SELECT
+ * beforehand would only widen the window in which the answer changes, so a
+ * unique violation propagates untouched for the service to classify.
+ */
+export async function insertAdminRoomType(create: AdminRoomTypeCreate): Promise<AdminRoomTypeDetail> {
+  const { rows } = await dbPool.query<AdminRoomTypeDetailRow>(
+    `INSERT INTO room_types AS rt (
+       slug, name, short_description, description, capacity,
+       bed_type, bed_count, size_sqm, view, base_nightly_rate,
+       is_active, sort_order
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false, $11)
+     RETURNING ${DETAIL_COLUMNS},
+               ${ROOM_COUNT_SQL} AS room_count`,
+    [
+      create.slug,
+      create.name,
+      create.shortDescription,
+      create.description,
+      create.capacity,
+      create.bedType,
+      create.bedCount,
+      create.sizeSqm,
+      create.view,
+      create.baseNightlyRate,
+      create.sortOrder,
+    ],
+  );
+
+  const row = rows[0];
+
+  // An INSERT that returned nothing without raising is not a case this
+  // statement has. Treated as a fault, never as a missing room type.
+  if (!row) {
+    throw new Error('Room type insert returned no row');
+  }
+
+  return toAdminRoomTypeDetail(row);
+}
+
+/**
+ * Locks one room type by slug for the caller's transaction.
+ *
+ * The first half of a guarded capacity change: hold the row, count what would
+ * conflict, then write — all against a capacity that cannot move underneath
+ * the decision. Reading without the lock and updating afterwards would let two
+ * administrators each count against a value the other was already replacing.
+ *
+ * Matched exactly and case-sensitively, as everywhere else. No LOWER, no
+ * ILIKE: the unique index does the work.
+ *
+ * Takes the caller's client so it runs inside the caller's transaction — the
+ * lock means nothing outside one. It begins, commits and rolls back nothing.
+ *
+ * This is the FIRST lock in the canonical admin inventory lock order:
+ *
+ *     room_types row, then rooms row
+ */
+export async function lockAdminRoomTypeBySlug(
+  client: PoolClient,
+  slug: string,
+): Promise<LockedAdminRoomType | null> {
+  const { rows } = await client.query<LockedAdminRoomTypeRow>(
+    `SELECT rt.id,
+            rt.slug,
+            rt.capacity,
+            rt.is_active
+       FROM room_types rt
+      WHERE rt.slug = $1
+        FOR UPDATE`,
+    [slug],
+  );
+
+  const row = rows[0];
+
+  // slug is unique, so there is at most one row to lock.
+  return row ? toLockedAdminRoomType(row) : null;
+}
+
+/**
+ * How many upcoming stays a proposed capacity would contradict.
+ *
+ * Counted, never listed: the answer to "may I lower this?" is a number, and a
+ * refusal is not a place to read guest data out of. No name, no reference and
+ * no date leaves this function.
+ *
+ * What counts, and why:
+ *
+ *   status IN ('pending','confirmed')  cancelled stays hold no inventory and
+ *                                      make no promise to anyone.
+ *   check_out > CURRENT_DATE           a stay already checked in but not yet
+ *                                      checked out is a promise still being
+ *                                      kept; a stay that has ended is history,
+ *                                      and lowering capacity cannot unmake it.
+ *   adults + children > proposed       the party the hotel already accepted no
+ *                                      longer fits what the catalogue claims.
+ *
+ * Reads `reservations` and writes nothing, deliberately: the fix for a
+ * conflict is a decision about real guests, never a quiet edit to the party
+ * size someone booked.
+ */
+export async function countReservationsAboveCapacity(
+  client: PoolClient,
+  roomTypeId: string,
+  proposedCapacity: number,
+): Promise<number> {
+  const { rows } = await client.query<{ conflicting: string }>(
+    `SELECT COUNT(*)::text AS conflicting
+       FROM reservations res
+      WHERE res.room_type_id = $1
+        AND res.status IN ('pending', 'confirmed')
+        AND res.check_out > CURRENT_DATE
+        -- ::bigint avoids int4 range inference on a large (but JS-safe) capacity.
+        AND res.adults + res.children > $2::bigint`,
+    [roomTypeId, proposedCapacity],
+  );
+
+  const row = rows[0];
+
+  if (!row) {
+    throw new Error('Reservation conflict count returned no row');
+  }
+
+  return parseReservationConflictCount(row.conflicting);
+}
+
+/**
+ * Writes the new capacity onto the room type the caller already locked.
+ *
+ * Addressed by the internal id from that lock rather than by slug: the row is
+ * already held, and re-resolving the slug would be a second lookup able to
+ * disagree with the first.
+ *
+ * `capacity` and `updated_at` are the only columns this statement touches. It
+ * does not write `reservations` — the guest counts on stays already booked are
+ * what those guests agreed to, and no capacity edit may rewrite them.
+ *
+ * Whether the change is *allowed* is not decided here. The service counts the
+ * conflicts under the same lock and refuses if it must.
+ */
+export async function updateAdminRoomTypeCapacity(
+  client: PoolClient,
+  roomTypeId: string,
+  capacity: number,
+): Promise<AdminRoomTypeDetail | null> {
+  const { rows } = await client.query<AdminRoomTypeDetailRow>(
+    `UPDATE room_types rt
+        SET capacity = $2,
+            updated_at = now()
+      WHERE rt.id = $1
+     RETURNING ${DETAIL_COLUMNS},
+               ${ROOM_COUNT_SQL} AS room_count`,
+    [roomTypeId, capacity],
   );
 
   const row = rows[0];

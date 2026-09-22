@@ -2,8 +2,17 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { AdminPhysicalRoomsPanel } from "@/features/admin/components/AdminPhysicalRoomsPanel";
+import { AdminRoomTypeCapacityPanel } from "@/features/admin/components/AdminRoomTypeCapacityPanel";
 import { AdminRoomTypeForm } from "@/features/admin/components/AdminRoomTypeForm";
-import { ROOM_TYPES_PATH, ROOM_TYPE_NOTICES, parseRoomTypeNotice } from "@/features/admin/lib/roomTypes";
+import { PHYSICAL_ROOM_NOTICES } from "@/features/admin/lib/physicalRooms";
+import {
+  ROOM_TYPES_PATH,
+  ROOM_TYPE_NOTICES,
+  parseNoticeToken,
+  parseRoomTypeNotice,
+} from "@/features/admin/lib/roomTypes";
+import { fetchAdminPhysicalRooms } from "@/features/admin/server/adminRoomsApi";
 import { fetchAdminRoomType } from "@/features/admin/server/adminRoomTypesApi";
 
 // One room type, with the fields an administrator may change.
@@ -29,18 +38,38 @@ type PageProps = {
 export default async function AdminRoomTypePage({ params, searchParams }: PageProps) {
   const { slug } = await params;
 
-  // A fixed token from a closed set, used only to pick one of three prepared
-  // messages. Nothing from the URL is ever rendered as text.
-  const notice = parseRoomTypeNotice(await searchParams);
+  // A fixed token from a closed set, used only to pick one prepared message.
+  // Nothing from the URL is ever rendered as text, so no submitted reference
+  // or room number can reach the page through a query parameter.
+  //
+  // Two allowlists, because this page shows two kinds of thing: what happened
+  // to the room type, and what happened to one of its rooms. They are checked
+  // in that order and a token can only be in one of them.
+  const query = await searchParams;
+  const roomTypeNotice = parseRoomTypeNotice(query);
+  const roomNotice = roomTypeNotice ? null : parseNoticeToken(query, PHYSICAL_ROOM_NOTICES);
+
+  const notice: { tone: string; message: string } | null = roomTypeNotice
+    ? ROOM_TYPE_NOTICES[roomTypeNotice]
+    : roomNotice
+      ? PHYSICAL_ROOM_NOTICES[roomNotice]
+      : null;
 
   // The browser's own Cookie header, forwarded verbatim: this app never parses
   // it and never decides whether the session is valid.
   const cookie = (await headers()).get("cookie") ?? undefined;
-  const result = await fetchAdminRoomType(slug, cookie);
+
+  // Two independent reads, in parallel: the room type and its inventory. They
+  // fail independently too — a failed inventory read must not take the rest of
+  // the page with it.
+  const [result, roomsResult] = await Promise.all([
+    fetchAdminRoomType(slug, cookie),
+    fetchAdminPhysicalRooms(slug, cookie),
+  ]);
 
   // The layout confirmed a session before this page ran, so a refusal here
   // means it ended in between. Deliberately outside any try/catch.
-  if (result.state === "unauthenticated") {
+  if (result.state === "unauthenticated" || roomsResult.state === "unauthenticated") {
     redirect("/admin/login");
   }
 
@@ -48,6 +77,12 @@ export default async function AdminRoomTypePage({ params, searchParams }: PagePr
   // apart in the client and reported here the same way: either there is no such
   // room type. Which of the two it was is not an administrator's to debug.
   if (result.state === "invalid-reference" || result.state === "not-found") {
+    notFound();
+  }
+
+  // The same answer from the inventory read means the same thing: the room
+  // type this page is about is not there.
+  if (roomsResult.state === "invalid-reference" || roomsResult.state === "not-found") {
     notFound();
   }
 
@@ -79,11 +114,24 @@ export default async function AdminRoomTypePage({ params, searchParams }: PagePr
     <>
       <PageHeader name={data.name} />
       {notice ? (
-        <p className="adm-notice" data-tone={ROOM_TYPE_NOTICES[notice].tone} role="status">
-          {ROOM_TYPE_NOTICES[notice].message}
+        <p className="adm-notice" data-tone={notice.tone} role="status">
+          {notice.message}
         </p>
       ) : null}
-      <AdminRoomTypeForm roomType={data} />
+      {/* One stack, so the capacity panel sits beside the T01 panels with the
+          same spacing. Order: archived note, fixed details, general edit, then
+          capacity — the operation that can be refused comes last and stands
+          on its own. */}
+      <div className="adm-detail-grid">
+        <AdminRoomTypeForm roomType={data} />
+        <AdminRoomTypeCapacityPanel slug={data.slug} capacity={data.capacity} />
+        {/* `null` when the inventory read failed, which the panel reports as
+            unavailable rather than as an empty room type. */}
+        <AdminPhysicalRoomsPanel
+          roomTypeSlug={data.slug}
+          rooms={roomsResult.state === "ok" ? roomsResult.data : null}
+        />
+      </div>
     </>
   );
 }

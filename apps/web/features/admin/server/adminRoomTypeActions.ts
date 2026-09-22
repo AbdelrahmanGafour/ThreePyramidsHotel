@@ -3,9 +3,20 @@
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { ROOM_TYPES_PATH, roomTypeDetailHref } from "../lib/roomTypes";
+import { parseCapacityForm, parseRoomTypeCreateForm } from "../lib/inventoryForms";
+import {
+  planRoomTypeCapacity,
+  planRoomTypeCreate,
+  type InventoryOutcome,
+  type RevalidationScope,
+} from "../lib/inventoryOutcomes";
+import { ROOM_TYPES_NEW_PATH, ROOM_TYPES_PATH, roomTypeDetailHref } from "../lib/roomTypes";
 import type { AdminRoomTypeUpdate } from "../types";
-import { updateAdminRoomType } from "./adminRoomTypesApi";
+import {
+  createAdminRoomType,
+  updateAdminRoomType,
+  updateAdminRoomTypeCapacity,
+} from "./adminRoomTypesApi";
 
 // The one way the administration UI edits a room type.
 //
@@ -260,4 +271,135 @@ export async function updateRoomTypeAction(slug: string, formData: FormData): Pr
       revalidateRoomType(slug);
       redirect(noticeHref(slug, "uncertain"));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Creating a room type, and changing its capacity.
+//
+// Both follow the pattern established above: read the browser's own Cookie
+// server-side, build the payload from an explicit allowlist, call the
+// server-only client once, and end in a redirect so what appears on screen
+// afterwards is freshly read rather than assumed.
+//
+// What each answer means — which notice, which page, what to re-read — lives
+// in `lib/inventoryOutcomes.ts`, which is pure and tested directly. These
+// functions do what the plan says and nothing more.
+// ---------------------------------------------------------------------------
+
+/** Re-reads whichever canonical admin paths the plan named. */
+function applyRevalidation(scope: RevalidationScope, slug: string): void {
+  if (scope === "list" || scope === "list-and-detail") {
+    revalidatePath(ROOM_TYPES_PATH);
+  }
+
+  if (scope === "detail" || scope === "list-and-detail") {
+    revalidatePath(roomTypeDetailHref(slug));
+  }
+}
+
+/**
+ * The address a planned notice is shown at.
+ *
+ * The token is a fixed value from a closed set, never caller text, and the
+ * slug is one encoded path segment. Nothing an administrator typed is put into
+ * a query parameter to make a message dynamic.
+ */
+function outcomeHref(outcome: Extract<InventoryOutcome, { kind: "notice" }>, slug: string): string {
+  switch (outcome.surface) {
+    case "list":
+      return `${ROOM_TYPES_PATH}?action=${outcome.token}`;
+    case "new":
+      return `${ROOM_TYPES_NEW_PATH}?action=${outcome.token}`;
+    case "detail":
+      return `${roomTypeDetailHref(slug)}?action=${outcome.token}`;
+  }
+}
+
+/**
+ * Carries out a plan. Always ends by throwing, because every path redirects.
+ *
+ * `redirect()` works by throwing, so this is deliberately called outside any
+ * try/catch.
+ */
+function completeOutcome(outcome: InventoryOutcome, slug: string): never {
+  if (outcome.kind === "login") {
+    // The session ended between the page rendering and the button being
+    // pressed. Never retried automatically after signing in again.
+    redirect("/admin/login");
+  }
+
+  applyRevalidation(outcome.revalidate, slug);
+
+  if (outcome.kind === "stale") {
+    // No notice: the detail page renders its own not-found rather than this
+    // action inventing a state for it.
+    redirect(roomTypeDetailHref(slug));
+  }
+
+  redirect(outcomeHref(outcome, slug));
+}
+
+/**
+ * Creates one room type.
+ *
+ * The API stores it as an inactive draft with no physical rooms; nothing here
+ * asks for that, and `isActive` is not a field this form can carry.
+ *
+ * On confirmed success the administrator lands on the new room type, because
+ * adding rooms is what comes next. On an unconfirmed outcome they land on the
+ * refreshed list instead — it is the only place that can answer whether the
+ * room type exists.
+ */
+export async function createAdminRoomTypeAction(formData: FormData): Promise<void> {
+  const parsed = parseRoomTypeCreateForm(formData);
+
+  if (!parsed.ok) {
+    // Refused before it became a request. Deliberately not reported as an API
+    // failure: nothing was asked of the API.
+    redirect(`${ROOM_TYPES_NEW_PATH}?action=create-refused`);
+  }
+
+  // The browser's own Cookie header, forwarded verbatim: this app never parses
+  // it and never decides whether the session is valid.
+  const cookie = (await headers()).get("cookie") ?? undefined;
+  const result = await createAdminRoomType(parsed.value, cookie);
+
+  // The slug the API confirmed on success, so the redirect never points at a
+  // room type the caller merely asked for; the submitted one otherwise, which
+  // is only ever used to build a path that carries no slug.
+  const slug = result.state === "ok" ? result.data.slug : parsed.value.slug;
+
+  completeOutcome(planRoomTypeCreate(result.state), slug);
+}
+
+/**
+ * Changes one room type's capacity.
+ *
+ * Bound per form to the slug the server itself rendered, never read from the
+ * submission — a Server Action is a public endpoint, and the slug decides
+ * which room type is written.
+ *
+ * A refusal because upcoming stays are booked for more guests carries no
+ * count, reference, date or guest: the API returns none, and a refusal is not
+ * a place to read reservation data out of.
+ */
+export async function updateAdminRoomTypeCapacityAction(
+  slug: string,
+  formData: FormData,
+): Promise<void> {
+  // Treated as untrusted despite the bound type.
+  if (typeof slug !== "string" || slug.length === 0) {
+    redirect(ROOM_TYPES_PATH);
+  }
+
+  const parsed = parseCapacityForm(formData);
+
+  if (!parsed.ok) {
+    redirect(`${roomTypeDetailHref(slug)}?action=capacity-refused`);
+  }
+
+  const cookie = (await headers()).get("cookie") ?? undefined;
+  const result = await updateAdminRoomTypeCapacity(slug, parsed.value, cookie);
+
+  completeOutcome(planRoomTypeCapacity(result.state), slug);
 }

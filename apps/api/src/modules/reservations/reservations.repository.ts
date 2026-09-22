@@ -21,22 +21,68 @@ type FindAndLockAvailableRoomInput = {
 
 /**
  * Both helpers take the caller's `PoolClient` so they run inside the caller's
- * transaction — the row lock taken below is only meaningful while that
+ * transaction — the row locks they take are only meaningful while that
  * transaction is open. Neither helper begins, commits or rolls back anything.
+ */
+
+/**
+ * Finds the active room type a booking is for, and holds it.
+ *
+ * `FOR KEY SHARE` is the first lock of the canonical order:
+ *
+ *     room_types row  ->  rooms row
+ *
+ * It is the weakest row lock PostgreSQL offers, and it is chosen for exactly
+ * what it does and does not conflict with:
+ *
+ *   FOR UPDATE          conflicts. This is how an administrator takes the row
+ *                       before changing capacity, so a booking and a capacity
+ *                       change can never overlap.
+ *   FOR KEY SHARE       compatible. Any number of bookings hold it at once,
+ *                       each going on to lock a *different* physical room.
+ *   FOR NO KEY UPDATE   compatible. An ordinary UPDATE that leaves `id` and
+ *                       `slug` alone takes this — which is every field of the
+ *                       T01 partial update. Editing a description or a rate
+ *                       therefore does not queue behind in-flight bookings.
+ *
+ * That last line is why this is not `FOR SHARE`. `FOR SHARE` would conflict
+ * with `FOR NO KEY UPDATE` and make every descriptive edit wait for bookings,
+ * buying nothing: the serialisation that matters comes from the administrator's
+ * explicit `FOR UPDATE`, which `FOR KEY SHARE` already blocks on.
+ *
+ * Without any lock here, an admin transaction could lower capacity and commit
+ * in the window between this read and the reservation INSERT, leaving a booking
+ * validated against a capacity the hotel no longer offers — the exact party
+ * size the admin operation exists to refuse. Instead the two wait for each
+ * other:
+ *
+ *   - a capacity change waits for every in-flight booking on this room type;
+ *   - a booking waits for an in-flight capacity change, and under READ
+ *     COMMITTED the locking SELECT then re-reads the current row version, so
+ *     the capacity check in the service runs against the value that was just
+ *     committed.
+ *
+ * Held until the reservation transaction commits or rolls back, which is what
+ * makes the guarantee reach as far as the INSERT.
+ *
+ * Deliberately not on the public catalogue or availability reads: those answer
+ * a question and end, and taking a lock there would have bookings and
+ * administrators queue behind anonymous page views.
  */
 export async function findActiveRoomTypeBySlug(
   client: PoolClient,
   slug: string,
 ): Promise<ReservationRoomType | null> {
   const { rows } = await client.query<ReservationRoomTypeRow>(
-    `SELECT id,
-            slug,
-            name,
-            capacity,
-            base_nightly_rate
-       FROM room_types
-      WHERE slug = $1
-        AND is_active = true`,
+    `SELECT rt.id,
+            rt.slug,
+            rt.name,
+            rt.capacity,
+            rt.base_nightly_rate
+       FROM room_types rt
+      WHERE rt.slug = $1
+        AND rt.is_active = true
+        FOR KEY SHARE OF rt`,
     [slug],
   );
 

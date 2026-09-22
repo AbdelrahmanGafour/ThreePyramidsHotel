@@ -226,6 +226,75 @@ export type AdminRoomTypeUpdate = {
   sortOrder?: number;
 };
 
+/**
+ * A new room type, as the API accepts it.
+ *
+ * `isActive` is absent because it is not a choice. A room type is created with
+ * no physical rooms, so it cannot be allocated to anyone; the API writes
+ * `false` itself and rejects a body that tries to say otherwise. Making a room
+ * type public is a separate decision, and not one this release offers.
+ *
+ * The four required fields are required because their columns have no useful
+ * default — and because two of them cannot be corrected afterwards: the slug is
+ * the permanent public identifier, and capacity has its own guarded endpoint.
+ *
+ * The optional fields are `| null` rather than optional: "omitted" and "empty"
+ * both mean not recorded, and the form resolves that once so nothing
+ * downstream has to ask again.
+ */
+export type AdminRoomTypeCreate = {
+  slug: string;
+  name: string;
+  capacity: number;
+  /** Exact decimal string, never a number. */
+  baseNightlyRate: string;
+  sortOrder: number;
+  shortDescription: string | null;
+  description: string | null;
+  bedType: string | null;
+  bedCount: number | null;
+  /** Exact decimal string, never a number. */
+  sizeSqm: string | null;
+  view: string | null;
+};
+
+/**
+ * One physical room — what the hotel allocates, as against the room type a
+ * guest books.
+ *
+ * The database `id` and `roomTypeId` are absent by design: both are internal
+ * join keys with no meaning outside the database. A room is addressed by its
+ * number, which is unique across the whole hotel.
+ */
+export type AdminPhysicalRoom = {
+  roomNumber: string;
+  isActive: boolean;
+  /** ISO 8601 instant. */
+  createdAt: string;
+  /** ISO 8601 instant. */
+  updatedAt: string;
+};
+
+/**
+ * A new physical room. It carries no room type: which type a room belongs to
+ * comes from the route it is created under, never from the body.
+ */
+export type AdminPhysicalRoomCreate = {
+  roomNumber: string;
+};
+
+/**
+ * A change to one physical room: its number, whether it is in service, or
+ * both. At least one must be present, which the API enforces.
+ *
+ * `roomTypeId` is deliberately absent — moving a room between types is not
+ * something this system does.
+ */
+export type AdminPhysicalRoomUpdate = {
+  roomNumber?: string;
+  isActive?: boolean;
+};
+
 export type ReservationStatus = "confirmed" | "pending" | "cancelled" | "checked-in" | "checked-out";
 export type RoomAvailability = "available" | "occupied" | "blocked";
 export type InquiryStatus = "new" | "in-progress" | "replied";

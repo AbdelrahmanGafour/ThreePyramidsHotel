@@ -103,6 +103,50 @@ export type AdminRoomTypeUpdate = {
   sortOrder?: number;
 };
 
+/**
+ * A new room type, as the repository will receive it: every column it may set,
+ * already normalised, with no optionality left to interpret.
+ *
+ * `isActive` is absent because it is not a choice. A room type is created with
+ * no physical rooms, so it cannot be allocated to anyone; publishing it would
+ * put a room on the website that every availability search reports as unable
+ * to be booked. Creation therefore always produces a draft, and making one
+ * public is a separate decision made once it actually has rooms.
+ *
+ * The six descriptive fields are `| null` rather than optional: an omitted
+ * field and an empty one both mean "not recorded", and the create contract
+ * resolves that here so nothing downstream has to ask again.
+ */
+export type AdminRoomTypeCreate = {
+  slug: string;
+  name: string;
+  capacity: number;
+  /** Exact decimal string, never a number. */
+  baseNightlyRate: string;
+  sortOrder: number;
+  shortDescription: string | null;
+  description: string | null;
+  bedType: string | null;
+  bedCount: number | null;
+  /** Exact decimal string, never a number. */
+  sizeSqm: string | null;
+  view: string | null;
+};
+
+/**
+ * Capacity, on its own.
+ *
+ * Deliberately not part of `AdminRoomTypeUpdate`. Every field there is free
+ * text or a number nobody else depends on, and a PATCH carrying them can
+ * always be applied. Capacity is the one value availability filters on and
+ * reservation creation enforces, so lowering it can conflict with stays
+ * already booked — an operation that can be refused does not belong in a body
+ * that never can.
+ */
+export type AdminRoomTypeCapacityUpdate = {
+  capacity: number;
+};
+
 export const INVALID_ROOM_TYPE_SLUG_ERROR_CODE = 'INVALID_ROOM_TYPE_SLUG';
 export const INVALID_ROOM_TYPE_SLUG_ERROR_MESSAGE = 'Invalid room type slug';
 
@@ -165,5 +209,89 @@ export const ROOM_TYPE_NOT_FOUND_RESPONSE = Object.freeze({
   error: Object.freeze({
     code: ROOM_TYPE_NOT_FOUND_ERROR_CODE,
     message: ROOM_TYPE_NOT_FOUND_ERROR_MESSAGE,
+  }),
+});
+
+export const INVALID_ROOM_TYPE_CREATE_ERROR_CODE = 'INVALID_ROOM_TYPE_CREATE';
+export const INVALID_ROOM_TYPE_CREATE_ERROR_MESSAGE = 'Invalid room type creation request';
+
+/**
+ * The creation body is not one this endpoint accepts.
+ *
+ * One message for every reason — a bad value, a missing required field, an
+ * unknown key, a server-controlled key, a malformed slug. The slug is part of
+ * this body, so a bad one is a bad creation request rather than a bad route
+ * parameter: `INVALID_ROOM_TYPE_SLUG` stays the answer for the identifier in
+ * a URL, and every rejection of a body belongs to that body's own contract.
+ */
+export class InvalidRoomTypeCreateError extends Error {
+  readonly code = INVALID_ROOM_TYPE_CREATE_ERROR_CODE;
+
+  constructor() {
+    super(INVALID_ROOM_TYPE_CREATE_ERROR_MESSAGE);
+    this.name = 'InvalidRoomTypeCreateError';
+  }
+}
+
+export function isInvalidRoomTypeCreateError(error: unknown): error is InvalidRoomTypeCreateError {
+  return error instanceof InvalidRoomTypeCreateError;
+}
+
+export const ROOM_TYPE_SLUG_TAKEN_ERROR_CODE = 'ROOM_TYPE_SLUG_TAKEN';
+export const ROOM_TYPE_SLUG_TAKEN_ERROR_MESSAGE = 'Room type reference is already in use';
+
+/**
+ * A slug someone already used. Frozen and built once, so a future handler can
+ * only send the locked contract rather than a hand-assembled near-copy.
+ *
+ * The slug is deliberately absent: the caller sent it, and echoing it back
+ * tells them nothing while turning an error body into a lookup oracle.
+ *
+ * "reference", not "slug", because this reaches an administrator who chose it
+ * in a form field labelled Reference, not a developer reading the schema.
+ */
+export const ROOM_TYPE_SLUG_TAKEN_RESPONSE = Object.freeze({
+  error: Object.freeze({
+    code: ROOM_TYPE_SLUG_TAKEN_ERROR_CODE,
+    message: ROOM_TYPE_SLUG_TAKEN_ERROR_MESSAGE,
+  }),
+});
+
+export const INVALID_ROOM_TYPE_CAPACITY_ERROR_CODE = 'INVALID_ROOM_TYPE_CAPACITY';
+export const INVALID_ROOM_TYPE_CAPACITY_ERROR_MESSAGE = 'Invalid room type capacity';
+
+/** The capacity body is not one this endpoint accepts. */
+export class InvalidRoomTypeCapacityError extends Error {
+  readonly code = INVALID_ROOM_TYPE_CAPACITY_ERROR_CODE;
+
+  constructor() {
+    super(INVALID_ROOM_TYPE_CAPACITY_ERROR_MESSAGE);
+    this.name = 'InvalidRoomTypeCapacityError';
+  }
+}
+
+export function isInvalidRoomTypeCapacityError(
+  error: unknown,
+): error is InvalidRoomTypeCapacityError {
+  return error instanceof InvalidRoomTypeCapacityError;
+}
+
+export const ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_ERROR_CODE =
+  'ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS';
+export const ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_ERROR_MESSAGE =
+  'Room type capacity conflicts with existing upcoming reservations';
+
+/**
+ * Lowering capacity below what an upcoming stay already booked.
+ *
+ * The base body carries no guest count, no booking reference and no date — a
+ * refusal is not a place to read reservation data out of. A later HTTP design
+ * may add a plain `conflictingReservationCount` alongside this `error` object;
+ * this frozen value is what the `error` member must always be.
+ */
+export const ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_RESPONSE = Object.freeze({
+  error: Object.freeze({
+    code: ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_ERROR_CODE,
+    message: ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_ERROR_MESSAGE,
   }),
 });

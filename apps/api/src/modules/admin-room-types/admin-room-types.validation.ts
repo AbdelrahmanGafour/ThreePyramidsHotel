@@ -1,59 +1,87 @@
 import {
+  BASE_NIGHTLY_RATE_PATTERN,
+  FieldError,
+  MAX_LENGTHS,
+  SIZE_SQM_PATTERN,
+  parseCount,
+  parseDecimalString,
+  parseOptionalText,
+  parseRequiredText,
+  parseSlugValue,
+  requirePlainJsonObject,
+} from './admin-room-types.fields';
+import {
+  InvalidRoomTypeCapacityError,
+  InvalidRoomTypeCreateError,
   InvalidRoomTypeSlugError,
   InvalidRoomTypeUpdateError,
+  type AdminRoomTypeCapacityUpdate,
+  type AdminRoomTypeCreate,
   type AdminRoomTypeUpdate,
 } from './admin-room-types.types';
 
 /**
- * Lowercase kebab-case, the shape every slug in this system actually has
- * (`demo-standard`, `room-concept-01`): lowercase letters and digits in
- * hyphen-separated groups, with no leading, trailing or doubled hyphen.
+ * The four things an administrator can say about a room type, as pure
+ * functions: name this one, create this one, change these fields, set this
+ * capacity.
  *
- * Anchored and exact. Nothing is trimmed or lower-cased first: a slug is a
- * public identifier matched exactly and case-sensitively in SQL, so a value
- * that needs tidying is not the value the database holds. `Demo-Standard` and
- * ` demo-standard ` are therefore refused rather than repaired.
+ * What each field is allowed to be lives in `admin-room-types.fields.ts` and
+ * is shared. What each *request* is allowed to carry, and which locked error
+ * it raises, lives here — they are different questions, and a create body that
+ * happens to share a field with a PATCH body is still a different contract.
  *
- * This also makes the parameter safe by construction — no slash, dot, percent
- * or quote can appear — though the queries behind it are parameterised anyway.
+ * Every parser returns a fresh object holding only the fields it accepted, so
+ * no caller can reach past it to the raw body.
  */
-const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-/** Matches the reservation module's own limit for the same identifier. */
-const MAX_SLUG_LENGTH = 120;
 
 /**
- * Application-level maxima. The columns are unbounded `text`, so these are a
- * deliberate choice rather than a schema fact: a name is a label, not an
- * essay, and an unbounded admin field is a denial-of-service surface and a
- * layout problem in equal measure. `description` matches the reservation
- * module's `specialRequests` ceiling, the longest free text this system
- * already accepts.
+ * Runs a parse and converts the shared helpers' marker error into whichever
+ * contract the caller is answering for.
+ *
+ * Only `FieldError` is converted. Anything else is a fault and propagates
+ * untouched rather than being reported to a caller as their mistake.
  */
-const MAX_LENGTHS = {
-  name: 120,
-  shortDescription: 300,
-  description: 2000,
-  bedType: 60,
-  view: 120,
-} as const;
+function underContract<T>(parse: () => T, toContractError: () => Error): T {
+  try {
+    return parse();
+  } catch (error) {
+    if (error instanceof FieldError) {
+      throw toContractError();
+    }
+
+    throw error;
+  }
+}
 
 /**
- * `numeric(12,2)`: up to ten digits before the point and two after. Unsigned —
- * a negative rate is not a price, and the column's own CHECK forbids it.
+ * Validates a room-type slug used as a route parameter.
+ *
+ * Returns it unchanged, so a caller cannot accidentally use the raw parameter
+ * in place of the validated one.
  */
-const BASE_NIGHTLY_RATE_PATTERN = /^\d{1,10}(?:\.\d{1,2})?$/;
+export function parseRoomTypeSlugParam(value: unknown): string {
+  return underContract(
+    () => parseSlugValue(value),
+    () => new InvalidRoomTypeSlugError(),
+  );
+}
 
-/**
- * `numeric(6,2)`: up to four digits before the point and two after. Unsigned
- * for the same reason, and the column's CHECK requires it to be positive.
- */
-const SIZE_SQM_PATTERN = /^\d{1,4}(?:\.\d{1,2})?$/;
+/** Exactly the keys the create endpoint accepts; anything else makes the body invalid. */
+const CREATABLE_KEYS = [
+  'slug',
+  'name',
+  'capacity',
+  'baseNightlyRate',
+  'sortOrder',
+  'shortDescription',
+  'description',
+  'bedType',
+  'bedCount',
+  'sizeSqm',
+  'view',
+] as const;
 
-/** A decimal string carrying at least one non-zero digit, so "0.00" is not positive. */
-const HAS_NON_ZERO_DIGIT = /[1-9]/;
-
-/** Exactly the keys this endpoint accepts; anything else makes the body invalid. */
+/** Exactly the keys a partial update accepts. Narrower than create: no slug, no capacity. */
 const EDITABLE_KEYS = [
   'name',
   'shortDescription',
@@ -66,151 +94,85 @@ const EDITABLE_KEYS = [
   'sortOrder',
 ] as const;
 
-type EditableKey = (typeof EDITABLE_KEYS)[number];
-
-function isEditableKey(key: string): key is EditableKey {
-  return (EDITABLE_KEYS as readonly string[]).includes(key);
-}
-
-/**
- * Validates a room-type slug used as a route parameter.
- *
- * Returns it unchanged, so a caller cannot accidentally use the raw parameter
- * in place of the validated one.
- */
-export function parseRoomTypeSlugParam(value: unknown): string {
-  if (typeof value !== 'string' || value.length > MAX_SLUG_LENGTH || !SLUG_PATTERN.test(value)) {
-    throw new InvalidRoomTypeSlugError();
-  }
-
-  return value;
-}
-
-/**
- * Required text: trimmed, then required to still say something.
- *
- * Trimming is part of the stored contract here — a name with a stray space at
- * either end is the same name — but a value that is *only* whitespace was
- * never a name at all.
- */
-function parseRequiredText(value: unknown, maxLength: number): string {
-  if (typeof value !== 'string') {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  const trimmed = value.trim();
-
-  if (trimmed.length === 0 || trimmed.length > maxLength) {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  return trimmed;
-}
-
-/**
- * Optional text: a string or an explicit null.
- *
- * An empty or whitespace-only string becomes null. The column is nullable and
- * these fields are descriptions — "" and "absent" mean the same thing to every
- * reader, and storing both would leave the public API returning two different
- * values for one state.
- */
-function parseOptionalText(value: unknown, maxLength: number): string | null {
-  if (value === null) {
-    return null;
-  }
-
-  if (typeof value !== 'string') {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  const trimmed = value.trim();
-
-  if (trimmed.length > maxLength) {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  return trimmed.length === 0 ? null : trimmed;
-}
-
-/**
- * A decimal kept as a string all the way to PostgreSQL.
- *
- * Deliberately never parsed with `Number`: the point of a `numeric` column is
- * that 1234.55 is exactly 1234.55, and routing it through a float to check its
- * range would be the one place that stops being true. The pattern bounds the
- * digits on each side of the point, which is the precision and scale check;
- * `minimum` is then a question about digits, not arithmetic.
- *
- * A number supplied where a decimal string belongs is refused rather than
- * stringified — accepting `1234.55` as a JavaScript number would mean the
- * value had already been through a float before this function ever saw it.
- */
-function parseDecimalString(
-  value: unknown,
-  pattern: RegExp,
-  minimum: 'zero' | 'positive',
-): string {
-  if (typeof value !== 'string' || !pattern.test(value)) {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  if (minimum === 'positive' && !HAS_NON_ZERO_DIGIT.test(value)) {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  return value;
-}
-
-function parseCount(value: unknown, minimum: number): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  return value;
-}
-
-/**
- * Validates a partial room-type update.
- *
- * Only the nine editable fields are accepted. Any other key — an unknown one,
- * or a read-only/server-controlled one like `slug`, `capacity` or `isActive` —
- * makes the whole body invalid rather than being quietly dropped: a caller who
- * believed they were changing the slug must be told they were not, and the
- * request that says so is the only chance to tell them.
- *
- * A body that changes nothing is refused too. An empty PATCH is a request that
- * misunderstood something, and answering it with "done" would hide that.
- *
- * Returns a clean object carrying only the supplied editable fields, so a
- * caller can never reach past it to the raw body.
- */
-export function parseAdminRoomTypeUpdate(body: unknown): AdminRoomTypeUpdate {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  // Only a plain object (or a null-prototype one, as JSON.parse with a reviver
-  // can produce). A Date, Map or class instance is an object whose fields
-  // would not survive a JSON round-trip.
-  const prototype = Object.getPrototypeOf(body);
-
-  if (prototype !== Object.prototype && prototype !== null) {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  const record = body as Record<string, unknown>;
-  const keys = Object.keys(record);
-
-  if (keys.length === 0) {
-    throw new InvalidRoomTypeUpdateError();
-  }
-
-  for (const key of keys) {
-    if (!isEditableKey(key)) {
-      throw new InvalidRoomTypeUpdateError();
+function requireOnlyKeys(record: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const key of Object.keys(record)) {
+    if (!allowed.includes(key)) {
+      throw new FieldError();
     }
   }
+}
+
+function buildCreate(body: unknown): AdminRoomTypeCreate {
+  const record = requirePlainJsonObject(body);
+
+  // An allowlist, so an unknown key and a server-controlled one are the same
+  // rejection: `id`, `isActive`, `roomCount`, `currency`, `createdAt` and
+  // `updatedAt` are simply not on it. A caller who believed they were creating
+  // an active room type must be told they were not, and this is the only
+  // chance to tell them.
+  requireOnlyKeys(record, CREATABLE_KEYS);
+
+  return {
+    // Present and well formed, or there is nothing to create. The slug is part
+    // of this body, so a bad one is a bad creation request.
+    slug: parseSlugValue(record.slug),
+    name: parseRequiredText(record.name, MAX_LENGTHS.name),
+    capacity: parseCount(record.capacity, 1),
+    // Zero is a legitimate rate — a type may be priced on request — so this is
+    // bounded at zero rather than required to be positive.
+    baseNightlyRate: parseDecimalString(record.baseNightlyRate, BASE_NIGHTLY_RATE_PATTERN, 'zero'),
+    // The column's own default, restated: the repository will be handed a
+    // complete row, so there is nothing left for the database to fill in.
+    sortOrder: 'sortOrder' in record ? parseCount(record.sortOrder, 0) : 0,
+    shortDescription:
+      'shortDescription' in record
+        ? parseOptionalText(record.shortDescription, MAX_LENGTHS.shortDescription)
+        : null,
+    description:
+      'description' in record ? parseOptionalText(record.description, MAX_LENGTHS.description) : null,
+    bedType: 'bedType' in record ? parseOptionalText(record.bedType, MAX_LENGTHS.bedType) : null,
+    bedCount:
+      'bedCount' in record ? (record.bedCount === null ? null : parseCount(record.bedCount, 1)) : null,
+    // The column's CHECK requires a positive size, so zero is data the schema
+    // says cannot exist.
+    sizeSqm:
+      'sizeSqm' in record
+        ? record.sizeSqm === null
+          ? null
+          : parseDecimalString(record.sizeSqm, SIZE_SQM_PATTERN, 'positive')
+        : null,
+    view: 'view' in record ? parseOptionalText(record.view, MAX_LENGTHS.view) : null,
+  };
+}
+
+/**
+ * Validates a new room type.
+ *
+ * Four fields are required because their columns are NOT NULL with no useful
+ * default, and because two of them cannot be corrected afterwards: the slug is
+ * immutable, and capacity is not part of the ordinary update contract.
+ *
+ * `isActive` is not read at all. A new room type has no physical rooms, so it
+ * is always created as a draft — that is not a default a caller may override.
+ */
+export function parseAdminRoomTypeCreate(body: unknown): AdminRoomTypeCreate {
+  return underContract(
+    () => buildCreate(body),
+    () => new InvalidRoomTypeCreateError(),
+  );
+}
+
+function buildUpdate(body: unknown): AdminRoomTypeUpdate {
+  const record = requirePlainJsonObject(body);
+  const keys = Object.keys(record);
+
+  // A body that changes nothing is refused. An empty PATCH is a request that
+  // misunderstood something, and answering it with "done" would hide that.
+  if (keys.length === 0) {
+    throw new FieldError();
+  }
+
+  requireOnlyKeys(record, EDITABLE_KEYS);
 
   const update: AdminRoomTypeUpdate = {};
 
@@ -246,4 +208,50 @@ export function parseAdminRoomTypeUpdate(body: unknown): AdminRoomTypeUpdate {
   }
 
   return update;
+}
+
+/**
+ * Validates a partial room-type update.
+ *
+ * Only the nine editable fields are accepted. Any other key — an unknown one,
+ * or a read-only/server-controlled one like `slug`, `capacity` or `isActive` —
+ * makes the whole body invalid rather than being quietly dropped.
+ *
+ * Unchanged since T01: creation and capacity editing were added beside it, not
+ * through it.
+ */
+export function parseAdminRoomTypeUpdate(body: unknown): AdminRoomTypeUpdate {
+  return underContract(
+    () => buildUpdate(body),
+    () => new InvalidRoomTypeUpdateError(),
+  );
+}
+
+function buildCapacityUpdate(body: unknown): AdminRoomTypeCapacityUpdate {
+  const record = requirePlainJsonObject(body);
+  const keys = Object.keys(record);
+
+  // Exactly one key, by name. This endpoint exists to change one value, so a
+  // body carrying anything alongside it was not written against this contract
+  // — accepting it and ignoring the rest is how a caller comes to believe an
+  // edit was applied that never was.
+  if (keys.length !== 1 || keys[0] !== 'capacity') {
+    throw new FieldError();
+  }
+
+  return { capacity: parseCount(record.capacity, 1) };
+}
+
+/**
+ * Validates a capacity change.
+ *
+ * Shape only. Whether the new capacity conflicts with stays already booked is
+ * a question about reservations, which no pure function can answer — that is
+ * the service's job, under a lock.
+ */
+export function parseAdminRoomTypeCapacity(body: unknown): AdminRoomTypeCapacityUpdate {
+  return underContract(
+    () => buildCapacityUpdate(body),
+    () => new InvalidRoomTypeCapacityError(),
+  );
 }
