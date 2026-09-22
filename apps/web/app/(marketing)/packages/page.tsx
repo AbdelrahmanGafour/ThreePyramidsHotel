@@ -3,23 +3,34 @@ import { JourneyList } from "@/features/packages/components/JourneyList";
 import { PackagesClosing } from "@/features/packages/components/PackagesClosing";
 import { PackagesHero } from "@/features/packages/components/PackagesHero";
 import { PackagesTrustBand } from "@/features/packages/components/PackagesTrustBand";
-import { packages } from "@/features/packages/data/packagesDemoData";
+import { InfoSection } from "@/shared/components/ui/InfoSection";
+import { loadPublicPackages } from "@/features/packages/server/publicPackages";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Curated Journeys | Three Pyramids Boutique Hotel",
-  description:
-    "Curated journeys from Three Pyramids Boutique Hotel in Giza — a stay paired with a planned route of places and experiences. See the duration, route, and price per person for each.",
+  description: "Browse public tours, excursions, multi-day packages and Nile cruises from Three Pyramids Boutique Hotel.",
 };
 
-export default function PackagesPage() {
+export default async function PackagesPage() {
+  const result = await loadPublicPackages();
+  const packages = result.kind === "success" ? result.packages : [];
+
   return (
     <main id="main-content">
-      <PackagesHero />
-      <JourneyList packages={packages} />
+      <PackagesHero packages={packages} />
+      {result.kind === "success" ? (
+        <JourneyList packages={packages} />
+      ) : (
+        <InfoSection title="Journeys temporarily unavailable">
+          <p className="prose-body">We could not load the current package catalogue. Please try again later or contact the hotel.</p>
+        </InfoSection>
+      )}
       <PackagesTrustBand />
       <PackagesClosing
-        title="Not sure which journey suits you?"
-        text="Tell us your dates and interests and the hotel will suggest a journey and shape it around you."
+        title="Need help choosing a journey?"
+        text="Contact the hotel if you need help before sending a reservation request."
       />
     </main>
   );

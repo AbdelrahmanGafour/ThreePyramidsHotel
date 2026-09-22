@@ -1,19 +1,8 @@
 import { RelatedJourneyRow } from "@/features/packages/components/RelatedJourneyRow";
 import { InfoSection } from "@/shared/components/ui/InfoSection";
-import type { Package } from "@/features/packages/types";
+import type { PublicPackageCard } from "@/features/packages/api/contracts";
 
-// Compact rows, so this stays lightweight whether there are 2 other journeys
-// or 19.
-export function RelatedPackages({ packages }: { packages: Package[] }) {
+export function RelatedPackages({ packages }: { packages: PublicPackageCard[] }) {
   if (!packages.length) return null;
-
-  return (
-    <InfoSection title="Related journeys">
-      <ul>
-        {packages.map((pkg) => (
-          <RelatedJourneyRow key={pkg.slug} pkg={pkg} />
-        ))}
-      </ul>
-    </InfoSection>
-  );
+  return <InfoSection title="Related journeys"><ul>{packages.map((pkg) => <RelatedJourneyRow key={pkg.slug} pkg={pkg} />)}</ul></InfoSection>;
 }
