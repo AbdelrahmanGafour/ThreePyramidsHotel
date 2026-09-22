@@ -3,6 +3,7 @@ import { roomTypeStatus } from "../lib/status";
 import { updateRoomTypeAction } from "../server/adminRoomTypeActions";
 import type { AdminRoomTypeDetail } from "../types";
 import { AdminActionButton } from "./AdminActionButton";
+import { AdminFormField } from "./AdminFormField";
 import { PanelHeader } from "./PanelHeader";
 import { StatusBadge } from "./StatusBadge";
 
@@ -33,37 +34,16 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-function Field({
-  id,
-  label,
-  hint,
-  children,
-}: {
-  id: string;
-  label: string;
-  hint: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="adm-field">
-      <label className="field-label" htmlFor={id}>
-        {label}
-      </label>
-      {children}
-      <p className="field-hint" id={`${id}-hint`}>
-        {hint}
-      </p>
-    </div>
-  );
-}
-
 export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail }) {
-  // Bound server-side from the route, so the form posts no slug and a crafted
-  // submission has nothing to substitute.
+  // Bound server-side from the route, so the form posts no slug as an editable
+  // field. Binding is not a security boundary — the action re-checks the value
+  // and the admin session plus the API's validation are what protect the data.
   const save = updateRoomTypeAction.bind(null, roomType.slug);
 
+  // A fragment, not a grid: the page owns the stack these panels sit in, so
+  // the capacity panel beside them shares the same spacing.
   return (
-    <div className="adm-detail-grid">
+    <>
       {roomType.isActive ? null : (
         <section className="adm-panel" aria-labelledby="room-type-archived">
           <PanelHeader id="room-type-archived" title="This room type is archived" />
@@ -84,7 +64,9 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
         />
         <dl className="adm-facts">
           <Fact label="Reference">{roomType.slug}</Fact>
-          <Fact label="Sleeps">{plural(roomType.capacity, "guest")}</Fact>
+          {/* Capacity is deliberately absent: it has its own panel, because it
+              is the one value a change to can be refused. One authoritative
+              place for it beats a read-only copy that can fall out of step. */}
           {/* Inventory, not availability: how many rooms belong to this type. */}
           <Fact label="Physical rooms assigned">
             {roomType.roomCount === 0 ? "None" : plural(roomType.roomCount, "room")}
@@ -110,7 +92,7 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
         />
 
         <form className="adm-form" action={save}>
-          <Field
+          <AdminFormField
             id="room-type-name"
             label="Name"
             // Names are read live wherever a reservation is shown, not copied
@@ -128,9 +110,9 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
               required
               aria-describedby="room-type-name-hint"
             />
-          </Field>
+          </AdminFormField>
 
-          <Field
+          <AdminFormField
             id="room-type-baseNightlyRate"
             label="Base nightly rate (EGP)"
             // The one thing an administrator is most likely to assume wrong.
@@ -150,9 +132,9 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
               required
               aria-describedby="room-type-baseNightlyRate-hint"
             />
-          </Field>
+          </AdminFormField>
 
-          <Field
+          <AdminFormField
             id="room-type-shortDescription"
             label="Short description"
             hint="One line, used where the room type is listed. Leave empty for none."
@@ -166,9 +148,9 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
               maxLength={300}
               aria-describedby="room-type-shortDescription-hint"
             />
-          </Field>
+          </AdminFormField>
 
-          <Field
+          <AdminFormField
             id="room-type-description"
             label="Description"
             hint="The full description. Leave empty for none."
@@ -182,10 +164,10 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
               rows={6}
               aria-describedby="room-type-description-hint"
             />
-          </Field>
+          </AdminFormField>
 
           <div className="adm-field-row">
-            <Field id="room-type-bedType" label="Bed type" hint="For example, King. Optional.">
+            <AdminFormField id="room-type-bedType" label="Bed type" hint="For example, King. Optional.">
               <input
                 id="room-type-bedType"
                 name="bedType"
@@ -195,9 +177,9 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
                 maxLength={60}
                 aria-describedby="room-type-bedType-hint"
               />
-            </Field>
+            </AdminFormField>
 
-            <Field id="room-type-bedCount" label="Number of beds" hint="Optional.">
+            <AdminFormField id="room-type-bedCount" label="Number of beds" hint="Optional.">
               <input
                 id="room-type-bedCount"
                 name="bedCount"
@@ -208,11 +190,11 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
                 step={1}
                 aria-describedby="room-type-bedCount-hint"
               />
-            </Field>
+            </AdminFormField>
           </div>
 
           <div className="adm-field-row">
-            <Field id="room-type-sizeSqm" label="Room size in square metres" hint="Optional.">
+            <AdminFormField id="room-type-sizeSqm" label="Room size in square metres" hint="Optional.">
               <input
                 id="room-type-sizeSqm"
                 name="sizeSqm"
@@ -224,9 +206,9 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
                 maxLength={7}
                 aria-describedby="room-type-sizeSqm-hint"
               />
-            </Field>
+            </AdminFormField>
 
-            <Field id="room-type-view" label="View" hint="For example, Garden. Optional.">
+            <AdminFormField id="room-type-view" label="View" hint="For example, Garden. Optional.">
               <input
                 id="room-type-view"
                 name="view"
@@ -236,10 +218,10 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
                 maxLength={120}
                 aria-describedby="room-type-view-hint"
               />
-            </Field>
+            </AdminFormField>
           </div>
 
-          <Field
+          <AdminFormField
             id="room-type-sortOrder"
             label="Order"
             hint="Where this room type appears in lists. Lower numbers come first."
@@ -255,7 +237,7 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
               required
               aria-describedby="room-type-sortOrder-hint"
             />
-          </Field>
+          </AdminFormField>
 
           <div className="adm-actions">
             {/* Disables itself while its own form is in flight, so an
@@ -266,6 +248,6 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
           </div>
         </form>
       </section>
-    </div>
+    </>
   );
 }

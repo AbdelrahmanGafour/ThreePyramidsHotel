@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --conditions=react-server features/admin/lib/inventoryForms.test.ts features/admin/lib/inventoryOutcomes.test.ts features/admin/lib/noticeSurfaces.test.ts features/admin/lib/physicalRooms.test.ts features/admin/server/adminRoomTypesApi.test.ts features/admin/server/adminRoomsApi.test.ts"
   },
   "dependencies": {
     "@tailwindcss/postcss": "4.3.3",
@@ -25,6 +26,7 @@
     "@types/react-dom": "19.2.0",
     "eslint": "9.35.0",
     "eslint-config-next": "16.3.5",
+    "tsx": "^4.23.13",
     "typescript": "7.0.2"
   }
 }

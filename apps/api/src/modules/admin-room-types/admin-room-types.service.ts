@@ -1,9 +1,15 @@
+import { dbPool } from '../../db/pool';
 import {
+  countReservationsAboveCapacity,
   findAdminRoomTypeBySlug,
+  insertAdminRoomType,
   listAdminRoomTypes,
+  lockAdminRoomTypeBySlug,
   updateAdminRoomType,
+  updateAdminRoomTypeCapacity,
 } from './admin-room-types.repository';
 import type {
+  AdminRoomTypeCreate,
   AdminRoomTypeDetail,
   AdminRoomTypeListItem,
   AdminRoomTypeUpdate,
@@ -53,4 +59,183 @@ export async function changeAdminRoomType(
   update: AdminRoomTypeUpdate,
 ): Promise<AdminRoomTypeDetail | null> {
   return updateAdminRoomType(slug, update);
+}
+
+// ---------------------------------------------------------------------------
+// Creation, and the guarded capacity change.
+//
+// CANONICAL ADMIN LOCK ORDER (shared with admin-rooms):
+//
+//     booking:          room_types FOR KEY SHARE -> rooms FOR UPDATE SKIP LOCKED
+//     admin capacity:   room_types FOR UPDATE
+//     admin room edit:  room_types FOR UPDATE    -> rooms FOR UPDATE
+//
+// No path may lock a room before its room type.
+// ---------------------------------------------------------------------------
+
+/** PostgreSQL unique_violation. */
+const UNIQUE_VIOLATION = '23505';
+
+/** The unique index behind a room type's public identifier. */
+const SLUG_CONSTRAINT = 'room_types_slug_key';
+
+/**
+ * True only for a unique violation on one of the named constraints.
+ *
+ * Both halves matter. A `23505` from some other index is a different problem
+ * wearing the same number, and reporting it as "that reference is taken" would
+ * send an administrator to change a value that was never the trouble.
+ */
+function isUniqueViolationOn(error: unknown, constraints: readonly string[]): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; constraint?: unknown };
+
+  return (
+    candidate.code === UNIQUE_VIOLATION &&
+    typeof candidate.constraint === 'string' &&
+    constraints.includes(candidate.constraint)
+  );
+}
+
+/**
+ * Two things that can happen, as values rather than a mixture of values and
+ * thrown errors. A taken slug is an ordinary answer this endpoint gives; a lost
+ * connection is not, and still throws.
+ */
+export type AdminRoomTypeCreateResult =
+  | { outcome: 'created'; roomType: AdminRoomTypeDetail }
+  | { outcome: 'slug-taken' };
+
+/**
+ * Creates one room type, always as a draft.
+ *
+ * No transaction: it is a single INSERT, and the only thing that can go wrong
+ * in a way worth naming is the slug already being in use.
+ *
+ * That is not pre-checked. `room_types_slug_key` is the authority, and a SELECT
+ * beforehand would only widen the window in which the answer changes — two
+ * administrators submitting the same slug at once would both see it free and
+ * one would still fail at the insert. Asking the constraint is asking the only
+ * thing that knows.
+ *
+ * The repository writes `is_active = false` as a literal, so nothing here has
+ * to remember to. No physical room is created.
+ */
+export async function createAdminRoomType(
+  create: AdminRoomTypeCreate,
+): Promise<AdminRoomTypeCreateResult> {
+  try {
+    return { outcome: 'created', roomType: await insertAdminRoomType(create) };
+  } catch (error) {
+    if (isUniqueViolationOn(error, [SLUG_CONSTRAINT])) {
+      return { outcome: 'slug-taken' };
+    }
+
+    // Any other database failure is a fault, not an answer.
+    throw error;
+  }
+}
+
+/**
+ * Three things that can happen. A caller that forgets one should fail to
+ * compile rather than fail in production.
+ */
+export type AdminRoomTypeCapacityResult =
+  | { outcome: 'updated'; roomType: AdminRoomTypeDetail }
+  | { outcome: 'not-found' }
+  | { outcome: 'capacity-conflict' };
+
+/**
+ * Changes one room type's capacity, serialized against every booking and every
+ * other capacity change on the same room type.
+ *
+ * The whole decision happens inside one transaction holding the row's
+ * `FOR UPDATE` lock: read the current capacity, count what a lower one would
+ * contradict, then write. A booking for the same room type holds
+ * `FOR KEY SHARE`, which conflicts, so it either finished before this lock was
+ * granted — and is therefore in the count — or waits and re-reads the capacity
+ * this transaction committed. Neither order can produce a booking validated
+ * against a capacity the hotel no longer offers.
+ *
+ * Raising capacity, or setting it to what it already is, contradicts nothing
+ * and skips the count entirely: no existing party can stop fitting in a room
+ * that got larger. A same-value request is allowed and moves `updated_at`; it
+ * is not worth a separate no-op contract to avoid that.
+ *
+ * Lowering it is the only case that can be refused, and the refusal carries a
+ * count of nothing — no booking reference, no guest, no date. The fix is a
+ * decision about real guests, and this endpoint is not where their details are
+ * read out.
+ *
+ * Nothing here writes `reservations`. The guest counts on stays already booked
+ * are what those guests agreed to.
+ */
+export async function changeAdminRoomTypeCapacity(
+  slug: string,
+  capacity: number,
+): Promise<AdminRoomTypeCapacityResult> {
+  const client = await dbPool.connect();
+  let inTransaction = false;
+
+  try {
+    await client.query('BEGIN');
+    inTransaction = true;
+
+    const locked = await lockAdminRoomTypeBySlug(client, slug);
+
+    if (!locked) {
+      // Nothing was read that matters and nothing was written; the rollback
+      // just ends the transaction. The flag is cleared only once it has
+      // actually succeeded, so a rollback that throws still reaches the
+      // handler below.
+      await client.query('ROLLBACK');
+      inTransaction = false;
+
+      return { outcome: 'not-found' };
+    }
+
+    // Only a reduction can contradict a stay that is already booked.
+    if (capacity < locked.capacity) {
+      const conflicting = await countReservationsAboveCapacity(client, locked.roomTypeId, capacity);
+
+      if (conflicting > 0) {
+        await client.query('ROLLBACK');
+        inTransaction = false;
+
+        return { outcome: 'capacity-conflict' };
+      }
+    }
+
+    const roomType = await updateAdminRoomTypeCapacity(client, locked.roomTypeId, capacity);
+
+    if (!roomType) {
+      // The row is held by this transaction's own lock, so it cannot have
+      // disappeared. A fault, never a missing room type.
+      throw new Error('Room type vanished while its capacity was being updated');
+    }
+
+    // Cleared only after COMMIT returns, so a commit that fails is still an
+    // open transaction as far as the handler below is concerned.
+    await client.query('COMMIT');
+    inTransaction = false;
+
+    return { outcome: 'updated', roomType };
+  } catch (error) {
+    // One rollback path for every failure, including a failed COMMIT.
+    if (inTransaction) {
+      inTransaction = false;
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        console.error('Failed to roll back room type capacity transaction:', rollbackError);
+      }
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
 }

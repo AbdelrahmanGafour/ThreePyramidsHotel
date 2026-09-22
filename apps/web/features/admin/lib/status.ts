@@ -37,6 +37,19 @@ export const roomTypeStatus = {
   archived: { label: "Archived", tone: "muted", shape: "ring" },
 } satisfies Record<string, StatusMeta>;
 
+/**
+ * A physical room is in service or it is not.
+ *
+ * Deliberately separate from `roomTypeStatus`, and deliberately not labelled
+ * "Archived": a room type is published or archived, a room is available to
+ * allocate or taken out of service. The two are different facts about
+ * different rows, and one label for both would suggest otherwise.
+ */
+export const physicalRoomStatus = {
+  active: { label: "Active", tone: "moss", shape: "filled" },
+  inactive: { label: "Out of service", tone: "brass", shape: "ring" },
+} satisfies Record<string, StatusMeta>;
+
 export const roomStatus: Record<RoomAvailability, StatusMeta> = {
   available: { label: "Available", tone: "moss", shape: "ring" },
   occupied: { label: "Occupied", tone: "lapis", shape: "filled" },

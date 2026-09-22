@@ -2,6 +2,7 @@ import "server-only";
 
 import { ApiConfigurationError, resolveApiBaseUrl } from "@/shared/server/apiBaseUrl";
 import type {
+  AdminRoomTypeCreate,
   AdminRoomTypeDetail,
   AdminRoomTypeListItem,
   AdminRoomTypeUpdate,
@@ -52,6 +53,26 @@ const INVALID_ROOM_TYPE_UPDATE_ERROR = {
 const ROOM_TYPE_NOT_FOUND_ERROR = {
   code: "ROOM_TYPE_NOT_FOUND",
   message: "Room type not found",
+} as const;
+
+const INVALID_ROOM_TYPE_CREATE_ERROR = {
+  code: "INVALID_ROOM_TYPE_CREATE",
+  message: "Invalid room type creation request",
+} as const;
+
+const ROOM_TYPE_SLUG_TAKEN_ERROR = {
+  code: "ROOM_TYPE_SLUG_TAKEN",
+  message: "Room type reference is already in use",
+} as const;
+
+const INVALID_ROOM_TYPE_CAPACITY_ERROR = {
+  code: "INVALID_ROOM_TYPE_CAPACITY",
+  message: "Invalid room type capacity",
+} as const;
+
+const ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_ERROR = {
+  code: "ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS",
+  message: "Room type capacity conflicts with existing upcoming reservations",
 } as const;
 
 // The two ways this client can fail before the API answers. Distinct on
@@ -559,6 +580,201 @@ export async function updateAdminRoomType(
 
     if (response.status === 404 && matchesApiError(payload, ROOM_TYPE_NOT_FOUND_ERROR)) {
       return { state: "not-found" };
+    }
+
+    return { state: "unavailable", reason: `The hotel API returned ${response.status}.` };
+  }
+
+  if (!response.ok) {
+    return { state: "unavailable", reason: `The hotel API returned ${response.status}.` };
+  }
+
+  const payload = await readJson(response);
+
+  if (payload === undefined) {
+    return { state: "unavailable", reason: UNREADABLE_RESPONSE_REASON };
+  }
+
+  const data = toDetail(payload, slug);
+
+  if (!data) {
+    return { state: "unavailable", reason: UNEXPECTED_RESPONSE_REASON };
+  }
+
+  return { state: "ok", data };
+}
+
+/**
+ * Four outcomes for creating a room type. A refused body and a slug someone
+ * already used are ordinary answers this endpoint gives; an unreachable API is
+ * neither.
+ */
+export type AdminRoomTypeCreateResult =
+  | { state: "ok"; data: AdminRoomTypeDetail }
+  | { state: "unauthenticated" }
+  | { state: "invalid-create" }
+  | { state: "slug-taken" }
+  | { state: "unavailable"; reason: string };
+
+/**
+ * Creates one room type, which the API always stores as an inactive draft.
+ *
+ * Exactly one HTTP request, and never retried. A POST whose connection dropped
+ * may well have committed first, so repeating it could create a second room
+ * type or turn a success into a confusing "reference already in use". The
+ * caller is told the outcome is unknown instead.
+ *
+ * The body is built from the caller's typed value rather than forwarded from
+ * an arbitrary object, so nothing a caller happens to be holding can reach the
+ * API. What may be created remains the API's rule; this client only carries
+ * the request, and never sends `isActive` — the type has no such field.
+ */
+export async function createAdminRoomType(
+  create: AdminRoomTypeCreate,
+  cookie?: string,
+): Promise<AdminRoomTypeCreateResult> {
+  const resolved = resolveBaseUrl();
+
+  if (!resolved.ok) {
+    return { state: "unavailable", reason: resolved.reason };
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${resolved.baseUrl}${ADMIN_ROOM_TYPES_PATH}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders(cookie) },
+      body: JSON.stringify(create),
+      // A mutation is never cacheable.
+      cache: "no-store",
+    });
+  } catch {
+    // The request may never have arrived — or may have arrived and committed
+    // before the connection failed. Reported as an outage, never as a refusal
+    // and never as success, and never retried here.
+    return { state: "unavailable", reason: UNREACHABLE_REASON };
+  }
+
+  if (response.status === 401) {
+    return await classifyUnauthenticated(response);
+  }
+
+  // Status alone is not enough: each of these has a contracted body, and
+  // anything else answering with the same number is not this contract.
+  if (response.status === 400 || response.status === 409) {
+    const payload = await readJson(response);
+
+    if (response.status === 400 && matchesApiError(payload, INVALID_ROOM_TYPE_CREATE_ERROR)) {
+      return { state: "invalid-create" };
+    }
+
+    if (response.status === 409 && matchesApiError(payload, ROOM_TYPE_SLUG_TAKEN_ERROR)) {
+      return { state: "slug-taken" };
+    }
+
+    return { state: "unavailable", reason: `The hotel API returned ${response.status}.` };
+  }
+
+  if (!response.ok) {
+    return { state: "unavailable", reason: `The hotel API returned ${response.status}.` };
+  }
+
+  const payload = await readJson(response);
+
+  if (payload === undefined) {
+    return { state: "unavailable", reason: UNREADABLE_RESPONSE_REASON };
+  }
+
+  const data = toDetail(payload, create.slug);
+
+  if (!data) {
+    return { state: "unavailable", reason: UNEXPECTED_RESPONSE_REASON };
+  }
+
+  return { state: "ok", data };
+}
+
+/**
+ * Six outcomes for a capacity change. A malformed slug, a malformed capacity
+ * and a capacity that contradicts an upcoming stay are three different
+ * answers, and a page that treats them alike would tell an administrator to
+ * fix the wrong thing.
+ */
+export type AdminRoomTypeCapacityResult =
+  | { state: "ok"; data: AdminRoomTypeDetail }
+  | { state: "unauthenticated" }
+  | { state: "invalid-reference" }
+  | { state: "invalid-capacity" }
+  | { state: "not-found" }
+  | { state: "capacity-conflict" }
+  | { state: "unavailable"; reason: string };
+
+/**
+ * Changes one room type's capacity.
+ *
+ * Its own endpoint rather than a field of the general update, because it is
+ * the one value that can be refused: lowering it below what an upcoming stay
+ * already booked is a conflict, not a validation error.
+ *
+ * Exactly one HTTP request, and never retried — the same reasoning as every
+ * other mutation here.
+ *
+ * The slug is passed through untouched, never trimmed or lower-cased.
+ */
+export async function updateAdminRoomTypeCapacity(
+  slug: string,
+  capacity: number,
+  cookie?: string,
+): Promise<AdminRoomTypeCapacityResult> {
+  const resolved = resolveBaseUrl();
+
+  if (!resolved.ok) {
+    return { state: "unavailable", reason: resolved.reason };
+  }
+
+  // Encoded as exactly one path segment: the slug is caller input, and a slash
+  // or a query character in it must not become part of the URL's structure.
+  const url = `${resolved.baseUrl}${ADMIN_ROOM_TYPES_PATH}/${encodeURIComponent(slug)}/capacity`;
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders(cookie) },
+      body: JSON.stringify({ capacity }),
+      cache: "no-store",
+    });
+  } catch {
+    return { state: "unavailable", reason: UNREACHABLE_REASON };
+  }
+
+  if (response.status === 401) {
+    return await classifyUnauthenticated(response);
+  }
+
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    const payload = await readJson(response);
+
+    if (response.status === 400) {
+      if (matchesApiError(payload, INVALID_ROOM_TYPE_SLUG_ERROR)) {
+        return { state: "invalid-reference" };
+      }
+      if (matchesApiError(payload, INVALID_ROOM_TYPE_CAPACITY_ERROR)) {
+        return { state: "invalid-capacity" };
+      }
+    }
+
+    if (response.status === 404 && matchesApiError(payload, ROOM_TYPE_NOT_FOUND_ERROR)) {
+      return { state: "not-found" };
+    }
+
+    if (
+      response.status === 409 &&
+      matchesApiError(payload, ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_ERROR)
+    ) {
+      return { state: "capacity-conflict" };
     }
 
     return { state: "unavailable", reason: `The hotel API returned ${response.status}.` };
