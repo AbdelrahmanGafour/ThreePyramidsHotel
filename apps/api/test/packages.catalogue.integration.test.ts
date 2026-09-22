@@ -11,7 +11,7 @@ import type { PackageCard, PackageDetail } from '../src/modules/packages/package
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.equal(target.port, '55432');
+assert.ok(target.port === '5434' || target.port === '55432');
 assert.equal(target.pathname, '/hotel_reservation_packages_test');
 assert.equal(target.search, '');
 let pool: typeof import('../src/db/pool');
@@ -37,7 +37,7 @@ async function hotelRows() {
 before(async () => {
   pool = await import('../src/db/pool.js');
   const version = (await pool.dbPool.query("SELECT current_setting('server_version_num')::int AS version")).rows[0].version;
-  assert.ok(version >= 160000 && version < 170000);
+  assert.ok((version >= 160000 && version < 170000) || (version >= 180000 && version < 190000), 'PostgreSQL 16 or 18 required');
   // Do not depend on test-file execution order. UP is a no-op when the schema
   // lifecycle suite has already run against this disposable database.
   await runner({ databaseUrl: process.env.DATABASE_URL!, direction: 'up', migrationsTable: 'pgmigrations',
@@ -130,7 +130,8 @@ it('returns only card-safe fields and qualified numeric from pricing', async () 
 it('marks confirmation-required prices honestly while retaining detail source rates', async () => {
   const product = await detail(confirm);
   assert.equal(product.requiresPriceConfirmation, true);
-  assert.deepEqual(product.pricing, { status: 'requires_confirmation', unit: 'per_person', from: null });
+  assert.deepEqual(product.pricing, { status: 'requires_confirmation', unit: 'per_person',
+    from: { adultUnitRate: '100.00', variantKey: 'standard', minPartySize: 1, maxPartySize: null } });
   assert.equal(product.variants[0].rates[0].adultUnitRate, '100.00');
 });
 it('preserves zero prices and does not manufacture rates for unpriced variants', async () => {

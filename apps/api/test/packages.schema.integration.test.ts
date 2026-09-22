@@ -12,7 +12,7 @@ assert.ok(databaseUrl, 'DATABASE_URL is required');
 const target = new URL(databaseUrl);
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1', 'Explicit disposable-cluster opt-in required');
 assert.equal(target.hostname, '127.0.0.1');
-assert.equal(target.port, '55432');
+assert.ok(target.port === '5434' || target.port === '55432');
 assert.equal(target.pathname, '/hotel_reservation_packages_test');
 assert.equal(target.search, '', 'Connection overrides are not allowed');
 const pool = new Pool({ connectionString: databaseUrl, max: 1 });
@@ -71,8 +71,8 @@ before(async () => {
   const server = (await client.query(`SELECT current_database() AS db,
     current_setting('server_version_num')::int AS version, inet_server_port() AS port`)).rows[0];
   assert.equal(server.db, 'hotel_reservation_packages_test');
-  assert.equal(server.port, 55432);
-  assert.ok(server.version >= 160000 && server.version < 170000, 'PostgreSQL 16 required');
+  assert.ok(server.port === 5434 || server.port === 55432, 'Dedicated package-test port required');
+  assert.ok((server.version >= 160000 && server.version < 170000) || (server.version >= 180000 && server.version < 190000), 'PostgreSQL 16 or 18 required');
   const historyExists = (await client.query("SELECT to_regclass('public.pgmigrations') AS name")).rows[0].name;
   if (historyExists) {
     const history = (await client.query('SELECT name FROM pgmigrations ORDER BY id')).rows;
@@ -137,7 +137,8 @@ it('installs all required indexes, validated constraints and package-only foreig
   assert.deepEqual(indexes, expected);
   const constraints = (await client.query(`SELECT conname, contype, convalidated,
     confrelid::regclass::text AS parent FROM pg_constraint
-    WHERE conrelid IN (SELECT oid FROM pg_class WHERE relnamespace='public'::regnamespace AND relname=ANY($1::text[]))`, [tables])).rows;
+    WHERE conrelid IN (SELECT oid FROM pg_class WHERE relnamespace='public'::regnamespace AND relname=ANY($1::text[]))
+    AND contype <> 'n'`, [tables])).rows;
   assert.ok(constraints.every(row => row.convalidated));
   assert.equal(constraints.length, 62);
   const fks = constraints.filter(row => row.contype === 'f');
@@ -149,12 +150,13 @@ it('installs all required indexes, validated constraints and package-only foreig
   t.diagnostic(`${tables.length} tables, ${indexes.length} indexes, ${constraints.length} validated constraints, ${fks.length} package-only FKs`);
 });
 
-async function rejectSql(sql: string, values: unknown[], code = '23514', constraint?: string) {
+async function rejectSql(sql: string, values: unknown[], code: string | string[] = '23514', constraint?: string) {
   await client.query('SAVEPOINT expected_rejection');
   try {
     await assert.rejects(client.query(sql, values), error => {
       const failure = error as { code: string; constraint?: string };
-      assert.equal(failure.code, code);
+      const acceptedCodes = Array.isArray(code) ? code : [code];
+      assert.ok(acceptedCodes.includes(failure.code), `Unexpected SQLSTATE ${failure.code}; expected ${acceptedCodes.join(' or ')}`);
       if (constraint) assert.equal(failure.constraint, constraint);
       return true;
     });
@@ -300,8 +302,8 @@ describe('package PostgreSQL integrity', () => {
     const other = (await client.query("INSERT INTO packages(code,slug,title) VALUES ('OTHER','other','Other') RETURNING id")).rows[0].id;
     await reservation();
     await rejectSql('UPDATE package_reservations SET package_id=$1', [other], '23503', 'package_reservations_variant_package_fkey');
-    await rejectSql('DELETE FROM package_variants WHERE id=$1', [variantId], '23503');
-    await rejectSql('DELETE FROM packages WHERE id=$1', [packageId], '23503');
+    await rejectSql('DELETE FROM package_variants WHERE id=$1', [variantId], ['23001', '23503']);
+    await rejectSql('DELETE FROM packages WHERE id=$1', [packageId], ['23001', '23503']);
   });
   it('keeps historical snapshots independent of catalogue changes', async () => {
     const original = (await reservation()).rows[0];

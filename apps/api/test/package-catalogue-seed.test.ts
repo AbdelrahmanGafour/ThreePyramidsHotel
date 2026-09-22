@@ -63,6 +63,13 @@ describe('generic package catalogue validation', () => {
     });
   }
 
+  it('accepts a variant with no known rate instead of inventing a price', () => {
+    const item = fixture();
+    item.requiresPriceConfirmation = true;
+    item.variants[0].rates = [];
+    assert.doesNotThrow(() => assertBrochureCatalogue([item]));
+  });
+
   for (const amount of ['0.00', '0.01', '9999999999.99']) {
     it(`accepts exact EGP amount ${amount}`, () => {
       const item = fixture();
@@ -100,7 +107,6 @@ describe('generic package catalogue validation', () => {
     ['multiple defaults', p => { p.variants.push({ ...structuredClone(p.variants[0]), key: 'other' }); }, /default variant/],
     ['missing single default', p => { p.variants[0].isDefault = false; }, /default variant/],
     ['invalid boolean', p => { p.requiresPriceConfirmation = 'false' as never; }, /confirmation flag/],
-    ['missing rates', p => { p.variants[0].rates = []; }, /no rate tiers/],
     ['zero party size', p => { p.variants[0].rates[0].minPartySize = 0; }, /min party size/],
     ['fractional party size', p => { p.variants[0].rates[0].minPartySize = 1.5; }, /min party size/],
     ['integer overflow', p => { p.variants[0].rates[0].maxPartySize = 2147483648; }, /max party size/],

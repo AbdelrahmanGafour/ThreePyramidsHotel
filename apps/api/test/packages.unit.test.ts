@@ -95,9 +95,10 @@ describe('package service pricing and validation', () => {
     assert.equal(result.currency, 'EGP');
     assert.ok(!('fromRate' in result));
   });
-  it('suppresses guaranteed display prices for confirmation-required products', () => {
+  it('preserves display rates while marking confirmation-required products honestly', () => {
     const result = service.toPackageCard(mapPackageCardRow({ ...card, requires_price_confirmation: true }));
-    assert.deepEqual(result.pricing, { status: 'requires_confirmation', unit: 'per_person', from: null });
+    assert.deepEqual(result.pricing, { status: 'requires_confirmation', unit: 'per_person',
+      from: { adultUnitRate: '80.25', variantKey: 'standard', minPartySize: 3, maxPartySize: null } });
   });
   it('does not invent zero prices when no rates exist', () => {
     const result = service.toPackageCard(mapPackageCardRow({ ...card, from_rate: null }));

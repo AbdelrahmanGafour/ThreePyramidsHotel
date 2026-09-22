@@ -83,10 +83,8 @@ function isDecimalAmount(value: unknown): value is string {
 }
 
 function assertRateTiers(variant: PackageVariantSeed, packageCode: string): void {
-  if (variant.rates.length === 0) {
-    throw new Error(`Package seed validation failed: ${packageCode}/${variant.key} has no rate tiers`);
-  }
-
+  // A brochure product may intentionally have no deterministic rate rows yet.
+  // That is represented as unavailable/requires-confirmation data, never as a fabricated zero.
   const sorted = [...variant.rates].sort((left, right) => left.minPartySize - right.minPartySize);
 
   for (let index = 0; index < sorted.length; index += 1) {

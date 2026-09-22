@@ -8,7 +8,7 @@ export function toPackageCard(record: PackageCardRecord): PackageCard {
     code: record.code, slug: record.slug, title: record.title, summary: record.summary,
     durationLabel: record.durationLabel, scheduleLabel: record.scheduleLabel, operatingDays: record.operatingDays,
     currency: record.currency, requiresPriceConfirmation: record.requiresPriceConfirmation,
-    pricing: { status, unit: 'per_person', from: status === 'from' ? record.fromRate : null },
+    pricing: { status, unit: 'per_person', from: status === 'unavailable' ? null : record.fromRate },
   };
 }
 
