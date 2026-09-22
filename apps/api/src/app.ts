@@ -8,6 +8,7 @@ import { availabilityRouter } from './modules/availability/availability.routes';
 import { healthRouter } from './modules/health/health.routes';
 import { reservationsRouter } from './modules/reservations/reservations.routes';
 import { roomsRouter } from './modules/rooms/rooms.routes';
+import { packagesRouter } from './modules/packages/packages.routes';
 
 /**
  * Recognizes only a body-parser JSON failure, by the marker express.json()
@@ -34,6 +35,7 @@ export function createApp(): Express {
 
   app.use('/health', healthRouter);
   app.use('/api/v1/rooms', roomsRouter);
+  app.use('/api/v1/packages', packagesRouter);
   app.use('/api/v1/availability', availabilityRouter);
   app.use('/api/v1/reservations', reservationsRouter);
   app.use('/api/v1/admin/auth', adminAuthRouter);
