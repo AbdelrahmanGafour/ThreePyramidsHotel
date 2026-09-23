@@ -819,8 +819,16 @@ describe('deleting', () => {
           await mediaRepository.deleteMediaAssetById(client, images[1]!.mediaAssetId);
         }),
       (error: { code?: string; constraint?: string }) => {
-        assert.equal(error.code, '23503');
         assert.equal(error.constraint, 'room_type_images_media_asset_id_fkey');
+        // PostgreSQL 16 reports 23503 (foreign_key_violation) for a delete a
+        // RESTRICT foreign key refuses; PostgreSQL 18 reports the more
+        // specific 23001 (restrict_violation). Both mean that constraint
+        // refused this delete, which is what this test is about; the
+        // constraint name above is what keeps the assertion exact.
+        assert.ok(
+          error.code === '23001' || error.code === '23503',
+          `expected 23001 or 23503 from RESTRICT, got ${error.code}`,
+        );
 
         return true;
       },

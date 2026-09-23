@@ -158,6 +158,38 @@ async function violation(run: () => Promise<unknown>): Promise<Violation> {
   assert.fail('expected PostgreSQL to reject the statement');
 }
 
+/**
+ * The two SQLSTATEs a RESTRICT-mediated delete refusal can carry.
+ *
+ * PostgreSQL 16 reports 23503 (foreign_key_violation) when a RESTRICT
+ * foreign key refuses a delete; PostgreSQL 18 reports the more specific
+ * 23001 (restrict_violation). Both say the same thing — that constraint
+ * refused that delete — so pinning one of them would assert which server
+ * major is running rather than anything about this schema.
+ *
+ * Deliberately not used for the insert-side foreign-key tests: inserting a
+ * child row whose parent does not exist is an ordinary foreign_key_violation
+ * on every version, is not RESTRICT-mediated, and stays pinned to 23503.
+ */
+const RESTRICT_REFUSAL_CODES = ['23001', '23503'];
+
+/**
+ * Asserts a delete was refused by one exact constraint, without pinning the
+ * server's choice of integrity SQLSTATE.
+ *
+ * The constraint name stays exact, so this still fails if the wrong rule —
+ * or no rule — refused the statement. That RESTRICT rather than CASCADE is
+ * declared at all is pinned separately and structurally, by the
+ * `confdeltype = 'r'` catalog assertion below, which no SQLSTATE affects.
+ */
+function assertRestrictRefusal(actual: Violation, constraint: string): void {
+  assert.equal(actual.constraint, constraint);
+  assert.ok(
+    RESTRICT_REFUSAL_CODES.includes(actual.code),
+    `expected ${RESTRICT_REFUSAL_CODES.join(' or ')} from ${constraint}, got ${actual.code}`,
+  );
+}
+
 /** The columns one index covers, in index order, plus what kind of index it is. */
 async function indexShape(name: string): Promise<{
   columns: string[];
@@ -548,9 +580,9 @@ describe('room_type_images ownership', () => {
     const mediaAssetId = await insertAsset();
     await linkImage({ roomTypeId: roomTypeIds[slugs.restrict]!, mediaAssetId });
 
-    assert.deepEqual(
+    assertRestrictRefusal(
       await violation(() => dbPool.query('DELETE FROM room_types WHERE id = $1', [roomTypeIds[slugs.restrict]])),
-      { code: '23503', constraint: 'room_type_images_room_type_id_fkey' },
+      'room_type_images_room_type_id_fkey',
     );
   });
 
@@ -558,9 +590,9 @@ describe('room_type_images ownership', () => {
     const mediaAssetId = await insertAsset();
     await linkImage({ roomTypeId: roomTypeIds[slugs.restrict]!, mediaAssetId });
 
-    assert.deepEqual(
+    assertRestrictRefusal(
       await violation(() => dbPool.query('DELETE FROM media_assets WHERE id = $1', [mediaAssetId])),
-      { code: '23503', constraint: 'room_type_images_media_asset_id_fkey' },
+      'room_type_images_media_asset_id_fkey',
     );
   });
 
