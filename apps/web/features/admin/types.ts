@@ -295,6 +295,38 @@ export type AdminPhysicalRoomUpdate = {
   isActive?: boolean;
 };
 
+/**
+ * One image of one room type, exactly as the API's admin-safe DTO returns it.
+ *
+ * `reference` is the image's public identity — a canonical UUID, and the only
+ * identifier this shape ever carries. Deliberately absent: `storageKey`,
+ * `checksumSha256`, and both internal database ids (`media_assets.id`,
+ * `room_type_images.id`) — none of them ever left the API in the first place,
+ * so there is nothing to strip here; this type simply never grows a field for
+ * them.
+ *
+ * `url` is the public image URL exactly as the API composed it. It is data
+ * this app reads and passes to `next/image`, never something built here from
+ * a hostname or an environment variable — `MEDIA_PUBLIC_BASE_URL` only tells
+ * `next/image` which remote origin it may optimize, and has no bearing on
+ * what this field's value actually is for one image.
+ */
+export type AdminRoomTypeImage = {
+  reference: string;
+  url: string;
+  contentType: "image/webp";
+  byteSize: number;
+  width: number;
+  height: number;
+  altText: string | null;
+  sortOrder: number;
+  isCover: boolean;
+  /** ISO 8601 instant. */
+  createdAt: string;
+  /** ISO 8601 instant. */
+  updatedAt: string;
+};
+
 export type ReservationStatus = "confirmed" | "pending" | "cancelled" | "checked-in" | "checked-out";
 export type RoomAvailability = "available" | "occupied" | "blocked";
 export type InquiryStatus = "new" | "in-progress" | "replied";
