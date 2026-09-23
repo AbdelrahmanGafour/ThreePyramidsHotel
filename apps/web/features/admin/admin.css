@@ -781,6 +781,46 @@ a.adm-ref-link:hover {
   }
 }
 
+/* ---- Room type images ---------------------------------------------------
+   A thumbnail beside its controls, stacked on narrow screens and side by
+   side once there is room — the same hairline-separated list treatment as
+   `.adm-rooms`, with a thumbnail column added. */
+.adm-images > li {
+  display: grid;
+  gap: 0.9rem;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--adm-rule-soft);
+}
+
+.adm-images > li:first-child {
+  border-top: 1px solid var(--adm-rule);
+}
+
+@media (min-width: 640px) {
+  .adm-images > li {
+    grid-template-columns: 160px minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.adm-image-thumb {
+  overflow: hidden;
+  border: 1px solid var(--adm-rule);
+  background: rgba(30, 24, 21, 0.04);
+}
+
+.adm-image-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.adm-image-body {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 /* ---- Pager ------------------------------------------------------------- */
 .adm-pager {
   display: flex;
