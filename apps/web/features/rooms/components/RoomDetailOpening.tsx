@@ -1,9 +1,9 @@
 import { RoomGallery } from "@/features/rooms/components/RoomGallery";
 import { RoomSummaryPanel } from "@/features/rooms/components/RoomSummaryPanel";
-import type { Room } from "@/features/rooms/data/roomsData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 type RoomDetailOpeningProps = {
-  room: Room;
+  room: RoomWithPresentation;
 };
 
 // Photo beside the room's identity, key facts, price, and one booking action,

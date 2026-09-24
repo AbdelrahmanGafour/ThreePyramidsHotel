@@ -1,10 +1,10 @@
-import type { Room } from "@/features/rooms/data/roomsData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 export type RoomFact = { label: string; value: string };
 
 // Only confirmed specs render, and only the ones actually set — no
 // placeholder standing in for a missing figure.
-export function getRoomFacts(room: Room): RoomFact[] {
+export function getRoomFacts(room: RoomWithPresentation): RoomFact[] {
   return [
     room.sleeps ? { label: "Sleeps", value: `${room.sleeps} guests` } : null,
     room.bedType ? { label: "Bed", value: room.bedType } : null,
@@ -15,7 +15,7 @@ export function getRoomFacts(room: Room): RoomFact[] {
 
 // Label above value in a two-column grid: readable at a glance and easy to
 // compare card-to-card, with no tiny uppercase run-on line.
-export function RoomFactList({ room, className = "" }: { room: Room; className?: string }) {
+export function RoomFactList({ room, className = "" }: { room: RoomWithPresentation; className?: string }) {
   const facts = getRoomFacts(room);
   if (!facts.length) return null;
 

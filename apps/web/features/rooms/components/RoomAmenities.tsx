@@ -1,8 +1,8 @@
 import { InfoSection } from "@/shared/components/ui/InfoSection";
-import type { Room } from "@/features/rooms/data/roomsData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 // Renders nothing while amenities are unconfirmed — no invented features.
-export function RoomAmenities({ room }: { room: Room }) {
+export function RoomAmenities({ room }: { room: RoomWithPresentation }) {
   if (!room.amenities?.length) return null;
 
   return (

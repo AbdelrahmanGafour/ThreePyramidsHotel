@@ -5,9 +5,13 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useMotionValue, useReducedMotion } from "motion/react";
 import { luxuryEase, motionPrimitives } from "@/shared/components/motion/PremiumMotion";
-import { rooms } from "@/features/home/data/homeData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
-export function RoomsSection() {
+type RoomsSectionProps = {
+  rooms: RoomWithPresentation[];
+};
+
+export function RoomsSection({ rooms }: RoomsSectionProps) {
   const [active, setActive] = useState(0);
   const [canHover, setCanHover] = useState(false);
   const rotateX = useMotionValue(0);
@@ -21,7 +25,7 @@ export function RoomsSection() {
 
   const go = useCallback((direction: number) => {
     setActive((current) => (current + direction + rooms.length) % rooms.length);
-  }, []);
+  }, [rooms.length]);
 
   const showRoom = useCallback((index: number) => {
     setActive(index);
@@ -195,7 +199,7 @@ export function RoomsSection() {
                 exit={{ opacity: 0, y: reduceMotion ? 0 : -8 }}
                 transition={{ duration: reduceMotion ? 0 : 0.5, delay: reduceMotion ? 0 : 0.12, ease: luxuryEase }}
               >
-                <p className="label text-brass">{room.number} / Room</p>
+                <p className="label text-brass">{String(active + 1).padStart(2, "0")} / Room</p>
                 <h3 className="display mt-4 text-[clamp(1.7rem,7.2vw,2.15rem)] leading-[1.02] md:text-[clamp(1.75rem,2.55vw,2.45rem)]">
                   {room.name}
                 </h3>
@@ -203,12 +207,13 @@ export function RoomsSection() {
                   {room.description}
                 </p>
                 <div className="mt-7 border-y border-ivory/14 py-4">
-                  <p className="label text-ivory/42">Details to confirm</p>
+                  <p className="label text-ivory/42">Room details</p>
                   <p className="mt-2 text-[0.8rem] leading-[1.6] text-ivory/62">
-                    Capacity, bed, view, and size will be connected once confirmed room inventory is available.
+                    Sleeps {room.sleeps} &middot; {room.bedType}
+                    {room.view ? <> &middot; {room.view}</> : null}
                   </p>
                 </div>
-                <Link href="/rooms" className="text-link mt-6 text-brass">
+                <Link href={`/rooms/${room.slug}`} className="text-link mt-6 text-brass">
                   Explore room -&gt;
                 </Link>
               </motion.div>
@@ -221,7 +226,7 @@ export function RoomsSection() {
 
                   return (
                     <button
-                      key={item.name}
+                      key={item.slug}
                       type="button"
                       aria-pressed={selected}
                       aria-label={`Show ${item.name}`}
@@ -230,7 +235,7 @@ export function RoomsSection() {
                       }`}
                       onClick={() => showRoom(index)}
                     >
-                      <span className="text-[0.64rem] font-black tracking-[0.2em]">{item.number}</span>
+                      <span className="text-[0.64rem] font-black tracking-[0.2em]">{String(index + 1).padStart(2, "0")}</span>
                       <span className="h-px overflow-hidden bg-ivory/16">
                         <span
                           className={`block h-px origin-left bg-brass transition-transform duration-500 ${

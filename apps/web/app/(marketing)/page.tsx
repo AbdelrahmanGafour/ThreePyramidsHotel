@@ -9,14 +9,23 @@ import { LocationSection } from "@/features/home/components/LocationSection";
 import { RoomsSection } from "@/features/home/components/RoomsSection";
 import { RooftopSection } from "@/features/home/components/RooftopSection";
 import { StorySection } from "@/features/home/components/StorySection";
+import { getRooms } from "@/features/rooms/api";
 
-export default function Home() {
+// The room teaser below needs live room data; the rest of the homepage does
+// not depend on the backend at all.
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  // Secondary content only: if the room teaser can't load, the rest of the
+  // homepage still renders — no fabricated rooms are shown in its place.
+  const rooms = await getRooms().catch(() => []);
+
   return (
     <main id="main-content">
       <Hero />
       <BookingStrip />
       <StorySection />
-      <RoomsSection />
+      {rooms.length > 0 ? <RoomsSection rooms={rooms} /> : null}
       <GizaMoment />
       <RooftopSection />
       <ExperiencesSection />

@@ -9,33 +9,45 @@ import { RoomMobileBookingBar } from "@/features/rooms/components/RoomMobileBook
 import { RoomStayDetails } from "@/features/rooms/components/RoomStayDetails";
 import { RoomsReservationBand } from "@/features/rooms/components/RoomsReservationBand";
 import { RoomStory } from "@/features/rooms/components/RoomStory";
-import { rooms } from "@/features/rooms/data/roomsData";
+import { getRoomBySlug, getRooms } from "@/features/rooms/api";
 
 type RoomDetailPageProps = {
   params: Promise<{ slug: string }>;
 };
 
-export function generateStaticParams() {
-  return rooms.map((room) => ({ slug: room.slug }));
-}
+// No generateStaticParams: the canonical set of rooms is backend-owned and
+// can change without a redeploy, and this route must not require the
+// backend to be reachable at `next build` time. Rendered dynamically instead
+// (approved WFI-T03 direction) — `getRoomBySlug` already fetches with
+// `cache: "no-store"`.
+export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: RoomDetailPageProps): Promise<Metadata> {
   const { slug } = await params;
-  const room = rooms.find((item) => item.slug === slug);
+  const room = await getRoomBySlug(slug).catch(() => null);
   if (!room) return {};
 
   return {
     title: `${room.name} | Three Pyramids Boutique Hotel`,
-    description: room.description,
+    description: room.description ?? undefined,
   };
 }
 
 export default async function RoomDetailPage({ params }: RoomDetailPageProps) {
   const { slug } = await params;
-  const room = rooms.find((item) => item.slug === slug);
+
+  // A real ROOM_NOT_FOUND -> the real Next.js 404. An upstream/transport
+  // failure is a different situation entirely and is deliberately NOT
+  // caught here, so it surfaces as a genuine error rather than a
+  // misleading 404 or fabricated room data.
+  const room = await getRoomBySlug(slug);
   if (!room) notFound();
 
-  const relatedRooms = rooms.filter((item) => item.slug !== slug);
+  // Secondary content only: if fetching the related-rooms list fails, the
+  // room the guest actually navigated to should still render.
+  const relatedRooms = await getRooms()
+    .then((allRooms) => allRooms.filter((item) => item.slug !== slug))
+    .catch(() => []);
 
   return (
     <main id="main-content" className="pb-24 lg:pb-0">

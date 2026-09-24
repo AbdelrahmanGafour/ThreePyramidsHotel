@@ -1,34 +1,12 @@
 export const navItems = ["Stay", "Journeys", "Experiences", "Gallery", "Location"];
 
-export const rooms = [
-  {
-    number: "01",
-    name: "Room concept 01",
-    description:
-      "Linen, warm stone, and a shaded outlook arranged for quiet mornings.",
-    meta: ["Placeholder details", "Material direction", "To be confirmed"],
-    image: "/images/placeholders/warm-room.webp",
-    position: "48% 50%",
-  },
-  {
-    number: "02",
-    name: "Room concept 02",
-    description:
-      "An upper-floor suite with softened evening light and a private place to pause.",
-    meta: ["Placeholder details", "Evening light", "To be confirmed"],
-    image: "/images/placeholders/giza-suite-terrace.webp",
-    position: "30% 50%",
-  },
-  {
-    number: "03",
-    name: "Room concept 03",
-    description:
-      "A composed family room with stone texture, low light, and room to settle.",
-    meta: ["Placeholder details", "Stone texture", "To be confirmed"],
-    image: "/images/placeholders/arrival-courtyard.webp",
-    position: "52% 54%",
-  },
-];
+// WFI-T03: the room teaser's `name`/`description`/`slug` used to live here as
+// a second, independently-maintained copy of the same room concepts already
+// authoritative in features/rooms/data/roomsData.ts / GET /api/v1/rooms —
+// exactly the duplication that file's own header comment warned about. The
+// homepage's RoomsSection now receives real room data (backend facts +
+// presentation) as a prop from its Server Component page instead, so no
+// room array is exported from here anymore.
 
 export const experiences = [
   {

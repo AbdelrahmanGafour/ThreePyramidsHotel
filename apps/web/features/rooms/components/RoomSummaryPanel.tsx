@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { RoomFactList } from "@/features/rooms/components/RoomFactList";
-import type { Room } from "@/features/rooms/data/roomsData";
+import { formatRoomRate } from "@/features/rooms/lib/money";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 type RoomSummaryPanelProps = {
-  room: Room;
+  room: RoomWithPresentation;
 };
 
 // The fast path: name, one-line description, key facts, price, and the one
@@ -19,15 +20,15 @@ export function RoomSummaryPanel({ room }: RoomSummaryPanelProps) {
 
       <RoomFactList room={room} className="mt-5 border-t border-ink/12 pt-5" />
 
-      {room.priceFrom ? (
-        <div className="mt-6 border-t border-ink/12 pt-5">
-          <p className="text-[0.875rem] text-ink/68">Starting price</p>
-          <p className="mt-1">
-            <span className="display text-[2rem] leading-none">${room.priceFrom}</span>
-            <span className="ml-2 text-[0.9375rem] text-ink/75">per night</span>
-          </p>
-        </div>
-      ) : null}
+      <div className="mt-6 border-t border-ink/12 pt-5">
+        <p className="text-[0.875rem] text-ink/68">Starting price</p>
+        <p className="mt-1">
+          <span className="display text-[2rem] leading-none">
+            {formatRoomRate(room.baseNightlyRate, room.currency)}
+          </span>
+          <span className="ml-2 text-[0.9375rem] text-ink/75">per night</span>
+        </p>
+      </div>
 
       <Link href={`/booking?room=${room.slug}`} className="btn btn-primary mt-5 w-full">
         Reserve this room
