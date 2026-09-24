@@ -316,14 +316,65 @@ async function reconcilePackageVariants(
   item: BrochurePackageSeed,
 ): Promise<void> {
   const expectedKeys = item.variants.map((variant) => variant.key);
-  const existing = await client.query<{ key: string }>(
-    'SELECT key FROM package_variants WHERE package_id = $1 FOR UPDATE',
+  // `sort_order` is read here so the parking base below comes from rows this
+  // transaction already holds locks on, without a second round trip.
+  const existing = await client.query<{ key: string; sort_order: number }>(
+    'SELECT key, sort_order FROM package_variants WHERE package_id = $1 FOR UPDATE',
     [packageId],
   );
   const unexpected = existing.rows.map((row) => row.key).filter((key) => !expectedKeys.includes(key));
   if (unexpected.length > 0) {
     throw new Error(
       `Package seed conflict: ${item.code} has unexpected existing variants: ${unexpected.join(', ')}`,
+    );
+  }
+
+  // Reordering variants in place would otherwise trip
+  // UNIQUE(package_id, sort_order), which is NOT DEFERRABLE: PostgreSQL checks
+  // it as each row's index entry is written, not at statement end, so a single
+  // multi-row UPDATE can still collide with a row it has not reached yet.
+  //
+  // Every existing row is therefore parked above both the highest value in use
+  // and the final range 1..n before any final position is written. Existing
+  // rows are updated, never deleted and re-inserted: `package_reservations`
+  // references (variant_id, package_id) with ON DELETE RESTRICT, so variant
+  // ids have to survive.
+  const variantCount = item.variants.length;
+  const existingCount = existing.rows.length;
+  const maxExistingSortOrder = existing.rows.reduce((max, row) => {
+    if (!isPostgresInteger(row.sort_order)) {
+      throw new Error(`Package seed conflict: ${item.code} has an unreadable variant sort order`);
+    }
+    return Math.max(max, row.sort_order);
+  }, 0);
+  const base = Math.max(maxExistingSortOrder, variantCount);
+
+  // `sort_order` is int4. Written as a subtraction so the comparison itself
+  // cannot overflow, and checked before the first mutation so an impossible
+  // reorder is refused rather than surfacing as a mid-statement 22003.
+  if (base > POSTGRES_INTEGER_MAX - existingCount) {
+    throw new Error(
+      `Package seed conflict: ${item.code} cannot reorder variants without exceeding the sort order range`,
+    );
+  }
+
+  if (existingCount > 0) {
+    await client.query(
+      // ROW_NUMBER() is bigint, so the addition is performed in bigint and
+      // cannot overflow; the narrowing cast to int4 is safe because the guard
+      // above already proved base + e fits. ORDER BY id only makes the
+      // assignment reproducible — correctness does not depend on which row
+      // receives which temporary position.
+      `WITH parked AS (
+         SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn
+           FROM package_variants
+          WHERE package_id = $1
+       )
+       UPDATE package_variants AS pv
+          SET sort_order = ($2::int + parked.rn)::int
+         FROM parked
+        WHERE pv.id = parked.id`,
+      [packageId, base],
     );
   }
 

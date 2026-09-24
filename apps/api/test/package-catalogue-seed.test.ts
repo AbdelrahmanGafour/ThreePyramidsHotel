@@ -145,3 +145,162 @@ describe('generic package catalogue validation', () => {
     assert.equal(queries, 0);
   });
 });
+
+// Parking existing variants before a reorder. UNIQUE(package_id, sort_order)
+// is NOT DEFERRABLE, so PostgreSQL checks it as each row is written rather
+// than at statement end; these prove the seed never asks it to hold a
+// duplicate, and that an impossible reorder is refused before anything moves.
+describe('variant reorder parking', () => {
+  type Recorded = { text: string; values: unknown[] };
+
+  function reconcileClient(existingVariants: { key: string; sortOrder: number }[]) {
+    const statements: Recorded[] = [];
+
+    const client = {
+      async query(text: string, values: unknown[] = []): Promise<unknown> {
+        statements.push({ text, values });
+
+        if (text.includes('FROM packages')) {
+          return { rows: [{ id: '1', code: 'TEST-EXCURSION', slug: 'test-excursion' }] };
+        }
+        if (text.includes('SELECT key, sort_order FROM package_variants')) {
+          return { rows: existingVariants.map((v) => ({ key: v.key, sort_order: v.sortOrder })) };
+        }
+        if (text.includes('INSERT INTO package_variants')) {
+          return { rows: [{ id: '10' }] };
+        }
+        return { rows: [] };
+      },
+    } as unknown as PoolClient;
+
+    return { client, statements };
+  }
+
+  const find = (statements: Recorded[], needle: string) =>
+    statements.findIndex((statement) => statement.text.includes(needle));
+
+  const parkStatements = (statements: Recorded[]) =>
+    statements.filter((statement) => statement.text.includes('WITH parked'));
+
+  /** Two variants, so a genuine reorder is expressible. */
+  function twoVariantFixture(): BrochurePackageSeed {
+    const item = fixture();
+    item.variants[0].isDefault = false;
+    item.variants.push({
+      ...structuredClone(item.variants[0]),
+      key: 'second',
+      label: 'Second',
+      isDefault: false,
+    });
+    return item;
+  }
+
+  it('parks existing rows above both the values in use and the final range', async () => {
+    // The immediate-unique regression: a naive temporary range starting at
+    // n + 1 would target 3, which the second row still holds.
+    const { client, statements } = reconcileClient([
+      { key: 'standard', sortOrder: 1 },
+      { key: 'second', sortOrder: 3 },
+    ]);
+
+    await seedBrochurePackageCatalogue(client, [twoVariantFixture()]);
+
+    const park = parkStatements(statements);
+    assert.equal(park.length, 1, 'exactly one parking statement');
+    assert.equal(park[0]!.values[1], 3, 'base = max(maxExisting 3, n 2)');
+  });
+
+  it('uses the variant count as the base when existing values are lower', async () => {
+    const { client, statements } = reconcileClient([{ key: 'standard', sortOrder: 0 }]);
+
+    await seedBrochurePackageCatalogue(client, [twoVariantFixture()]);
+
+    // A legal sort_order of 0 must not drag the base below the final range.
+    assert.equal(parkStatements(statements)[0]!.values[1], 2, 'base = max(maxExisting 0, n 2)');
+  });
+
+  it('skips parking entirely when the package has no existing variants', async () => {
+    const { client, statements } = reconcileClient([]);
+
+    await seedBrochurePackageCatalogue(client, [twoVariantFixture()]);
+
+    assert.equal(parkStatements(statements).length, 0, 'nothing to park on a fresh package');
+  });
+
+  it('parks after the guards and before any other variant mutation', async () => {
+    const { client, statements } = reconcileClient([{ key: 'standard', sortOrder: 5 }]);
+
+    await seedBrochurePackageCatalogue(client, [twoVariantFixture()]);
+
+    const load = find(statements, 'SELECT key, sort_order FROM package_variants');
+    const park = find(statements, 'WITH parked');
+    const clearDefaults = find(statements, 'SET is_default = false');
+    const upsert = find(statements, 'INSERT INTO package_variants');
+
+    assert.ok(load >= 0 && park >= 0 && clearDefaults >= 0 && upsert >= 0);
+    assert.ok(load < park, 'the locked read and its guards come first');
+    assert.ok(park < clearDefaults, 'parking precedes the default reset');
+    assert.ok(park < upsert, 'parking precedes the first final position');
+  });
+
+  it('never deletes an existing variant while reordering', async () => {
+    const { client, statements } = reconcileClient([
+      { key: 'standard', sortOrder: 1 },
+      { key: 'second', sortOrder: 2 },
+    ]);
+
+    await seedBrochurePackageCatalogue(client, [twoVariantFixture()]);
+
+    for (const statement of statements) {
+      assert.doesNotMatch(statement.text, /DELETE FROM package_variants/i,
+        'variant ids must survive: package_reservations references them with RESTRICT');
+    }
+  });
+
+  it('writes final positions 1..n through the upsert loop', async () => {
+    const { client, statements } = reconcileClient([
+      { key: 'standard', sortOrder: 1 },
+      { key: 'second', sortOrder: 3 },
+    ]);
+
+    await seedBrochurePackageCatalogue(client, [twoVariantFixture()]);
+
+    const finals = statements
+      .filter((statement) => statement.text.includes('INSERT INTO package_variants'))
+      .map((statement) => statement.values[4]);
+
+    assert.deepEqual(finals, [1, 2], 'no parked value may survive a successful seed');
+  });
+
+  it('refuses a reorder that cannot fit int4, before touching any variant row', async () => {
+    const { client, statements } = reconcileClient([{ key: 'standard', sortOrder: 2147483647 }]);
+    const item = fixture();
+
+    await assert.rejects(
+      seedBrochurePackageCatalogue(client, [item]),
+      /cannot reorder variants without exceeding the sort order range/,
+    );
+
+    // The locked read happened; nothing after it did.
+    assert.ok(find(statements, 'SELECT key, sort_order FROM package_variants') >= 0);
+    assert.equal(parkStatements(statements).length, 0, 'no parking write');
+    assert.equal(find(statements, 'SET is_default = false'), -1, 'no default reset');
+    assert.equal(find(statements, 'INSERT INTO package_variants'), -1, 'no upsert');
+  });
+
+  it('still refuses an unexpected existing variant before any mutation', async () => {
+    const { client, statements } = reconcileClient([
+      { key: 'standard', sortOrder: 1 },
+      { key: 'removed', sortOrder: 2 },
+    ]);
+
+    await assert.rejects(
+      seedBrochurePackageCatalogue(client, [fixture()]),
+      /unexpected existing variants: removed/,
+    );
+
+    assert.equal(parkStatements(statements).length, 0);
+    assert.equal(find(statements, 'SET is_default = false'), -1);
+    assert.equal(find(statements, 'INSERT INTO package_variants'), -1);
+  });
+});

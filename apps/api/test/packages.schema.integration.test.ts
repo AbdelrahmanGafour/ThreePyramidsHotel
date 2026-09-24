@@ -348,6 +348,181 @@ describe('package PostgreSQL integrity', () => {
     assert.equal((await client.query('SELECT currency FROM package_rate_tiers')).rows[0].currency, 'USD');
     assert.deepEqual((await client.query('SELECT * FROM package_reservations')).rows[0], original);
   });
+
+  // Reordering variants in place has to satisfy a NOT DEFERRABLE
+  // UNIQUE(package_id, sort_order), which PostgreSQL checks as each row is
+  // written rather than at statement end. The seed parks existing rows above
+  // every value in use before writing the final 1..n positions.
+  describe('variant reorder', () => {
+    function catalogueItem(variantKeys: string[]): BrochurePackageSeed {
+      return {
+        code: 'TEST', slug: 'test-package', title: 'Synthetic package', summary: null,
+        description: null, durationLabel: null, scheduleLabel: null, operatingDays: null,
+        requiresPriceConfirmation: false, itinerary: [], content: [],
+        variants: variantKeys.map((key) => ({
+          key, label: key, isDefault: variantKeys.length === 1,
+          childMinAge: null, childMaxAge: null, childDiscountPercent: null,
+          rates: [{ minPartySize: 1, maxPartySize: null, adultUnitRate: '100.00' }],
+        })),
+      };
+    }
+
+    /** Every variant of the fixture package, keyed for stable comparison. */
+    async function variantsByKey(): Promise<Record<string, { id: string; sortOrder: number }>> {
+      const { rows } = await client.query<{ id: string; key: string; sort_order: number }>(
+        'SELECT id, key, sort_order FROM package_variants WHERE package_id = $1 ORDER BY key',
+        [packageId],
+      );
+      return Object.fromEntries(rows.map((row) => [row.key, { id: row.id, sortOrder: row.sort_order }]));
+    }
+
+    async function addVariant(key: string, sortOrder: number): Promise<void> {
+      await client.query(
+        "INSERT INTO package_variants(package_id,key,label,is_default,sort_order) VALUES ($1,$2,$2,false,$3)",
+        [packageId, key, sortOrder],
+      );
+    }
+
+    /** The beforeEach fixture variant sits at 0; move it where a case needs it. */
+    async function moveStandard(sortOrder: number): Promise<void> {
+      await client.query('UPDATE package_variants SET sort_order = $2 WHERE id = $1', [variantId, sortOrder]);
+    }
+
+    it('swaps two variants without changing their ids', async () => {
+      await moveStandard(1);
+      await addVariant('second', 2);
+      const before = await variantsByKey();
+
+      await seedBrochurePackageCatalogue(client, [catalogueItem(['second', 'standard'])]);
+
+      const after = await variantsByKey();
+      assert.equal(after.second!.sortOrder, 1);
+      assert.equal(after.standard!.sortOrder, 2);
+      assert.equal(after.standard!.id, before.standard!.id);
+      assert.equal(after.second!.id, before.second!.id);
+    });
+
+    it('reverses three variants without changing their ids', async () => {
+      await moveStandard(1);
+      await addVariant('second', 2);
+      await addVariant('third', 3);
+      const before = await variantsByKey();
+
+      await seedBrochurePackageCatalogue(client, [catalogueItem(['third', 'second', 'standard'])]);
+
+      const after = await variantsByKey();
+      assert.deepEqual(
+        [after.third!.sortOrder, after.second!.sortOrder, after.standard!.sortOrder],
+        [1, 2, 3],
+      );
+      for (const key of ['standard', 'second', 'third']) {
+        assert.equal(after[key]!.id, before[key]!.id, `${key} id must be stable`);
+      }
+    });
+
+    it('handles an insert combined with a reorder', async () => {
+      await moveStandard(1);
+      await addVariant('second', 2);
+      const before = await variantsByKey();
+
+      await seedBrochurePackageCatalogue(client, [catalogueItem(['third', 'second', 'standard'])]);
+
+      const after = await variantsByKey();
+      assert.deepEqual(
+        [after.third!.sortOrder, after.second!.sortOrder, after.standard!.sortOrder],
+        [1, 2, 3],
+      );
+      assert.equal(after.standard!.id, before.standard!.id);
+      assert.equal(after.second!.id, before.second!.id);
+      assert.ok(after.third, 'the new variant was inserted');
+    });
+
+    it('reorders when an existing variant legally sits at sort_order 0', async () => {
+      // The fixture variant is created at 0, which is valid under
+      // CHECK (sort_order >= 0) and must not drag the base below the final range.
+      const before = await variantsByKey();
+      assert.equal(before.standard!.sortOrder, 0);
+
+      await seedBrochurePackageCatalogue(client, [catalogueItem(['second', 'standard'])]);
+
+      const after = await variantsByKey();
+      assert.equal(after.second!.sortOrder, 1);
+      assert.equal(after.standard!.sortOrder, 2);
+      assert.equal(after.standard!.id, before.standard!.id);
+    });
+
+    it('reorders across sparse existing values that overlap the naive range', async () => {
+      // The immediate-unique regression: with n = 2 a temporary range starting
+      // at n + 1 would target 3, which `second` still holds when `standard` is
+      // written. Parking above max(existing) is what makes this safe.
+      await moveStandard(1);
+      await addVariant('second', 3);
+      const before = await variantsByKey();
+
+      await seedBrochurePackageCatalogue(client, [catalogueItem(['second', 'standard'])]);
+
+      const after = await variantsByKey();
+      assert.equal(after.second!.sortOrder, 1);
+      assert.equal(after.standard!.sortOrder, 2);
+      assert.equal(after.standard!.id, before.standard!.id);
+      assert.equal(after.second!.id, before.second!.id);
+    });
+
+    it('leaves final positions as exactly 1..n, with no parked value surviving', async () => {
+      await moveStandard(1);
+      await addVariant('second', 3);
+
+      await seedBrochurePackageCatalogue(client, [catalogueItem(['second', 'standard'])]);
+
+      const orders = Object.values(await variantsByKey()).map((v) => v.sortOrder).sort((a, b) => a - b);
+      assert.deepEqual(orders, [1, 2]);
+    });
+
+    it('still refuses an unexpected existing variant, leaving variants untouched', async () => {
+      await moveStandard(1);
+      await addVariant('removed', 2);
+      const before = await variantsByKey();
+
+      await assert.rejects(
+        seedBrochurePackageCatalogue(client, [catalogueItem(['standard'])]),
+        /unexpected existing variants: removed/,
+      );
+
+      assert.deepEqual(await variantsByKey(), before, 'no variant row may move before the guard passes');
+    });
+
+    it('is idempotent across a repeated reorder', async () => {
+      await moveStandard(1);
+      await addVariant('second', 3);
+
+      await seedBrochurePackageCatalogue(client, [catalogueItem(['second', 'standard'])]);
+      const first = await variantsByKey();
+      await seedBrochurePackageCatalogue(client, [catalogueItem(['second', 'standard'])]);
+
+      assert.deepEqual(await variantsByKey(), first);
+    });
+
+    it('keeps a reservation pointing at the same variant across a reorder', async () => {
+      await moveStandard(1);
+      await addVariant('second', 3);
+      const original = (await reservation()).rows[0];
+
+      await seedBrochurePackageCatalogue(client, [catalogueItem(['second', 'standard'])]);
+
+      const after = await variantsByKey();
+      assert.equal(after.standard!.id, variantId, 'the referenced variant id is unchanged');
+      assert.deepEqual((await client.query('SELECT * FROM package_reservations')).rows[0], original);
+    });
+
+    it('relies on a constraint that is still checked immediately', async () => {
+      const { rows } = await client.query<{ condeferrable: boolean; condeferred: boolean }>(
+        "SELECT condeferrable, condeferred FROM pg_constraint WHERE conname = 'package_variants_package_sort_key'",
+      );
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]!.condeferrable, false, 'parking is only necessary while this stays immediate');
+      assert.equal(rows[0]!.condeferred, false);
+    });
+  });
 });
 
 it('leaves zero package fixtures and preserves hotel schema, rows and sequence state', async t => {
