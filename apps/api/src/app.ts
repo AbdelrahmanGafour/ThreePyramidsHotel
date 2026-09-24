@@ -14,6 +14,8 @@ import { createLazyPublicMediaBaseUrlProvider, type PublicMediaBaseUrlProvider }
 import { createLazyR2MediaStorageProvider, type MediaStorageProvider } from './modules/media/media.storage';
 import { reservationsRouter } from './modules/reservations/reservations.routes';
 import { roomsRouter } from './modules/rooms/rooms.routes';
+import { packagesRouter } from './modules/packages/packages.routes';
+import { packageReservationsRouter } from './modules/package-reservations/package-reservations.routes';
 
 /**
  * What a caller may configure about the app it builds.
@@ -87,6 +89,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
 
   app.use('/health', healthRouter);
   app.use('/api/v1/rooms', roomsRouter);
+  app.use('/api/v1/packages', packagesRouter);
+  app.use('/api/v1/package-reservations', packageReservationsRouter);
   app.use('/api/v1/availability', availabilityRouter);
   app.use('/api/v1/reservations', reservationsRouter);
   app.use('/api/v1/admin/auth', adminAuthRouter);

@@ -1,23 +1,21 @@
 import { PageOpening } from "@/shared/components/ui/PageOpening";
-import { packages } from "@/features/packages/data/packagesDemoData";
+import type { PublicPackageCard } from "@/features/packages/api/contracts";
+import { formatUsdMoney, lowestPackageFrom } from "@/features/packages/lib/publicPresentation";
 
-export function PackagesHero() {
-  const prices = packages.map((pkg) => pkg.priceFrom).filter((price): price is number => typeof price === "number");
-  const lowest = prices.length ? Math.min(...prices) : null;
-
+export function PackagesHero({ packages }: { packages: PublicPackageCard[] }) {
+  const lowest = lowestPackageFrom(packages);
   return (
     <PageOpening
       eyebrow="Journeys and experiences"
       title="Curated journeys"
       meta={
         <>
-          {packages.length} journeys
-          {lowest ? <> &middot; from ${lowest} per person</> : null}
+          {packages.length} journey{packages.length === 1 ? "" : "s"}
+          {lowest ? <> &middot; from {formatUsdMoney(lowest)} per person</> : null}
         </>
       }
     >
-      Each journey combines a stay at the hotel with a planned route of places and experiences. Explore one, or enquire
-      and we&apos;ll shape it around your dates.
+      Explore day tours, excursions, multi-day journeys and Nile cruises, then send a reservation request for your preferred date.
     </PageOpening>
   );
 }
