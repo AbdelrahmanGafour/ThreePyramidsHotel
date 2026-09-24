@@ -160,7 +160,12 @@ describe('the admin inventory route table', () => {
   });
 
   it('leaves the public routers untouched', async () => {
-    const { roomsRouter } = await import('../src/modules/rooms/rooms.routes.js');
+    // Built rather than imported: the public rooms router now takes the
+    // deployment's public media base provider, exactly as the admin media
+    // routers do. Constructing the default provider reads no environment
+    // variable, and this assertion is about the route table, not media.
+    const { createRoomsRouter } = await import('../src/modules/rooms/rooms.routes.js');
+    const roomsRouter = createRoomsRouter();
     const { availabilityRouter } = await import('../src/modules/availability/availability.routes.js');
     const { reservationsRouter } = await import('../src/modules/reservations/reservations.routes.js');
 

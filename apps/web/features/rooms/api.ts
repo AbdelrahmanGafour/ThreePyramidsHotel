@@ -14,8 +14,13 @@
 // (see features/rooms/types.ts and features/rooms/lib/money.ts).
 
 import { forwardToExpress } from "@/lib/api/proxy";
-import { roomPresentationBySlug, type RoomPresentation } from "./data/roomsData";
-import type { RoomDetailResponseBody, RoomDisplay, RoomListResponseBody } from "./types";
+import { FALLBACK_ROOM_PRESENTATION, roomPresentationBySlug, type RoomPresentation } from "./data/roomsData";
+import type {
+  RoomDetailResponseBody,
+  RoomDisplay,
+  RoomListResponseBody,
+  RoomTypeImageResponse,
+} from "./types";
 
 const ROOM_NOT_FOUND_CODE = "ROOM_NOT_FOUND";
 
@@ -30,6 +35,87 @@ export type RoomWithPresentation = RoomDisplay & RoomPresentation;
 
 function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === "string";
+}
+
+/**
+ * Validates one raw API image, field by field.
+ *
+ * Nothing is spread: the object that comes back is built here from five
+ * checked values, so a field the API adds later cannot reach the UI just by
+ * existing, and a malformed one cannot be carried along unnoticed.
+ *
+ * `url` must parse as an absolute http(s) URL. The API composes it from its
+ * own media configuration and this app never rebuilds it — but it does hand
+ * it to `next/image`, which needs a real absolute URL matching a configured
+ * remote pattern, so a value that could never load is caught here rather
+ * than at render.
+ */
+function toRoomImage(value: unknown, slug: string, index: number): RoomTypeImageResponse {
+  const where = `image ${index} of room "${slug}"`;
+
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`Room API returned a non-object ${where}`);
+  }
+
+  const image = value as Record<string, unknown>;
+
+  if (typeof image.url !== "string" || image.url === "") {
+    throw new Error(`Room API response is missing a url for ${where}`);
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(image.url);
+  } catch {
+    throw new Error(`Room API returned an unusable url for ${where}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Room API returned a non-http(s) url for ${where}`);
+  }
+
+  if (!isStringOrNull(image.altText)) {
+    throw new Error(`Room API response has an invalid altText for ${where}`);
+  }
+  if (typeof image.width !== "number" || !Number.isFinite(image.width) || image.width <= 0) {
+    throw new Error(`Room API response has a non-positive width for ${where}`);
+  }
+  if (typeof image.height !== "number" || !Number.isFinite(image.height) || image.height <= 0) {
+    throw new Error(`Room API response has a non-positive height for ${where}`);
+  }
+  if (typeof image.isCover !== "boolean") {
+    throw new Error(`Room API response has a non-boolean isCover for ${where}`);
+  }
+
+  return {
+    url: image.url,
+    altText: image.altText as string | null,
+    width: image.width,
+    height: image.height,
+    isCover: image.isCover,
+  };
+}
+
+/**
+ * The images of one room, in the API's own order, which is never re-sorted
+ * here: the backend already returns them cover-first then by the
+ * administrator's arrangement, and a second sort in the UI could only
+ * disagree with the admin panel.
+ *
+ * A MISSING `images` key is read as "none", so this app still renders
+ * against an API deployed before the field existed. A present-but-malformed
+ * value is not excused: `null`, a non-array, or a bad element is real data
+ * corruption and fails loudly, exactly as every other field here does.
+ */
+function toRoomImages(value: unknown, slug: string): RoomTypeImageResponse[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error(`Room API response has a non-array images field for slug "${slug}"`);
+  }
+
+  return value.map((image, index) => toRoomImage(image, slug, index));
 }
 
 function parseFiniteNumber(field: string, value: string, slug: unknown): number {
@@ -114,6 +200,7 @@ function toRoomDisplay(value: unknown): RoomDisplay {
     view: room.view as string | null,
     baseNightlyRate: room.baseNightlyRate,
     currency: "EGP",
+    images: toRoomImages(room.images, room.slug),
   };
 }
 
@@ -121,23 +208,56 @@ function toRoomDisplay(value: unknown): RoomDisplay {
  * Merges a validated room with its presentation-only metadata, matched by
  * the same canonical slug — never a translation between different slugs.
  *
- * No repository convention exists for a generic/placeholder presentation
- * fallback: every existing presentation component instead renders nothing
- * for an individual missing field (e.g. RoomAmenities/RoomStory render
- * nothing when unset) — there is no "show a neutral image for an
- * unrecognized room" pattern anywhere in this codebase. Per WFI-T03 Phase
- * 5A's explicit instruction, this therefore fails explicitly rather than
- * inventing one: a backend room with no matching presentation entry is a
- * real content gap to fix, not something to silently paper over.
+ * A room the backend returns is a real, bookable room whether or not this
+ * app has editorial content for it yet, so a missing presentation entry
+ * falls back to FALLBACK_ROOM_PRESENTATION rather than throwing. Throwing
+ * here used to fail the ENTIRE rooms list — one unmapped slug hid every
+ * other room behind "Rooms are temporarily unavailable", which reported a
+ * content gap as an outage and made the page unusable against any backend
+ * whose slugs differ from this app's.
+ *
+ * The fallback covers presentation ONLY. Every booking-relevant fact
+ * (name, capacity, bed, size, view, rate, currency) still comes from the
+ * validated API response above and is never defaulted or invented here — a
+ * room missing those fails validation in toRoomDisplay, as before.
+ *
+ * A missing entry is still a real content gap worth closing; it is just not
+ * a reason to refuse to show the room.
  */
 function withPresentation(room: RoomDisplay): RoomWithPresentation {
-  const presentation = roomPresentationBySlug[room.slug];
+  const presentation = roomPresentationBySlug[room.slug] ?? FALLBACK_ROOM_PRESENTATION;
+  const merged = { ...room, ...presentation };
 
-  if (!presentation) {
-    throw new Error(`No presentation metadata configured for room slug: "${room.slug}"`);
+  // The room's real photography, once an administrator has uploaded any.
+  const cover = selectCoverImage(room.images);
+
+  if (!cover) {
+    // No media rows: the local presentation image stands exactly as before.
+    return merged;
   }
 
-  return { ...room, ...presentation };
+  return {
+    ...merged,
+    image: cover.url,
+    gallery: room.images.map((image) => image.url),
+    // The local `imageAlt` describes the local placeholder file, which is no
+    // longer what is on screen, so it cannot be reused to describe a
+    // different photograph. A null altText is the schema's deliberate
+    // "decorative" case and becomes the empty string it means.
+    imageAlt: cover.altText ?? "",
+  };
+}
+
+/**
+ * Which image represents the room: the one flagged as cover, or the first.
+ *
+ * The API already returns the cover first, so the `find` and the fallback
+ * normally agree. They are both here because they answer different
+ * questions — "which is the cover" and "which is first" — and a room whose
+ * cover flag was never set still needs a picture.
+ */
+function selectCoverImage(images: RoomTypeImageResponse[]): RoomTypeImageResponse | null {
+  return images.find((image) => image.isCover) ?? images[0] ?? null;
 }
 
 /** GET /api/v1/rooms, through the shared server transport. */

@@ -217,3 +217,32 @@ export const roomPresentationBySlug: Record<string, RoomPresentation> = Object.f
     },
   ]),
 );
+
+/**
+ * The neutral presentation used for a backend room that has no entry in
+ * `roomPresentationBySlug` yet.
+ *
+ * This is deliberately NOT a mapping for any particular slug, and adding one
+ * here must never be a substitute for real per-room content: it exists only
+ * so that an unmapped room still renders as itself — the backend remains the
+ * sole source of truth for its name, capacity, bed, size, view and rate,
+ * every one of which comes from the API and is displayed unchanged. Only the
+ * editorial layer (photography, atmosphere copy, amenity list, category) is
+ * missing, and this fills that layer with something that asserts nothing.
+ *
+ * Every field is chosen so it cannot state a fact about the room:
+ * - `image` is a material/texture detail, never used as any room's own cover
+ *   photo, so it cannot be mistaken for a picture of this room's interior.
+ * - `imageAlt` says plainly what the image is and why it is there.
+ * - `position` is dead centre — a CSS object-position, not a claim.
+ * - `gallery`, `story`, `amenities` and `category` are left unset, which the
+ *   existing components already handle by rendering nothing (RoomGallery
+ *   falls back to the cover alone, RoomStory and RoomAmenities return null,
+ *   RoomSummaryPanel shows the generic "Room", and `getRoomCategories`
+ *   ignores rooms with no category).
+ */
+export const FALLBACK_ROOM_PRESENTATION: RoomPresentation = {
+  image: "/images/placeholders/material-detail.webp",
+  imageAlt: "Interior material detail, shown while this room has no photography of its own",
+  position: "50% 50%",
+};

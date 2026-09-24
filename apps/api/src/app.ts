@@ -13,7 +13,7 @@ import { healthRouter } from './modules/health/health.routes';
 import { createLazyPublicMediaBaseUrlProvider, type PublicMediaBaseUrlProvider } from './modules/media/media.delivery';
 import { createLazyR2MediaStorageProvider, type MediaStorageProvider } from './modules/media/media.storage';
 import { reservationsRouter } from './modules/reservations/reservations.routes';
-import { roomsRouter } from './modules/rooms/rooms.routes';
+import { createRoomsRouter } from './modules/rooms/rooms.routes';
 import { packagesRouter } from './modules/packages/packages.routes';
 import { packageReservationsRouter } from './modules/package-reservations/package-reservations.routes';
 
@@ -88,7 +88,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use(express.json());
 
   app.use('/health', healthRouter);
-  app.use('/api/v1/rooms', roomsRouter);
+  // Public room types, built with the shared public-media provider above so a
+  // room's images carry real URLs. Resolving that base is still lazy: a room
+  // type with no images never reads it.
+  app.use('/api/v1/rooms', createRoomsRouter(publicMediaBaseUrlProvider));
   app.use('/api/v1/packages', packagesRouter);
   app.use('/api/v1/package-reservations', packageReservationsRouter);
   app.use('/api/v1/availability', availabilityRouter);
