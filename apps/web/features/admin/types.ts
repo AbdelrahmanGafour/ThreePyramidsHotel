@@ -157,6 +157,176 @@ export type AdminReservationListWindow = {
   offset: number;
 };
 
+/**
+ * One row of the admin room-type list.
+ *
+ * `roomCount` is how many physical rooms belong to this type — inventory, not
+ * availability. It says nothing about what is bookable tonight, and a type
+ * showing zero can never be booked at all.
+ *
+ * Money and measurements are exact decimal strings, as the API returned them;
+ * neither is ever a number.
+ */
+export type AdminRoomTypeListItem = {
+  slug: string;
+  name: string;
+  capacity: number;
+  baseNightlyRate: string;
+  currency: "EGP";
+  isActive: boolean;
+  sortOrder: number;
+  roomCount: number;
+  /** ISO 8601 instant. */
+  updatedAt: string;
+};
+
+/**
+ * One room type in full. The database `id` is absent by design — it is an
+ * internal join key with no meaning outside the database.
+ */
+export type AdminRoomTypeDetail = {
+  slug: string;
+  name: string;
+  shortDescription: string | null;
+  description: string | null;
+  capacity: number;
+  bedType: string | null;
+  bedCount: number | null;
+  sizeSqm: string | null;
+  view: string | null;
+  baseNightlyRate: string;
+  currency: "EGP";
+  isActive: boolean;
+  sortOrder: number;
+  roomCount: number;
+  /** ISO 8601 instant. */
+  createdAt: string;
+  /** ISO 8601 instant. */
+  updatedAt: string;
+};
+
+/**
+ * What an administrator may change about a room type in V1: these nine fields
+ * and nothing else.
+ *
+ * `slug`, `capacity` and `isActive` are absent by decision — the slug is the
+ * public identifier, capacity governs availability and reservation limits, and
+ * archiving is consequential enough to deserve its own action. `id`,
+ * `currency`, `roomCount` and the timestamps are the server's own.
+ */
+export type AdminRoomTypeUpdate = {
+  name?: string;
+  shortDescription?: string | null;
+  description?: string | null;
+  bedType?: string | null;
+  bedCount?: number | null;
+  sizeSqm?: string | null;
+  view?: string | null;
+  baseNightlyRate?: string;
+  sortOrder?: number;
+};
+
+/**
+ * A new room type, as the API accepts it.
+ *
+ * `isActive` is absent because it is not a choice. A room type is created with
+ * no physical rooms, so it cannot be allocated to anyone; the API writes
+ * `false` itself and rejects a body that tries to say otherwise. Making a room
+ * type public is a separate decision, and not one this release offers.
+ *
+ * The four required fields are required because their columns have no useful
+ * default — and because two of them cannot be corrected afterwards: the slug is
+ * the permanent public identifier, and capacity has its own guarded endpoint.
+ *
+ * The optional fields are `| null` rather than optional: "omitted" and "empty"
+ * both mean not recorded, and the form resolves that once so nothing
+ * downstream has to ask again.
+ */
+export type AdminRoomTypeCreate = {
+  slug: string;
+  name: string;
+  capacity: number;
+  /** Exact decimal string, never a number. */
+  baseNightlyRate: string;
+  sortOrder: number;
+  shortDescription: string | null;
+  description: string | null;
+  bedType: string | null;
+  bedCount: number | null;
+  /** Exact decimal string, never a number. */
+  sizeSqm: string | null;
+  view: string | null;
+};
+
+/**
+ * One physical room — what the hotel allocates, as against the room type a
+ * guest books.
+ *
+ * The database `id` and `roomTypeId` are absent by design: both are internal
+ * join keys with no meaning outside the database. A room is addressed by its
+ * number, which is unique across the whole hotel.
+ */
+export type AdminPhysicalRoom = {
+  roomNumber: string;
+  isActive: boolean;
+  /** ISO 8601 instant. */
+  createdAt: string;
+  /** ISO 8601 instant. */
+  updatedAt: string;
+};
+
+/**
+ * A new physical room. It carries no room type: which type a room belongs to
+ * comes from the route it is created under, never from the body.
+ */
+export type AdminPhysicalRoomCreate = {
+  roomNumber: string;
+};
+
+/**
+ * A change to one physical room: its number, whether it is in service, or
+ * both. At least one must be present, which the API enforces.
+ *
+ * `roomTypeId` is deliberately absent — moving a room between types is not
+ * something this system does.
+ */
+export type AdminPhysicalRoomUpdate = {
+  roomNumber?: string;
+  isActive?: boolean;
+};
+
+/**
+ * One image of one room type, exactly as the API's admin-safe DTO returns it.
+ *
+ * `reference` is the image's public identity — a canonical UUID, and the only
+ * identifier this shape ever carries. Deliberately absent: `storageKey`,
+ * `checksumSha256`, and both internal database ids (`media_assets.id`,
+ * `room_type_images.id`) — none of them ever left the API in the first place,
+ * so there is nothing to strip here; this type simply never grows a field for
+ * them.
+ *
+ * `url` is the public image URL exactly as the API composed it. It is data
+ * this app reads and passes to `next/image`, never something built here from
+ * a hostname or an environment variable — `MEDIA_PUBLIC_BASE_URL` only tells
+ * `next/image` which remote origin it may optimize, and has no bearing on
+ * what this field's value actually is for one image.
+ */
+export type AdminRoomTypeImage = {
+  reference: string;
+  url: string;
+  contentType: "image/webp";
+  byteSize: number;
+  width: number;
+  height: number;
+  altText: string | null;
+  sortOrder: number;
+  isCover: boolean;
+  /** ISO 8601 instant. */
+  createdAt: string;
+  /** ISO 8601 instant. */
+  updatedAt: string;
+};
+
 export type ReservationStatus = "confirmed" | "pending" | "cancelled" | "checked-in" | "checked-out";
 export type RoomAvailability = "available" | "occupied" | "blocked";
 export type InquiryStatus = "new" | "in-progress" | "replied";

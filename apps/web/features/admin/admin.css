@@ -613,6 +613,49 @@ a.adm-nav-item:hover {
   overflow-wrap: anywhere;
 }
 
+/* ---- Room type form ---------------------------------------------------- */
+/* A plain edit form inside a panel. It borrows the site-wide .field-* controls
+   rather than restyling inputs for the admin, so a text box is the same object
+   everywhere; only the spacing belongs to the panel. */
+.adm-form {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.1rem 1.25rem 0;
+  border-top: 1px solid var(--adm-rule);
+}
+
+.adm-field {
+  display: grid;
+  gap: 0.4rem;
+}
+
+/* The field's own hint carries its top margin from .field-hint, which would
+   double up against the grid gap above. */
+.adm-field .field-hint {
+  margin-top: 0;
+}
+
+/* Short, related fields pair up once there is room; they stack below that
+   rather than shrinking into two unusable boxes. */
+.adm-field-row {
+  display: grid;
+  gap: 1.25rem;
+}
+
+@media (min-width: 640px) {
+  .adm-field-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* The form's footer is the shared action bar, whose padding already separates
+   it from the last field. */
+.adm-form .adm-actions {
+  margin-top: 0.15rem;
+  padding-left: 0;
+  padding-right: 0;
+}
+
 /* ---- Reservation actions ----------------------------------------------- */
 .adm-actions {
   display: flex;
@@ -736,6 +779,46 @@ a.adm-ref-link:hover {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
   }
+}
+
+/* ---- Room type images ---------------------------------------------------
+   A thumbnail beside its controls, stacked on narrow screens and side by
+   side once there is room — the same hairline-separated list treatment as
+   `.adm-rooms`, with a thumbnail column added. */
+.adm-images > li {
+  display: grid;
+  gap: 0.9rem;
+  padding: 0.9rem 1.25rem;
+  border-top: 1px solid var(--adm-rule-soft);
+}
+
+.adm-images > li:first-child {
+  border-top: 1px solid var(--adm-rule);
+}
+
+@media (min-width: 640px) {
+  .adm-images > li {
+    grid-template-columns: 160px minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.adm-image-thumb {
+  overflow: hidden;
+  border: 1px solid var(--adm-rule);
+  background: rgba(30, 24, 21, 0.04);
+}
+
+.adm-image-thumb img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.adm-image-body {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
 /* ---- Pager ------------------------------------------------------------- */
