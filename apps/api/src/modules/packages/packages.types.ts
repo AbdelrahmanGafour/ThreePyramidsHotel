@@ -20,7 +20,7 @@ export type PackageCard = {
   durationLabel: string | null;
   scheduleLabel: string | null;
   operatingDays: string[] | null;
-  currency: 'EGP';
+  currency: 'USD';
   requiresPriceConfirmation: boolean;
   pricing: PackagePricing;
 };
@@ -29,7 +29,7 @@ export type PackageRate = {
   minPartySize: number;
   maxPartySize: number | null;
   adultUnitRate: string;
-  currency: 'EGP';
+  currency: 'USD';
 };
 
 export type PackageVariant = {

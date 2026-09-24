@@ -8,10 +8,22 @@ function minorUnits(value: string): bigint {
   return BigInt(value.replace(".", ""));
 }
 
-export function formatEgp(value: string): string {
+/**
+ * Renders a backend USD decimal string for display, e.g. "420.00" -> "$420.00".
+ *
+ * The string is never parsed into a number: the backend's exact
+ * `numeric(12,2)` value is the source of truth, and grouping is applied to
+ * the integer part textually so no floating-point rounding can occur here.
+ * `$` matches the currency mark already used across the public site.
+ */
+export function formatUsdMoney(value: string): string {
   const [whole, fraction] = value.split(".");
   const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `EGP ${grouped}.${fraction}`;
+
+  // Every caller receives values already validated as `\d+\.\d{2}` by the
+  // contract parser; a value without decimals is still rendered sensibly
+  // rather than as "$420.undefined".
+  return fraction === undefined ? `$${grouped}.00` : `$${grouped}.${fraction}`;
 }
 
 export function lowestPackageFrom(packages: PublicPackageCard[]): string | null {
@@ -26,7 +38,7 @@ export function lowestPackageFrom(packages: PublicPackageCard[]): string | null 
 export function packagePriceSummary(pkg: PublicPackageCard): { primary: string; secondary: string } {
   if (pkg.pricing.from) {
     return {
-      primary: `From ${formatEgp(pkg.pricing.from.adultUnitRate)}`,
+      primary: `From ${formatUsdMoney(pkg.pricing.from.adultUnitRate)}`,
       secondary: pkg.pricing.status === "requires_confirmation" ? "per person · final price requires confirmation" : "per person",
     };
   }

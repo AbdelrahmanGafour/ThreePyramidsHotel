@@ -14,7 +14,7 @@ const card = {
   durationLabel: "Approx. 2 hrs",
   scheduleLabel: "Every Day",
   operatingDays: null,
-  currency: "EGP",
+  currency: "USD",
   requiresPriceConfirmation: false,
   pricing: {
     status: "from",
@@ -37,7 +37,7 @@ const detail = {
     childMinAge: 6,
     childMaxAge: 12,
     childDiscountPercent: "50.00",
-    rates: [{ minPartySize: 1, maxPartySize: null, adultUnitRate: "100.00", currency: "EGP" }],
+    rates: [{ minPartySize: 1, maxPartySize: null, adultUnitRate: "100.00", currency: "USD" }],
   }],
 };
 
@@ -48,7 +48,8 @@ describe("public package response contracts", () => {
   });
 
   it("fails the whole list when one package is malformed", () => {
-    assert.throws(() => parsePackageListResponse({ data: [card, { ...card, currency: "USD" }] }));
+    // A non-USD currency is malformed: the V1 package catalogue is USD-only.
+    assert.throws(() => parsePackageListResponse({ data: [card, { ...card, currency: "EGP" }] }));
   });
 
   it("rejects internal or unexpected fields at every public boundary", () => {
@@ -75,7 +76,7 @@ describe("public package response contracts", () => {
         adults: 2,
         children: 0,
         pricingStatus: "quoted",
-        currency: "EGP",
+        currency: "USD",
         adultUnitRate: "100.00",
         childUnitRate: null,
         totalAmount: "200.00",

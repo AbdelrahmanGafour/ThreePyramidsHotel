@@ -12,10 +12,10 @@ import {
 
 const pkg: PublicPackageDetail = {
   code: "T001", slug: "sample-tour", title: "Sample tour", summary: "Summary", description: "Description",
-  durationLabel: "4 hours", scheduleLabel: "Daily", operatingDays: null, currency: "EGP",
+  durationLabel: "4 hours", scheduleLabel: "Daily", operatingDays: null, currency: "USD",
   requiresPriceConfirmation: false, pricing: { status: "from", unit: "per_person", from: { adultUnitRate: "100.00", variantKey: "standard", minPartySize: 1, maxPartySize: null } },
   itinerary: [], included: [], excluded: [], notes: [],
-  variants: [{ key: "standard", label: "Standard", isDefault: true, childMinAge: 6, childMaxAge: 12, childDiscountPercent: "50.00", rates: [{ minPartySize: 1, maxPartySize: null, adultUnitRate: "100.00", currency: "EGP" }] }],
+  variants: [{ key: "standard", label: "Standard", isDefault: true, childMinAge: 6, childMaxAge: 12, childDiscountPercent: "50.00", rates: [{ minPartySize: 1, maxPartySize: null, adultUnitRate: "100.00", currency: "USD" }] }],
 };
 
 describe("package reservation form mapping", () => {

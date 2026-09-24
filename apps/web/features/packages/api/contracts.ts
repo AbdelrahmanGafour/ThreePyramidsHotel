@@ -19,7 +19,7 @@ export type PublicPackageCard = {
   durationLabel: string | null;
   scheduleLabel: string | null;
   operatingDays: string[] | null;
-  currency: "EGP";
+  currency: "USD";
   requiresPriceConfirmation: boolean;
   pricing: PublicPackagePricing;
 };
@@ -28,7 +28,7 @@ export type PublicPackageRate = {
   minPartySize: number;
   maxPartySize: number | null;
   adultUnitRate: string;
-  currency: "EGP";
+  currency: "USD";
 };
 
 export type PublicPackageVariant = {
@@ -59,7 +59,7 @@ export type PackageReservationConfirmation = {
   adults: number;
   children: number;
   pricingStatus: "quoted" | "requires_confirmation";
-  currency: "EGP";
+  currency: "USD";
   adultUnitRate: string;
   childUnitRate: string | null;
   totalAmount: string | null;
@@ -203,7 +203,7 @@ const CARD_KEYS = [
 function packageCard(value: unknown): PublicPackageCard {
   const row = object(value);
   exactKeys(row, CARD_KEYS);
-  if (row.currency !== "EGP") invalid("invalid package currency");
+  if (row.currency !== "USD") invalid("invalid package currency");
   return {
     code: text(row.code),
     slug: slug(row.slug),
@@ -212,7 +212,7 @@ function packageCard(value: unknown): PublicPackageCard {
     durationLabel: nullableText(row.durationLabel),
     scheduleLabel: nullableText(row.scheduleLabel),
     operatingDays: operatingDays(row.operatingDays),
-    currency: "EGP",
+    currency: "USD",
     requiresPriceConfirmation: boolean(row.requiresPriceConfirmation),
     pricing: pricing(row.pricing),
   };
@@ -224,8 +224,8 @@ function rate(value: unknown): PublicPackageRate {
   const minPartySize = integer(row.minPartySize, 1);
   const maxPartySize = nullableInteger(row.maxPartySize, 1);
   if (maxPartySize !== null && maxPartySize < minPartySize) invalid("invalid rate bounds");
-  if (row.currency !== "EGP") invalid("invalid rate currency");
-  return { minPartySize, maxPartySize, adultUnitRate: money(row.adultUnitRate), currency: "EGP" };
+  if (row.currency !== "USD") invalid("invalid rate currency");
+  return { minPartySize, maxPartySize, adultUnitRate: money(row.adultUnitRate), currency: "USD" };
 }
 
 function variant(value: unknown): PublicPackageVariant {
@@ -324,7 +324,7 @@ export function parsePackageReservationResponse(value: unknown): { data: Package
   if (row.pricingStatus !== "quoted" && row.pricingStatus !== "requires_confirmation") {
     invalid("invalid reservation pricing status");
   }
-  if (row.currency !== "EGP") invalid("invalid reservation currency");
+  if (row.currency !== "USD") invalid("invalid reservation currency");
   const tourDate = calendarDate(row.tourDate);
 
   const packageRow = object(row.package);
@@ -360,7 +360,7 @@ export function parsePackageReservationResponse(value: unknown): { data: Package
       adults,
       children,
       pricingStatus: row.pricingStatus,
-      currency: "EGP",
+      currency: "USD",
       adultUnitRate,
       childUnitRate,
       totalAmount,

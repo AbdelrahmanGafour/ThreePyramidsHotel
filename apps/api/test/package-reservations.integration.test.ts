@@ -76,7 +76,7 @@ before(async () => {
   noRateVariantId = (await pool.dbPool.query<{ id: string }>(`INSERT INTO package_variants(
     package_id,key,label,is_default,sort_order) VALUES ($1,'manual','Manual',false,2) RETURNING id`, [packageId])).rows[0].id;
   await pool.dbPool.query(`INSERT INTO package_rate_tiers(variant_id,min_party_size,max_party_size,adult_unit_rate,currency)
-    VALUES ($1,1,1,'100.00','EGP'),($1,2,2,'90.00','EGP'),($1,3,NULL,'80.00','EGP')`, [standardVariantId]);
+    VALUES ($1,1,1,'100.00','USD'),($1,2,2,'90.00','USD'),($1,3,NULL,'80.00','USD')`, [standardVariantId]);
 
   const { createApp } = await import('../src/app.js');
   server = await new Promise<Server>(resolve => {
@@ -107,7 +107,7 @@ it('creates one pending reservation with authoritative tier and historical snaps
   assert.equal(payload.package.slug, slug);
   assert.equal(payload.variant.key, 'standard');
   assert.equal(payload.pricingStatus, 'quoted');
-  assert.equal(payload.currency, 'EGP');
+  assert.equal(payload.currency, 'USD');
   assert.equal(payload.adultUnitRate, '80.00'); // party size is adults + children = 3
   assert.equal(payload.childUnitRate, '40.00');
   assert.equal(payload.totalAmount, '200.00');
@@ -120,7 +120,7 @@ it('creates one pending reservation with authoritative tier and historical snaps
   [payload.bookingReference])).rows[0];
   assert.deepEqual(stored, {
     status: 'pending', pricing_status: 'quoted', package_code_snapshot: code, package_title_snapshot: 'Reservation package',
-    variant_label_snapshot: 'Standard', currency: 'EGP', adult_unit_rate_snapshot: '80.00',
+    variant_label_snapshot: 'Standard', currency: 'USD', adult_unit_rate_snapshot: '80.00',
     child_unit_rate_snapshot: '40.00', total_amount_snapshot: '200.00', guest_email: 'integration.guest@example.com',
     special_requests: 'Quiet pickup', child_ages: [10],
   });

@@ -24,7 +24,7 @@ const confirmation = {
     adults: 2,
     children: 0,
     pricingStatus: "quoted",
-    currency: "EGP",
+    currency: "USD",
     adultUnitRate: "100.00",
     childUnitRate: null,
     totalAmount: "200.00",

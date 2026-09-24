@@ -28,7 +28,7 @@ export async function createPackageReservation(body: unknown): Promise<CreatedPa
       bookingReference, status: 'pending', package: { code: pkg.code, slug: pkg.slug, title: pkg.title },
       variant: { key: variant.key, label: variant.label }, tourDate: input.tourDate,
       adults: input.adults, children: input.children, pricingStatus: price.pricingStatus,
-      currency: 'EGP', adultUnitRate: price.adultUnitRate, childUnitRate: price.childUnitRate, totalAmount: price.totalAmount,
+      currency: 'USD', adultUnitRate: price.adultUnitRate, childUnitRate: price.childUnitRate, totalAmount: price.totalAmount,
     };
     await client.query('COMMIT');
     transaction = false;

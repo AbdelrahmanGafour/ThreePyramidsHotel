@@ -125,7 +125,7 @@ it('returns only card-safe fields and qualified numeric from pricing', async () 
     'operatingDays','currency','requiresPriceConfirmation','pricing'].sort());
   assert.deepEqual(card.pricing, { status: 'from', unit: 'per_person',
     from: { adultUnitRate: '9.25', variantKey: 'double', minPartySize: 2, maxPartySize: null } });
-  assert.equal(card.currency, 'EGP');
+  assert.equal(card.currency, 'USD');
 });
 it('marks confirmation-required prices honestly while retaining detail source rates', async () => {
   const product = await detail(confirm);

@@ -4,7 +4,7 @@ import { mapPackageCardRow, mapPackageDetailRow } from '../src/modules/packages/
 import { parsePackageSlug } from '../src/modules/packages/packages.validation';
 import { InvalidPackageSlugError } from '../src/modules/packages/packages.types';
 
-const rate = { min_party_size: 3, max_party_size: null, adult_unit_rate: '80.25', currency: 'EGP' };
+const rate = { min_party_size: 3, max_party_size: null, adult_unit_rate: '80.25', currency: 'USD' };
 const card = {
   code: 'TEST', slug: 'synthetic-tour', title: 'Synthetic tour', summary: null,
   duration_label: null, schedule_label: null, operating_days: null,
@@ -68,8 +68,10 @@ describe('strict package row mapping', () => {
       assert.throws(() => mapPackageCardRow({ ...card, [field]: value }), /Invalid package catalogue row/);
     });
   }
-  it('rejects USD, inverted tiers, invalid content and incomplete child rules', () => {
-    assert.throws(() => mapPackageCardRow({ ...card, from_rate: { ...card.from_rate, currency: 'USD' } }));
+  it('rejects a non-USD currency, inverted tiers, invalid content and incomplete child rules', () => {
+    // The V1 package catalogue is USD-only; a stored row in any other
+    // currency is malformed catalogue data, not something to render.
+    assert.throws(() => mapPackageCardRow({ ...card, from_rate: { ...card.from_rate, currency: 'EGP' } }));
     assert.throws(() => mapPackageCardRow({ ...card, from_rate: { ...card.from_rate, max_party_size: 2 } }));
     assert.throws(() => mapPackageDetailRow({ ...detail, content: [{ kind: 'other', text: 'Text' }] }));
     assert.throws(() => mapPackageDetailRow({ ...detail, variants: [{ ...detail.variants[0], child_max_age: null }] }));
@@ -92,7 +94,7 @@ describe('package service pricing and validation', () => {
     const result = service.toPackageCard(mapPackageCardRow(card));
     assert.deepEqual(result.pricing, { status: 'from', unit: 'per_person',
       from: { adultUnitRate: '80.25', variantKey: 'standard', minPartySize: 3, maxPartySize: null } });
-    assert.equal(result.currency, 'EGP');
+    assert.equal(result.currency, 'USD');
     assert.ok(!('fromRate' in result));
   });
   it('preserves display rates while marking confirmation-required products honestly', () => {

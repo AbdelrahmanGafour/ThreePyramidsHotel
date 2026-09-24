@@ -71,7 +71,7 @@ describe('generic package catalogue validation', () => {
   });
 
   for (const amount of ['0.00', '0.01', '9999999999.99']) {
-    it(`accepts exact EGP amount ${amount}`, () => {
+    it(`accepts exact USD amount ${amount}`, () => {
       const item = fixture();
       item.variants[0].rates[0].adultUnitRate = amount;
       assert.doesNotThrow(() => assertBrochureCatalogue([item]));
@@ -80,10 +80,10 @@ describe('generic package catalogue validation', () => {
 
   for (const amount of ['-0.01', '1.001', '1', '01.00', '1e2', 'NaN', 'Infinity',
     '10000000000.00', '1.00\n', ' 1.00', 1]) {
-    it(`rejects invalid EGP amount ${JSON.stringify(amount)}`, () => {
+    it(`rejects invalid USD amount ${JSON.stringify(amount)}`, () => {
       const item = fixture();
       item.variants[0].rates[0].adultUnitRate = amount as string;
-      assert.throws(() => assertBrochureCatalogue([item]), /invalid EGP rate/);
+      assert.throws(() => assertBrochureCatalogue([item]), /invalid USD rate/);
     });
   }
 
@@ -141,7 +141,7 @@ describe('generic package catalogue validation', () => {
     invalidItem.code = 'OTHER';
     invalidItem.slug = 'other';
     invalidItem.variants[0].rates[0].adultUnitRate = 'NaN';
-    await assert.rejects(seedBrochurePackageCatalogue(client, [fixture(), invalidItem]), /invalid EGP rate/);
+    await assert.rejects(seedBrochurePackageCatalogue(client, [fixture(), invalidItem]), /invalid USD rate/);
     assert.equal(queries, 0);
   });
 });

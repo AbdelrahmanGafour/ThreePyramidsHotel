@@ -22,7 +22,7 @@ function array(value: unknown): unknown[] { return Array.isArray(value) ? Array.
 function key(value: unknown): string {
   return typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/.test(value) ? value : invalid();
 }
-function currency(value: unknown): 'EGP' { return value === 'EGP' ? 'EGP' : invalid(); }
+function currency(value: unknown): 'USD' { return value === 'USD' ? 'USD' : invalid(); }
 function rate(value: unknown): PackageRate {
   const row = record(value);
   const minPartySize = integer(row.min_party_size);
@@ -47,7 +47,7 @@ export function mapPackageCardRow(value: unknown): PackageCardRecord {
   return {
     code: text(row.code), slug: key(row.slug), title: text(row.title), summary: nullableText(row.summary),
     durationLabel: nullableText(row.duration_label), scheduleLabel: nullableText(row.schedule_label),
-    operatingDays, currency: 'EGP', requiresPriceConfirmation: bool(row.requires_price_confirmation),
+    operatingDays, currency: 'USD', requiresPriceConfirmation: bool(row.requires_price_confirmation),
     fromRate: fromRate(row.from_rate),
   };
 }

@@ -19,7 +19,7 @@ const pool = new Pool({ connectionString: databaseUrl, max: 1 });
 let client: PoolClient;
 const tables = ['packages', 'package_itinerary_sections', 'package_content_items',
   'package_variants', 'package_rate_tiers', 'package_reservations'].sort();
-const migrationName = '1790097720000_create-packages-and-package-reservations';
+const migrationName = '1790200000000_create-packages-and-package-reservations';
 let baseline: unknown;
 let connected = false;
 let ready = false;
@@ -187,12 +187,12 @@ describe('package PostgreSQL integrity', () => {
   });
   afterEach(async () => { await client.query('ROLLBACK'); });
 
-  it('defaults rates and reservation snapshots to EGP and rejects USD', async () => {
+  it('defaults rates and reservation snapshots to USD and rejects any other currency', async () => {
     const rate = await client.query('INSERT INTO package_rate_tiers(variant_id,min_party_size,max_party_size,adult_unit_rate) VALUES ($1,1,NULL,100) RETURNING currency', [variantId]);
-    assert.equal(rate.rows[0].currency, 'EGP');
-    assert.equal((await reservation()).rows[0].currency, 'EGP');
-    await rejectSql("UPDATE package_rate_tiers SET currency='USD'", [], '23514', 'package_rate_tiers_currency_check');
-    await rejectSql("UPDATE package_reservations SET currency='USD'", [], '23514', 'package_reservations_currency_check');
+    assert.equal(rate.rows[0].currency, 'USD');
+    assert.equal((await reservation()).rows[0].currency, 'USD');
+    await rejectSql("UPDATE package_rate_tiers SET currency='EGP'", [], '23514', 'package_rate_tiers_currency_check');
+    await rejectSql("UPDATE package_reservations SET currency='EGP'", [], '23514', 'package_reservations_currency_check');
   });
 
   it('supports 1/2/3+ tiers and rejects inclusive and unbounded overlap', async () => {
@@ -338,7 +338,7 @@ describe('package PostgreSQL integrity', () => {
     item.variants[0].rates[0].adultUnitRate = '150.00';
     await seedBrochurePackageCatalogue(client, [item]);
     for (const table of tables) assert.equal((await client.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 1);
-    assert.equal((await client.query('SELECT currency FROM package_rate_tiers')).rows[0].currency, 'EGP');
+    assert.equal((await client.query('SELECT currency FROM package_rate_tiers')).rows[0].currency, 'USD');
     assert.deepEqual((await client.query('SELECT * FROM package_reservations')).rows[0], original);
   });
 });

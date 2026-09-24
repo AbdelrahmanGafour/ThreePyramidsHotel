@@ -11,7 +11,7 @@ import {
   type PackageReservationDraft,
   type PackageReservationFormErrors,
 } from "@/features/packages/lib/reservationForm";
-import { childRuleLabel, formatEgp } from "@/features/packages/lib/publicPresentation";
+import { childRuleLabel, formatUsdMoney } from "@/features/packages/lib/publicPresentation";
 import { FormErrorSummary, FormField, FormGroup, RequiredNote, fieldControlClass } from "@/shared/components/ui/form";
 import { InfoSection } from "@/shared/components/ui/InfoSection";
 
@@ -97,7 +97,7 @@ export function PackageReservationForm({ pkg }: { pkg: PublicPackageDetail }) {
             <div><dt className="text-ink/65">Party</dt><dd className="font-semibold">{confirmation.adults} adult{confirmation.adults === 1 ? "" : "s"}, {confirmation.children} child{confirmation.children === 1 ? "" : "ren"}</dd></div>
           </dl>
           {confirmation.pricingStatus === "quoted" && confirmation.totalAmount ? (
-            <p className="mt-5 text-[1.05rem] font-semibold">Quoted total: {formatEgp(confirmation.totalAmount)}</p>
+            <p className="mt-5 text-[1.05rem] font-semibold">Quoted total: {formatUsdMoney(confirmation.totalAmount)}</p>
           ) : (
             <p className="mt-5 text-[1rem] font-semibold">Final price requires confirmation.</p>
           )}

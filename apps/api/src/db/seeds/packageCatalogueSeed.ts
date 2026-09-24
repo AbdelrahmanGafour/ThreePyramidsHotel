@@ -101,7 +101,7 @@ function assertRateTiers(variant: PackageVariantSeed, packageCode: string): void
       throw new Error(`Package seed validation failed: ${packageCode}/${variant.key} invalid max party size`);
     }
     if (!isDecimalAmount(tier.adultUnitRate)) {
-      throw new Error(`Package seed validation failed: ${packageCode}/${variant.key} invalid EGP rate`);
+      throw new Error(`Package seed validation failed: ${packageCode}/${variant.key} invalid USD rate`);
     }
 
     const previous = sorted[index - 1];
@@ -364,7 +364,7 @@ async function reconcilePackageVariants(
       await client.query(
         `INSERT INTO package_rate_tiers (
            variant_id, min_party_size, max_party_size, adult_unit_rate, currency
-         ) VALUES ($1, $2, $3, $4, 'EGP')`,
+         ) VALUES ($1, $2, $3, $4, 'USD')`,
         [variantId, rate.minPartySize, rate.maxPartySize, rate.adultUnitRate],
       );
     }
@@ -374,7 +374,7 @@ async function reconcilePackageVariants(
 /**
  * Generic catalogue reconciliation; contains no brochure rows or automatic runner.
  * The caller must own a transaction on this client and roll back on any failure.
- * Rates are EGP per person; party-size tiers count adults + children.
+ * Rates are USD per person; party-size tiers count adults + children.
  */
 export async function seedBrochurePackageCatalogue(
   client: PoolClient,

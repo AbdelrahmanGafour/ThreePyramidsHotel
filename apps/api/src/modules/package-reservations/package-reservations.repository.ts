@@ -46,7 +46,7 @@ export async function findReservationRate(client: PoolClient, variantId: string,
     FROM package_rate_tiers WHERE variant_id=$1 AND min_party_size<=$2
     AND (max_party_size IS NULL OR max_party_size>=$2) ORDER BY min_party_size FOR SHARE`, [variantId, partySize]);
   if (rows.length === 0) return null;
-  if (rows.length !== 1 || rows[0].currency !== 'EGP') invalid();
+  if (rows.length !== 1 || rows[0].currency !== 'USD') invalid();
   const amount = text(rows[0].adult_unit_rate);
   toMinorUnits(amount);
   return { adultUnitRate: amount };
@@ -62,7 +62,7 @@ export async function insertPackageReservation(
     guest_first_name, guest_last_name, guest_email, guest_phone, guest_country, special_requests,
     status, pricing_status, package_code_snapshot, package_title_snapshot, variant_label_snapshot,
     currency, adult_unit_rate_snapshot, child_unit_rate_snapshot, total_amount_snapshot)
-    VALUES ($1,$2,$3,$4::date,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15,$16,$17,'EGP',$18,$19,$20)
+    VALUES ($1,$2,$3,$4::date,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15,$16,$17,'USD',$18,$19,$20)
     RETURNING booking_reference`, [bookingReference, pkg.id, variant.id, input.tourDate, input.adults,
     input.children, input.childAges, input.guestFirstName, input.guestLastName, input.guestEmail,
     input.guestPhone, input.guestCountry, input.specialRequests, price.pricingStatus, pkg.code, pkg.title,

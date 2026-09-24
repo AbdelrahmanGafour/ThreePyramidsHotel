@@ -36,7 +36,7 @@ export type CreatedPackageReservation = PackageReservationPrice & {
   tourDate: string;
   adults: number;
   children: number;
-  currency: 'EGP';
+  currency: 'USD';
 };
 
 export class PackageReservationError extends Error {

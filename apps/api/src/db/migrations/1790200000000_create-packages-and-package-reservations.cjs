@@ -236,7 +236,7 @@ exports.up = (pgm) => {
     max_party_size: { type: 'integer' },
     // Per-person rate; tier party size is adults + children, including cabin variants.
     adult_unit_rate: { type: 'numeric(12,2)', notNull: true },
-    currency: { type: 'text', notNull: true, default: 'EGP' },
+    currency: { type: 'text', notNull: true, default: 'USD' },
   });
 
   pgm.addConstraint('package_rate_tiers', 'package_rate_tiers_variant_id_fkey', {
@@ -256,7 +256,7 @@ exports.up = (pgm) => {
     check: 'adult_unit_rate BETWEEN 0 AND 9999999999.99',
   });
   pgm.addConstraint('package_rate_tiers', 'package_rate_tiers_currency_check', {
-    check: "currency = 'EGP'",
+    check: "currency = 'USD'",
   });
   pgm.createIndex('package_rate_tiers', 'variant_id', {
     name: 'package_rate_tiers_variant_id_idx',
@@ -302,7 +302,7 @@ exports.up = (pgm) => {
     package_code_snapshot: { type: 'text', notNull: true },
     package_title_snapshot: { type: 'text', notNull: true },
     variant_label_snapshot: { type: 'text', notNull: true },
-    currency: { type: 'text', notNull: true, default: 'EGP' },
+    currency: { type: 'text', notNull: true, default: 'USD' },
     adult_unit_rate_snapshot: { type: 'numeric(12,2)', notNull: true },
     child_unit_rate_snapshot: { type: 'numeric(12,2)' },
     // A deterministic quote only. Confirmation-required requests have no total.
@@ -368,7 +368,7 @@ exports.up = (pgm) => {
     check: "btrim(variant_label_snapshot) <> ''",
   });
   pgm.addConstraint('package_reservations', 'package_reservations_currency_check', {
-    check: "currency = 'EGP'",
+    check: "currency = 'USD'",
   });
   pgm.addConstraint('package_reservations', 'package_reservations_adult_unit_rate_snapshot_check', {
     check: 'adult_unit_rate_snapshot BETWEEN 0 AND 9999999999.99',
