@@ -71,3 +71,56 @@ jobs:
 
       - name: Build Web
         run: npm run build -w apps/web
+
+  # Kept apart from `validate` on purpose. This suite runs migration DOWN, so it
+  # is only ever pointed at a database created for it and thrown away with the
+  # runner. Its own service means the ordinary integration database does not
+  # exist in this job at all, rather than merely being guarded against.
+  packages-integration:
+    name: Package integration (disposable database)
+    runs-on: ubuntu-latest
+
+    # The suite asserts every part of this at import and refuses to run if any
+    # of it is wrong: the literal host 127.0.0.1, the dedicated port, the
+    # database name, an empty query string, and the explicit opt-in below.
+    # Adding a query parameter such as ?sslmode=require would break it.
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:55432/hotel_reservation_packages_test
+      PACKAGES_DISPOSABLE_TEST: '1'
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hotel_reservation_packages_test
+        # Not 5432: the suite only accepts 5434 or 55432, so a copied mapping
+        # from the job above would abort every test before it ran.
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d hotel_reservation_packages_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Deliberately no migrate:up. The suite owns its own migration lifecycle:
+      # it asserts the database is empty, applies the baseline itself, and
+      # drives the package migration UP/DOWN/UP. Pre-migrating would hide the
+      # fresh-database path that assertion exists to protect.
+      - name: Test packages against a disposable PostgreSQL
+        run: npm run test:packages:integration -w apps/api
