@@ -11,6 +11,24 @@
  * `baseNightlyRate` MUST remain the exact backend decimal string — money is
  * never converted into a floating-point source of truth.
  */
+/**
+ * One administrator-managed image of a room type, exactly as the public API
+ * returns it — the whole of what the backend says about an image, and the
+ * whole of what this app is entitled to assume.
+ *
+ * `url` is composed by the API from its own media configuration; this app
+ * never builds it, and never learns the object key, bucket or provider
+ * behind it. `altText` is null for a deliberately decorative image.
+ * `width`/`height` are the stored object's dimensions.
+ */
+export type RoomTypeImageResponse = {
+  url: string;
+  altText: string | null;
+  width: number;
+  height: number;
+  isCover: boolean;
+};
+
 export type RoomTypeResponse = {
   slug: string;
   name: string;
@@ -23,6 +41,8 @@ export type RoomTypeResponse = {
   baseNightlyRate: string;
   view: string | null;
   currency: "EGP";
+  /** Cover first, then the administrator's arrangement. `[]` when none. */
+  images: RoomTypeImageResponse[];
 };
 
 /** GET /api/v1/rooms success envelope. */
@@ -66,4 +86,11 @@ export type RoomDisplay = {
   /** The backend's exact decimal string — never parsed to a number here. */
   baseNightlyRate: string;
   currency: "EGP";
+  /**
+   * The validated API images, in the API's own order. Kept on the display
+   * model rather than collapsed straight into `image`/`gallery` so the
+   * presentation merge can see the whole set — and so a consumer that wants
+   * per-image alt text or dimensions has them.
+   */
+  images: RoomTypeImageResponse[];
 };
