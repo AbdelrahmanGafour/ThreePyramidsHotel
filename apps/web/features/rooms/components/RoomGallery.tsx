@@ -4,10 +4,10 @@ import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { luxuryEase } from "@/shared/components/motion/PremiumMotion";
-import type { Room } from "@/features/rooms/data/roomsData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 type RoomGalleryProps = {
-  room: Room;
+  room: RoomWithPresentation;
 };
 
 const MAX_SUPPORTING = 2;

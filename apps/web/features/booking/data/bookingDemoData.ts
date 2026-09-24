@@ -39,21 +39,10 @@ export const DEMO_COUNTRIES = [
   "Other",
 ] as const;
 
-/** DEMO — optional arrival-time bands; not a real front-desk schedule. */
-export const DEMO_ARRIVAL_WINDOWS = [
-  "Before 2:00 PM",
-  "2:00 PM – 6:00 PM",
-  "6:00 PM – 10:00 PM",
-  "After 10:00 PM (late arrival)",
-] as const;
-
-/**
- * DEMO — FRONTEND-ONLY PLACEHOLDER. Generates a fake reservation reference so
- * the confirmation screen can be reviewed. It reserves nothing, checks no
- * availability, and is not unique. A real reference must come from the
- * backend once a reservation is actually created.
- */
-export function generateDemoBookingReference(): string {
-  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
-  return `TPH-${random}`;
-}
+// WFI-T06: DEMO_ARRIVAL_WINDOWS and generateDemoBookingReference were removed
+// here. `arrivalTime` has no backend contract field and was dropped from the
+// guest model (see features/booking/types.ts). The fake local booking
+// reference was the review page's fabricated success path — removed with it
+// (see features/booking/components/BookingSummary.tsx); a real reference
+// will come only from a successful POST /api/v1/reservations in a later
+// ticket.

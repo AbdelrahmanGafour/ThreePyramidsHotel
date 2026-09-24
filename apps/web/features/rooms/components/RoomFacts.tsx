@@ -1,8 +1,8 @@
 import { InfoSection } from "@/shared/components/ui/InfoSection";
 import { getRoomFacts } from "@/features/rooms/components/RoomFactList";
-import type { Room } from "@/features/rooms/data/roomsData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
-export function RoomFacts({ room }: { room: Room }) {
+export function RoomFacts({ room }: { room: RoomWithPresentation }) {
   const facts = getRoomFacts(room);
   if (!facts.length) return null;
 

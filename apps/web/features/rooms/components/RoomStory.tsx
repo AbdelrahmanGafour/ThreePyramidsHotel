@@ -1,8 +1,8 @@
 import { InfoSection } from "@/shared/components/ui/InfoSection";
-import type { Room } from "@/features/rooms/data/roomsData";
+import type { RoomWithPresentation } from "@/features/rooms/api";
 
 // Renders nothing if no safe atmosphere copy exists for this room.
-export function RoomStory({ room }: { room: Room }) {
+export function RoomStory({ room }: { room: RoomWithPresentation }) {
   if (!room.story) return null;
 
   return (

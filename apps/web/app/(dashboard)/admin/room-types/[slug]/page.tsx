@@ -5,6 +5,8 @@ import { notFound, redirect } from "next/navigation";
 import { AdminPhysicalRoomsPanel } from "@/features/admin/components/AdminPhysicalRoomsPanel";
 import { AdminRoomTypeCapacityPanel } from "@/features/admin/components/AdminRoomTypeCapacityPanel";
 import { AdminRoomTypeForm } from "@/features/admin/components/AdminRoomTypeForm";
+import { AdminRoomTypeImagesPanel } from "@/features/admin/components/AdminRoomTypeImagesPanel";
+import { ROOM_TYPE_IMAGE_NOTICES, parseRoomTypeImageNotice } from "@/features/admin/lib/imageOutcomes";
 import { PHYSICAL_ROOM_NOTICES } from "@/features/admin/lib/physicalRooms";
 import {
   ROOM_TYPES_PATH,
@@ -13,6 +15,7 @@ import {
   parseRoomTypeNotice,
 } from "@/features/admin/lib/roomTypes";
 import { fetchAdminPhysicalRooms } from "@/features/admin/server/adminRoomsApi";
+import { fetchAdminRoomTypeImages } from "@/features/admin/server/adminRoomTypeImagesApi";
 import { fetchAdminRoomType } from "@/features/admin/server/adminRoomTypesApi";
 
 // One room type, with the fields an administrator may change.
@@ -42,34 +45,43 @@ export default async function AdminRoomTypePage({ params, searchParams }: PagePr
   // Nothing from the URL is ever rendered as text, so no submitted reference
   // or room number can reach the page through a query parameter.
   //
-  // Two allowlists, because this page shows two kinds of thing: what happened
-  // to the room type, and what happened to one of its rooms. They are checked
-  // in that order and a token can only be in one of them.
+  // Three allowlists, because this page shows three kinds of thing: what
+  // happened to the room type, what happened to one of its rooms, and what
+  // happened to one of its images. They are checked in that order and a
+  // token can only be in one of them.
   const query = await searchParams;
   const roomTypeNotice = parseRoomTypeNotice(query);
   const roomNotice = roomTypeNotice ? null : parseNoticeToken(query, PHYSICAL_ROOM_NOTICES);
+  const imageNotice = roomTypeNotice || roomNotice ? null : parseRoomTypeImageNotice(query);
 
   const notice: { tone: string; message: string } | null = roomTypeNotice
     ? ROOM_TYPE_NOTICES[roomTypeNotice]
     : roomNotice
       ? PHYSICAL_ROOM_NOTICES[roomNotice]
-      : null;
+      : imageNotice
+        ? ROOM_TYPE_IMAGE_NOTICES[imageNotice]
+        : null;
 
   // The browser's own Cookie header, forwarded verbatim: this app never parses
   // it and never decides whether the session is valid.
   const cookie = (await headers()).get("cookie") ?? undefined;
 
-  // Two independent reads, in parallel: the room type and its inventory. They
-  // fail independently too — a failed inventory read must not take the rest of
-  // the page with it.
-  const [result, roomsResult] = await Promise.all([
+  // Three independent reads, in parallel: the room type, its inventory, and
+  // its images. They fail independently too — a failed inventory or image
+  // read must not take the rest of the page with it.
+  const [result, roomsResult, imagesResult] = await Promise.all([
     fetchAdminRoomType(slug, cookie),
     fetchAdminPhysicalRooms(slug, cookie),
+    fetchAdminRoomTypeImages(slug, cookie),
   ]);
 
   // The layout confirmed a session before this page ran, so a refusal here
   // means it ended in between. Deliberately outside any try/catch.
-  if (result.state === "unauthenticated" || roomsResult.state === "unauthenticated") {
+  if (
+    result.state === "unauthenticated" ||
+    roomsResult.state === "unauthenticated" ||
+    imagesResult.state === "unauthenticated"
+  ) {
     redirect("/admin/login");
   }
 
@@ -130,6 +142,18 @@ export default async function AdminRoomTypePage({ params, searchParams }: PagePr
         <AdminPhysicalRoomsPanel
           roomTypeSlug={data.slug}
           rooms={roomsResult.state === "ok" ? roomsResult.data : null}
+        />
+        {/* `null` for every non-`ok` state, deliberately including
+            `invalid-reference` and `not-found`: the room-type read above
+            already succeeded, so those two states from the image read can
+            only mean a race or an inconsistent answer, never that the room
+            type this page is showing is actually gone. Inventing an empty
+            gallery for them would be a different, false claim, so they are
+            folded into the same unavailable state as a genuine outage rather
+            than sent to `notFound()`. */}
+        <AdminRoomTypeImagesPanel
+          slug={data.slug}
+          images={imagesResult.state === "ok" ? imagesResult.data : null}
         />
       </div>
     </>

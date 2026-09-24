@@ -68,26 +68,32 @@ async function hotelSnapshot() {
 before(async () => {
   client = await pool.connect();
   connected = true;
+  // The dedicated-port check lives in the module-level guard on the client
+  // URL above, not here: `inet_server_port()` reports the port PostgreSQL
+  // itself listens on, which behind Docker/NAT port forwarding is the
+  // container's internal 5432 rather than the forwarded host port this suite
+  // is required to connect through. The client URL is the safety boundary.
   const server = (await client.query(`SELECT current_database() AS db,
-    current_setting('server_version_num')::int AS version, inet_server_port() AS port`)).rows[0];
+    current_setting('server_version_num')::int AS version`)).rows[0];
   assert.equal(server.db, 'hotel_reservation_packages_test');
-  assert.ok(server.port === 5434 || server.port === 55432, 'Dedicated package-test port required');
   assert.ok((server.version >= 160000 && server.version < 170000) || (server.version >= 180000 && server.version < 190000), 'PostgreSQL 16 or 18 required');
   const historyExists = (await client.query("SELECT to_regclass('public.pgmigrations') AS name")).rows[0].name;
   if (historyExists) {
     const history = (await client.query('SELECT name FROM pgmigrations ORDER BY id')).rows;
-    assert.ok(history.length === 5 || history.length === 6, 'Unexpected migration history');
-    if (history.length === 6) {
-      assert.equal(history[5].name, migrationName);
+    // Current main's baseline is 6 migrations; 7 means the package migration
+    // is already applied and this run must start by taking it back down.
+    assert.ok(history.length === 6 || history.length === 7, 'Unexpected migration history');
+    if (history.length === 7) {
+      assert.equal(history[6].name, migrationName);
       await assertNoFixtures();
       await migrate('down', 1);
     }
   } else {
     assert.equal((await client.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public'")).rows[0].n, 0,
       'A fresh disposable database must be empty');
-    assert.equal((await migrate('up', 5)).length, 5);
+    assert.equal((await migrate('up', 6)).length, 6);
   }
-  assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n, 5);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n, 6);
   baseline = await hotelSnapshot();
   ready = true;
 });
@@ -116,7 +122,8 @@ it('migrates UP / DOWN / UP, removes owned objects, and makes repeated UP a no-o
   assert.equal((await migrate('up', 1)).length, 1);
   assert.deepEqual(await packageTables(), tables);
   assert.equal((await migrate('up')).length, 0);
-  assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n, 6);
+  // Baseline 6 plus the package migration.
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n, 7);
   t.diagnostic('UP/DOWN/UP/no-op UP passed; existing hotel schema, rows and sequences unchanged');
 });
 
