@@ -1,13 +1,37 @@
+import type { PoolClient } from 'pg';
 import { dbPool } from '../../db/pool';
 import { generatePackageBookingReference } from './booking-reference';
 import { calculatePackagePrice, selectVariant, validateOperatingDay } from './package-reservations.pricing';
 import { findReservationPackage, findReservationRate, findReservationVariants, insertPackageReservation } from './package-reservations.repository';
-import { PackageReservationError, type CreatedPackageReservation } from './package-reservations.types';
+import {
+  PackageReservationError,
+  PackageReservationOutcomeUncertainError,
+  type CreatedPackageReservation,
+} from './package-reservations.types';
 import { parsePackageReservationInput } from './package-reservations.validation';
+
+/**
+ * How this service gets its client.
+ *
+ * A seam, not a framework. It exists so a test can hand the service a client
+ * whose `COMMIT` throws — the one failure that cannot be provoked against a
+ * real, healthy PostgreSQL connection, and the one whose handling matters
+ * most. Production never replaces it, so runtime behaviour is unchanged.
+ */
+type ClientFactory = () => Promise<PoolClient>;
+
+const defaultClientFactory: ClientFactory = () => dbPool.connect();
+
+let acquireClient: ClientFactory = defaultClientFactory;
+
+/** Test seam. Passing `null` restores the pool. */
+export function __setClientFactoryForTests(factory: ClientFactory | null): void {
+  acquireClient = factory ?? defaultClientFactory;
+}
 
 export async function createPackageReservation(body: unknown): Promise<CreatedPackageReservation> {
   const input = parsePackageReservationInput(body);
-  const client = await dbPool.connect();
+  const client = await acquireClient();
   let transaction = false;
   let discardClient = false;
   try {
@@ -30,15 +54,30 @@ export async function createPackageReservation(body: unknown): Promise<CreatedPa
       adults: input.adults, children: input.children, pricingStatus: price.pricingStatus,
       currency: 'USD', adultUnitRate: price.adultUnitRate, childUnitRate: price.childUnitRate, totalAmount: price.totalAmount,
     };
-    await client.query('COMMIT');
+    try {
+      await client.query('COMMIT');
+    } catch (error) {
+      // From here the transaction's fate is unknown, so nothing may be
+      // inferred and nothing may be undone. `transaction` is cleared first so
+      // the handler below does not attempt the ROLLBACK that would prove
+      // nothing, and the connection is poisoned rather than returned to the
+      // pool with a session whose state nobody can describe.
+      transaction = false;
+      discardClient = true;
+      throw new PackageReservationOutcomeUncertainError(error);
+    }
     transaction = false;
     return confirmation;
   } catch (error) {
     if (transaction) {
+      // A definite pre-commit failure: the transaction is still open and
+      // ending it proves the reservation was not written.
       try { await client.query('ROLLBACK'); }
       catch { discardClient = true; }
     } else {
-      // A failed BEGIN may indicate a broken connection; never reuse it.
+      // Either BEGIN never succeeded, or COMMIT was attempted and did not
+      // answer. Neither leaves a transaction this code may end, and neither
+      // leaves a connection worth reusing.
       discardClient = true;
     }
     throw error;

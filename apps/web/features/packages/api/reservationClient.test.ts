@@ -107,4 +107,24 @@ describe("package reservation outcomes", () => {
     const outcome = await submitPackageReservation(input, async () => jsonResponse(409, { nope: true }));
     assert.equal(outcome.kind, "uncertain");
   });
+
+  it("treats the API's explicit 503 outcome-uncertain answer as uncertain, with one request", async () => {
+    // The API sends this when COMMIT was attempted and did not answer: the
+    // reservation may or may not exist, so it must not be read as a refusal
+    // the guest can correct and resubmit.
+    const calls = { value: 0 };
+    const outcome = await submitPackageReservation(input, async () => {
+      calls.value += 1;
+      return jsonResponse(503, {
+        error: {
+          code: "PACKAGE_RESERVATION_OUTCOME_UNCERTAIN",
+          message:
+            "The reservation outcome could not be confirmed. Contact the hotel before submitting another request.",
+        },
+      });
+    });
+
+    assert.equal(outcome.kind, "uncertain");
+    assert.equal(calls.value, 1, "no automatic retry after an unconfirmed outcome");
+  });
 });
