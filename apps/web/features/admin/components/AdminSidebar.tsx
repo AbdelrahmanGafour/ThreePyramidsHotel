@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark } from "@/shared/components/ui/BrandMark";
-import { primaryNavigation, settingsNavigation } from "../data/adminNavigation";
+import { isAdminNavItemActive, sidebarNavigation } from "../data/adminNavigation";
 import type { AdminNavItem } from "../types";
 import { AdminIcon } from "./AdminIcon";
 
@@ -12,10 +12,6 @@ type AdminSidebarProps = {
   onNavigate: () => void;
   onClose: () => void;
 };
-
-function isActive(pathname: string, item: AdminNavItem) {
-  return item.href === "/admin" ? pathname === "/admin" : pathname.startsWith(item.href);
-}
 
 function NavEntry({
   item,
@@ -41,7 +37,7 @@ function NavEntry({
     );
   }
 
-  const active = isActive(pathname, item);
+  const active = isAdminNavItemActive(pathname, item);
   return (
     <li>
       <Link
@@ -83,19 +79,21 @@ export function AdminSidebar({ open, onNavigate, onClose }: AdminSidebarProps) {
 
       <nav className="adm-nav" aria-label="Administration">
         <ul>
-          {primaryNavigation.map((item) => (
+          {sidebarNavigation.map((item) => (
             <NavEntry key={item.key} item={item} pathname={pathname} onNavigate={onNavigate} />
           ))}
         </ul>
       </nav>
 
+      {/* The last entry, and the only one that leaves the admin. It stays an
+          ordinary anchor rather than a nav item: it opens a new tab and has
+          no active state to hold. */}
       <div className="adm-sidebar-foot">
         <ul>
-          <NavEntry item={settingsNavigation} pathname={pathname} onNavigate={onNavigate} />
           <li>
             <a className="adm-nav-item" href="/" target="_blank" rel="noopener noreferrer">
               <AdminIcon name="external" />
-              <span className="adm-nav-label">View website</span>
+              <span className="adm-nav-label">View Website</span>
               <span className="sr-only">(opens in a new tab)</span>
             </a>
           </li>

@@ -1,7 +1,15 @@
 // The admin status language. Every status has a text label AND a distinct mark
 // shape, so meaning never depends on colour alone.
 
-import type { AdminReservationStatus, InquiryStatus, ReservationStatus, RoomAvailability } from "../types";
+import type {
+  AdminPackageManagementSource,
+  AdminPackageReservationPricingStatus,
+  AdminPackageReservationStatus,
+  AdminReservationStatus,
+  InquiryStatus,
+  ReservationStatus,
+  RoomAvailability,
+} from "../types";
 
 export type StatusTone = "lapis" | "moss" | "brass" | "danger" | "terracotta" | "muted";
 export type StatusShape = "filled" | "ring" | "square";
@@ -25,6 +33,57 @@ export const adminReservationStatus: Record<AdminReservationStatus, StatusMeta> 
   pending: { label: "Pending", tone: "brass", shape: "ring" },
   confirmed: { label: "Confirmed", tone: "lapis", shape: "filled" },
   cancelled: { label: "Cancelled", tone: "danger", shape: "square" },
+};
+
+/**
+ * The three statuses a package reservation can hold.
+ *
+ * Deliberately its own map rather than a reuse of `adminReservationStatus`:
+ * the two vocabularies happen to coincide today, and sharing one object would
+ * mean a later change to room reservations silently restyling package ones.
+ */
+export const adminPackageReservationStatus: Record<AdminPackageReservationStatus, StatusMeta> = {
+  pending: { label: "Pending", tone: "brass", shape: "ring" },
+  confirmed: { label: "Confirmed", tone: "lapis", shape: "filled" },
+  cancelled: { label: "Cancelled", tone: "danger", shape: "square" },
+};
+
+/**
+ * Whether a package reservation carries a real quote yet.
+ *
+ * "Awaiting quote" rather than "To be confirmed": the total cell already says
+ * that, and two identical phrases side by side would read as one fact
+ * repeated rather than two related ones. This is about the reservation's
+ * pricing state; the total cell is about the figure itself.
+ */
+export const adminPackagePricingStatus: Record<AdminPackageReservationPricingStatus, StatusMeta> = {
+  quoted: { label: "Quoted", tone: "moss", shape: "filled" },
+  requires_confirmation: { label: "Awaiting quote", tone: "terracotta", shape: "ring" },
+};
+
+/**
+ * Whether guests can see a journey.
+ *
+ * Its own map rather than a reuse of `roomTypeStatus`: "archived" is the
+ * wrong word for a journey that is simply not being sold this season, and a
+ * shared object would mean a later change to room types silently restyling
+ * the catalogue.
+ */
+export const adminPackageStatus = {
+  active: { label: "Active", tone: "moss", shape: "filled" },
+  inactive: { label: "Inactive", tone: "muted", shape: "ring" },
+} satisfies Record<string, StatusMeta>;
+
+/**
+ * Who may edit a journey, in words an administrator can act on.
+ *
+ * "Brochure-managed" is a warning as much as a label: the catalogue seed still
+ * owns that row, so an edit to it would be undone on the next run until
+ * ownership moves. "Admin-managed" means the seed leaves it alone.
+ */
+export const adminPackageManagementSource: Record<AdminPackageManagementSource, StatusMeta> = {
+  brochure: { label: "Brochure-managed", tone: "lapis", shape: "ring" },
+  admin: { label: "Admin-managed", tone: "brass", shape: "filled" },
 };
 
 /**

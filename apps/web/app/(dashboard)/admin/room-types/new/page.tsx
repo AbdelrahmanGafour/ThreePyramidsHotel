@@ -39,16 +39,14 @@ export default async function AdminRoomTypeNewPage({ searchParams }: PageProps) 
 
   return (
     <>
+      {/* Just the way back. The form's masthead carries the <h1> and the
+          lede, so the page opens inside a panel rather than on the bare
+          workspace — the same shape the detail pages use. */}
       <header className="adm-page-head">
         <p className="adm-detail-back">
           <Link className="adm-topbar-link" href={ROOM_TYPES_PATH}>
             Back to room types
           </Link>
-        </p>
-        <h1 className="adm-page-title">New room type</h1>
-        <p className="adm-page-lede">
-          A room type is what a guest books. Create it here, then add the physical rooms the hotel
-          has of it.
         </p>
       </header>
 

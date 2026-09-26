@@ -1,7 +1,7 @@
 import { updateAdminRoomTypeCapacityAction } from "../server/adminRoomTypeActions";
 import { AdminActionButton } from "./AdminActionButton";
 import { AdminFormField } from "./AdminFormField";
-import { PanelHeader } from "./PanelHeader";
+import { DetailSection } from "./AdminDetail";
 
 // How many guests one room of this type takes.
 //
@@ -35,13 +35,11 @@ export function AdminRoomTypeCapacityPanel({
   const save = updateAdminRoomTypeCapacityAction.bind(null, slug);
 
   return (
-    <section className="adm-panel" aria-labelledby="room-type-capacity">
-      <PanelHeader
-        id="room-type-capacity"
-        title="Capacity"
-        note={`This room type currently sleeps ${plural(capacity, "guest")}.`}
-      />
-
+    <DetailSection
+      id="room-type-capacity"
+      title="Capacity"
+      note={`This room type currently sleeps ${plural(capacity, "guest")}.`}
+    >
       <form className="adm-form" action={save}>
         <AdminFormField
           id="room-type-capacity-value"
@@ -72,6 +70,6 @@ export function AdminRoomTypeCapacityPanel({
           </AdminActionButton>
         </div>
       </form>
-    </section>
+    </DetailSection>
   );
 }

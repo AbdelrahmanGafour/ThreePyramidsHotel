@@ -1,110 +1,157 @@
 import { formatDateWithYear, formatEgp, formatInstant } from "../lib/format";
 import { adminReservationStatus } from "../lib/status";
 import type { AdminReservationDetail as Reservation } from "../types";
-import { AdminReservationActions } from "./AdminReservationActions";
-import { PanelHeader } from "./PanelHeader";
+import { DetailFacts, DetailMasthead, DetailSection } from "./AdminDetail";
 import { StatusBadge } from "./StatusBadge";
 
-// One reservation, read-only, in the panels the rest of the admin already uses.
+// One room reservation, in the shared admin detail-page shape: a masthead
+// carrying the booking reference and the status, then one panel per thing a
+// member of staff reads — who, when, which room, how much.
 //
-// A server component with no interactivity: nothing here is editable in V1, and
-// a page that only reads needs no JavaScript to do it.
-
-/** One labelled fact. `<div>` inside `<dl>` keeps each pair together. */
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{children}</dd>
-    </div>
-  );
-}
-
-function Section({ id, title, note, children }: {
-  id: string;
-  title: string;
-  note?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="adm-panel" aria-labelledby={id}>
-      <PanelHeader id={id} title={title} note={note} />
-      <dl className="adm-facts">{children}</dl>
-    </section>
-  );
-}
+// The same primitives as the journey reservation screen, so the two look like
+// one product. What differs is only what the two domains actually hold: a
+// stay has nights, a check-out and an allocated room; a journey request has a
+// variant, a tour date and child ages. Neither is bent to match the other.
+//
+// A server component with no interactivity of its own: nothing here is
+// editable in V1 apart from the status, whose controls are plain forms, so a
+// page that only reads needs no JavaScript to do it.
+//
+// `actions` is passed in rather than rendered here, the same arrangement the
+// journey reservation screen uses. The actions panel reaches a Server Action,
+// which imports `next/headers` and can only be loaded under the react-server
+// condition — while the submit button inside it is a Client Component that
+// cannot. Composing it at the page keeps this view free of that pincer, so it
+// stays renderable, and testable, on its own.
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
-export function AdminReservationDetailView({ reservation }: { reservation: Reservation }) {
+export function AdminReservationDetailView({
+  reservation,
+  actions,
+}: {
+  reservation: Reservation;
+  actions?: React.ReactNode;
+}) {
   const { guest, stay, roomType, room, pricing } = reservation;
 
   return (
-    <div className="adm-detail-grid">
-      <AdminReservationActions
-        bookingReference={reservation.bookingReference}
-        status={reservation.status}
+    <>
+      <DetailMasthead
+        title={reservation.bookingReference}
+        meta={[
+          <span key="guest">{`${guest.firstName} ${guest.lastName}`}</span>,
+          <span key="stay">
+            {`${formatDateWithYear(stay.checkIn)} – ${formatDateWithYear(stay.checkOut)}`}
+          </span>,
+          <span key="booked">Booked {formatInstant(reservation.createdAt)}</span>,
+        ]}
+        badges={<StatusBadge meta={adminReservationStatus[reservation.status]} />}
       />
 
-      <Section id="detail-booking" title="Booking">
-        <Fact label="Booking reference">{reservation.bookingReference}</Fact>
-        <Fact label="Status">
-          <StatusBadge meta={adminReservationStatus[reservation.status]} />
-        </Fact>
-        <Fact label="Booked">{formatInstant(reservation.createdAt)}</Fact>
-      </Section>
+      {/* Directly under the masthead: the only thing on this page that
+          changes anything, where it is found without hunting and without
+          standing over the record it acts on. */}
+      {actions}
 
-      <Section id="detail-guest" title="Guest">
-        <Fact label="First name">{guest.firstName}</Fact>
-        <Fact label="Last name">{guest.lastName}</Fact>
-        <Fact label="Email">
-          <a className="adm-detail-link" href={`mailto:${guest.email}`}>
-            {guest.email}
-          </a>
-        </Fact>
-        <Fact label="Phone">
-          <a className="adm-detail-link" href={`tel:${guest.phone}`}>
-            {guest.phone}
-          </a>
-        </Fact>
-        <Fact label="Country">{guest.country}</Fact>
-      </Section>
+      <DetailSection id="detail-guest" title="Guest">
+        <DetailFacts
+          rows={[
+            { label: "First name", value: guest.firstName },
+            { label: "Last name", value: guest.lastName },
+            {
+              label: "Email",
+              value: (
+                <a className="adm-detail-link" href={`mailto:${guest.email}`}>
+                  {guest.email}
+                </a>
+              ),
+            },
+            {
+              label: "Phone",
+              value: (
+                <a className="adm-detail-link" href={`tel:${guest.phone}`}>
+                  {guest.phone}
+                </a>
+              ),
+            },
+            { label: "Country", value: guest.country },
+          ]}
+        />
+      </DetailSection>
 
-      <Section id="detail-stay" title="Stay" note="Check-out is the morning the guest leaves.">
-        <Fact label="Check-in">{formatDateWithYear(stay.checkIn)}</Fact>
-        <Fact label="Check-out">{formatDateWithYear(stay.checkOut)}</Fact>
-        <Fact label="Nights">{plural(stay.nights, "night")}</Fact>
-        <Fact label="Adults">{stay.adults}</Fact>
-        <Fact label="Children">{stay.children}</Fact>
-      </Section>
+      <DetailSection
+        id="detail-stay"
+        title="Stay"
+        note="Check-out is the morning the guest leaves."
+      >
+        <DetailFacts
+          rows={[
+            { label: "Check-in", value: formatDateWithYear(stay.checkIn) },
+            { label: "Check-out", value: formatDateWithYear(stay.checkOut) },
+            { label: "Nights", value: plural(stay.nights, "night") },
+            { label: "Adults", value: stay.adults },
+            { label: "Children", value: stay.children },
+          ]}
+        />
+      </DetailSection>
 
-      <Section id="detail-room" title="Room">
-        <Fact label="Room type">{roomType.name}</Fact>
-        <Fact label="Room type reference">{roomType.slug}</Fact>
-        {/* The allocated room, shown nowhere else in the system. */}
-        <Fact label="Room number">{room.number}</Fact>
-      </Section>
+      <DetailSection id="detail-room" title="Room">
+        <DetailFacts
+          rows={[
+            { label: "Room type", value: roomType.name },
+            {
+              label: "Room type reference",
+              value: <span className="adm-ref">{roomType.slug}</span>,
+            },
+            // The allocated room, shown nowhere else in the system.
+            {
+              label: "Room number",
+              value: <span className="adm-cell-strong">{room.number}</span>,
+            },
+          ]}
+        />
+      </DetailSection>
 
-      <Section
+      <DetailSection
         id="detail-pricing"
         title="Pricing"
         note="The rate accepted when the booking was taken, not today’s rate."
       >
-        <Fact label="Nightly rate">{formatEgp(pricing.nightlyRate)}</Fact>
-        <Fact label="Total">{formatEgp(pricing.totalAmount)}</Fact>
-        <Fact label="Currency">{pricing.currency}</Fact>
-      </Section>
+        <DetailFacts
+          rows={[
+            {
+              label: "Nightly rate",
+              value: <span className="adm-cell-money">{formatEgp(pricing.nightlyRate)}</span>,
+            },
+            {
+              label: "Total",
+              value: (
+                <span className="adm-cell-money adm-cell-strong">
+                  {formatEgp(pricing.totalAmount)}
+                </span>
+              ),
+            },
+            { label: "Currency", value: pricing.currency },
+          ]}
+        />
+      </DetailSection>
 
-      <section className="adm-panel" aria-labelledby="detail-requests">
-        <PanelHeader id="detail-requests" title="Special requests" />
-        <p className="adm-detail-note">
-          {reservation.specialRequests ?? (
-            // Said plainly, so an empty panel is never mistaken for a loading
-            // one or for a request that failed to arrive.
-            <span className="adm-detail-empty">None left with this booking.</span>
-          )}
-        </p>
-      </section>
-    </div>
+      <DetailSection id="detail-requests" title="Special requests">
+        <DetailFacts
+          rows={[
+            {
+              label: "From the guest",
+              value:
+                reservation.specialRequests ?? (
+                  // Said plainly, so an empty panel is never mistaken for a
+                  // loading one or for a request that failed to arrive.
+                  <span className="adm-cell-muted">None left with this booking.</span>
+                ),
+            },
+          ]}
+        />
+      </DetailSection>
+    </>
   );
 }

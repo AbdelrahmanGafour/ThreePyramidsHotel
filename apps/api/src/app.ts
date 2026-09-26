@@ -1,6 +1,8 @@
 import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { adminAuthRouter } from './modules/admin-auth/admin-auth.routes';
+import { adminPackageReservationsRouter } from './modules/admin-package-reservations/admin-package-reservations.routes';
+import { adminPackagesRouter } from './modules/admin-packages/admin-packages.routes';
 import { adminReservationsRouter } from './modules/admin-reservations/admin-reservations.routes';
 import {
   createAdminRoomTypeMediaRouter,
@@ -99,6 +101,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use('/api/v1/admin/auth', adminAuthRouter);
   // Administration reads, guarded inside the router itself.
   app.use('/api/v1/admin/reservations', adminReservationsRouter);
+  // A separate namespace from the room reservations above, not a variant of
+  // them: a package reservation consumes no room inventory, is priced in USD,
+  // and may carry no total at all.
+  app.use('/api/v1/admin/package-reservations', adminPackageReservationsRouter);
+  // The package catalogue an administrator manages. A different namespace
+  // from the public /api/v1/packages above, which serves only active
+  // offerings to guests and exposes neither ownership nor running order.
+  app.use('/api/v1/admin/packages', adminPackagesRouter);
   app.use('/api/v1/admin/room-types', adminRoomTypesRouter);
   // A third router at the identical prefix, not a new top-level namespace:
   // the JSON-bodied and no-body room-type media routes, mounted after

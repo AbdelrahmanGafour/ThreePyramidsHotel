@@ -161,7 +161,7 @@ describe('variant reorder parking', () => {
         statements.push({ text, values });
 
         if (text.includes('FROM packages')) {
-          return { rows: [{ id: '1', code: 'TEST-EXCURSION', slug: 'test-excursion' }] };
+          return { rows: [{ id: '1', code: 'TEST-EXCURSION', slug: 'test-excursion', seed_managed: true }] };
         }
         if (text.includes('SELECT key, sort_order FROM package_variants')) {
           return { rows: existingVariants.map((v) => ({ key: v.key, sort_order: v.sortOrder })) };

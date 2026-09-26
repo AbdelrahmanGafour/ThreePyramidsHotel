@@ -20,6 +20,11 @@ let client: PoolClient;
 const tables = ['packages', 'package_itinerary_sections', 'package_content_items',
   'package_variants', 'package_rate_tiers', 'package_reservations'].sort();
 const migrationName = '1790200000000_create-packages-and-package-reservations';
+const ownershipMigrationName = '1790300000000_add-packages-seed-managed';
+/** Everything this suite owns, in apply order, on top of main's baseline. */
+const packageMigrations = [migrationName, ownershipMigrationName];
+/** Migrations that exist before any package migration. */
+const BASELINE = 6;
 let baseline: unknown;
 let connected = false;
 let ready = false;
@@ -80,20 +85,24 @@ before(async () => {
   const historyExists = (await client.query("SELECT to_regclass('public.pgmigrations') AS name")).rows[0].name;
   if (historyExists) {
     const history = (await client.query('SELECT name FROM pgmigrations ORDER BY id')).rows;
-    // Current main's baseline is 6 migrations; 7 means the package migration
-    // is already applied and this run must start by taking it back down.
-    assert.ok(history.length === 6 || history.length === 7, 'Unexpected migration history');
-    if (history.length === 7) {
-      assert.equal(history[6].name, migrationName);
+    // Current main's baseline is 6 migrations. Anything above that is this
+    // suite's own subject — the package migration and the ownership column
+    // that follows it — already applied, and this run starts by taking
+    // exactly those back down, newest first.
+    assert.ok(history.length >= BASELINE && history.length <= BASELINE + packageMigrations.length,
+      'Unexpected migration history');
+    if (history.length > BASELINE) {
+      assert.deepEqual(history.slice(BASELINE).map((row: { name: string }) => row.name),
+        packageMigrations.slice(0, history.length - BASELINE));
       await assertNoFixtures();
-      await migrate('down', 1);
+      await migrate('down', history.length - BASELINE);
     }
   } else {
     assert.equal((await client.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public'")).rows[0].n, 0,
       'A fresh disposable database must be empty');
-    assert.equal((await migrate('up', 6)).length, 6);
+    assert.equal((await migrate('up', BASELINE)).length, BASELINE);
   }
-  assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n, 6);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n, BASELINE);
   baseline = await hotelSnapshot();
   ready = true;
 });
@@ -121,10 +130,59 @@ it('migrates UP / DOWN / UP, removes owned objects, and makes repeated UP a no-o
   assert.equal((await client.query("SELECT count(*)::int AS n FROM pg_extension WHERE extname='btree_gist'")).rows[0].n, 1);
   assert.equal((await migrate('up', 1)).length, 1);
   assert.deepEqual(await packageTables(), tables);
+  // The ownership column follows the package tables and is applied here, so
+  // the rest of this suite runs against the schema a deployment actually has.
+  assert.equal((await migrate('up')).length, packageMigrations.length - 1);
   assert.equal((await migrate('up')).length, 0);
-  // Baseline 6 plus the package migration.
-  assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n, 7);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n,
+    BASELINE + packageMigrations.length);
   t.diagnostic('UP/DOWN/UP/no-op UP passed; existing hotel schema, rows and sequences unchanged');
+});
+
+// The ownership column, proved against real PostgreSQL: that it backfills an
+// existing package as seed-owned, that its own DOWN takes nothing else with
+// it, and that the package tables are untouched either way.
+it('backfills seed_managed as true and reverses cleanly on its own', async t => {
+  const columnCount = async () => (await client.query(`SELECT count(*)::int AS n
+    FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='packages' AND column_name='seed_managed'`)).rows[0].n;
+
+  // Down one step: the ownership column goes, the package tables stay.
+  assert.equal((await migrate('down', 1)).length, 1);
+  assert.equal(await columnCount(), 0, 'DOWN removes the column');
+  assert.deepEqual(await packageTables(), tables, 'DOWN takes no table with it');
+  assert.deepEqual(await hotelSnapshot(), baseline, 'and touches nothing outside packages');
+
+  // A package row that predates the column, so the backfill is real rather
+  // than the column default acting on a fresh insert.
+  const code = 'ITEST-OWNERSHIP';
+  await client.query(
+    `INSERT INTO packages (code, slug, title) VALUES ($1, 'itest-ownership', 'Ownership fixture')`,
+    [code],
+  );
+
+  try {
+    assert.equal((await migrate('up', 1)).length, 1);
+    assert.equal(await columnCount(), 1, 'UP restores the column');
+
+    const column = (await client.query(`SELECT data_type, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='packages' AND column_name='seed_managed'`)).rows[0];
+    assert.equal(column.data_type, 'boolean');
+    assert.equal(column.is_nullable, 'NO');
+    assert.match(String(column.column_default), /true/);
+
+    const existing = (await client.query('SELECT seed_managed FROM packages WHERE code = $1', [code])).rows[0];
+    assert.equal(existing.seed_managed, true, 'a package that predates the column is seed-owned');
+
+    // Nothing else about the table moved.
+    assert.deepEqual(await packageTables(), tables);
+    assert.deepEqual(await hotelSnapshot(), baseline);
+  } finally {
+    await client.query('DELETE FROM packages WHERE code = $1', [code]);
+  }
+
+  t.diagnostic('seed_managed backfills true, is NOT NULL, and its DOWN removes only itself');
 });
 
 it('installs all required indexes, validated constraints and package-only foreign keys', async t => {

@@ -7,6 +7,10 @@ export type AdminIconName = AdminNavKey | "menu" | "close" | "external";
 const paths: Record<AdminIconName, string> = {
   overview: "M3.5 3.5h5.5v5.5H3.5zM11 3.5h5.5v5.5H11zM3.5 11H9v5.5H3.5zM11 11h5.5v5.5H11z",
   reservations: "M3.5 5h13v11.5h-13zM3.5 8.5h13M7 3v3.5M13 3v3.5",
+  // A ticket stub rather than the calendar above: a journey booking is a
+  // sold seat, and the two reservation areas must not read alike.
+  packageReservations:
+    "M2.5 6h15v3a1.5 1.5 0 0 0 0 2v3h-15v-3a1.5 1.5 0 0 0 0-2zM12.5 6v8",
   rooms: "M2.5 15.5v-8M2.5 12h15v3.5M17.5 12V9.5a2 2 0 0 0-2-2H9.5V12M5.5 10h.01",
   journeys: "M4 16.5c0-3 3-2.5 3-5.5s-3-2.5-3-5.5M16 3.5c0 3-3 2.5-3 5.5s3 2.5 3 5.5M6.5 16.5h.01M13.5 3.5h.01",
   inquiries: "M2.5 4.5h15v11h-15zM2.5 5l7.5 6 7.5-6",

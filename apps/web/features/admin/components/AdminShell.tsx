@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { adminNavigation } from "../data/adminNavigation";
+import { adminNavigation, isAdminNavItemActive } from "../data/adminNavigation";
 import type { AdminAccount } from "../types";
 import { AdminSidebar } from "./AdminSidebar";
 import { AdminTopBar } from "./AdminTopBar";
@@ -25,7 +25,7 @@ export function AdminShell({
   const shellRef = useRef<HTMLDivElement>(null);
 
   const section =
-    adminNavigation.find((item) => (item.href === "/admin" ? pathname === "/admin" : pathname.startsWith(item.href))) ??
+    adminNavigation.find((item) => isAdminNavItemActive(pathname, item)) ??
     adminNavigation[0];
 
   const closeMenu = useCallback(() => {

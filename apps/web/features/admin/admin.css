@@ -423,61 +423,63 @@ a.adm-nav-item:hover {
   line-height: 1.6;
 }
 
-.adm-demo-note {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  color: var(--adm-muted);
-  font-size: 0.875rem;
-}
-
-/* ---- Metrics: one ruled strip, not four cards -------------------------- */
-.adm-metrics {
-  margin-bottom: 1.5rem;
-  border: 1px solid var(--adm-rule);
-  border-top: 2px solid var(--brass);
-  background: var(--adm-rule);
-}
-
-.adm-metrics dl {
+/* ---- Overview -----------------------------------------------------------
+   The landing page, and nothing more than a landing page. It used to carry a
+   metrics strip, three panels and a grid of management areas, all computed
+   from a demo fixture; figures nobody could act on are worse than none. What
+   is left is a greeting and the four ways on, so it needs almost no styling
+   of its own. */
+.adm-overview {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
+  gap: 1.75rem;
+  max-width: 46rem;
 }
 
-.adm-metric {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  padding: 1rem 1.15rem 1.1rem;
-  background: var(--adm-panel);
+.adm-overview-head {
+  display: grid;
+  gap: 0.4rem;
 }
 
-.adm-metric dt {
-  color: var(--ink);
-  font-size: 0.875rem;
-  font-weight: 700;
-}
-
-.adm-metric-value {
-  font-size: 2.25rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
+.adm-overview-greeting {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  font-weight: 500;
   line-height: 1.15;
 }
 
-.adm-metric-detail {
+.adm-overview-lede {
   color: var(--adm-muted);
-  font-size: 0.875rem;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+/* Four plain controls on one line once there is room, wrapping before they
+   shrink. The same geometry as a record-level action elsewhere in the admin,
+   so they read as the product's own buttons rather than as a new widget. */
+.adm-quicklinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.adm-quicklink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0 1rem;
+  border: 1px solid var(--adm-rule);
+  background: var(--adm-panel);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+a.adm-quicklink:hover {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ivory);
 }
 
 /* ---- Panels ------------------------------------------------------------ */
-.adm-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 1.5rem;
-}
-
 .adm-panel {
   min-width: 0;
   border: 1px solid var(--adm-rule);
@@ -573,6 +575,614 @@ a.adm-nav-item:hover {
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+/* ==== Admin detail pages ================================================
+   The shared visual language of the four screens that read one record in
+   depth: a journey, a room type, a journey reservation and a room
+   reservation. Everything below is scoped to `.adm-detail`, the wrapper
+   those pages put around their stack, so the list tables, the dashboard
+   widgets, the navigation and the form screens are untouched by it.
+
+   The shape is a vertical stack of panels: a masthead saying what the
+   record is, then one panel per thing worth reading, each a heading row
+   over a table. An earlier pass built this for the journey page with the
+   tables straight on the workspace ground; the order was right but nothing
+   enclosed it, so the page read as one long sheet. */
+.adm-detail {
+  display: grid;
+  gap: 1.25rem;
+}
+
+/* On a detail page the masthead carries the heading, so the page header is
+   only the way back and needs far less air under it. Where `:has()` is not
+   supported the header simply keeps the spacing it has always had. */
+.adm-page-head:not(:has(h1)) {
+  margin-bottom: 1rem;
+}
+
+/* The panel surface is only a shade above the workspace ground. On a page
+   that is all panels, that shade alone did not read as an edge, so each one
+   gets a hairline — not a drop shadow; this admin has almost none. */
+.adm-detail .adm-panel {
+  box-shadow: 0 1px 2px rgba(30, 24, 21, 0.05);
+}
+
+/* ---- Masthead -----------------------------------------------------------
+   Name, identifiers and state on the left; the record-level actions on the
+   right, pushed apart so they are a column of their own rather than the
+   tail of a sentence. It carries the page's <h1>. */
+.adm-detail-ident {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem 1.5rem;
+  padding: 1.15rem 1.25rem 1.25rem;
+}
+
+.adm-ident-main {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.adm-ident-title {
+  font-family: var(--font-display), Georgia, serif;
+  font-size: clamp(1.5rem, 2.6vw, 1.95rem);
+  font-weight: 500;
+  line-height: 1.15;
+  /* A booking reference has no spaces to break at. */
+  overflow-wrap: anywhere;
+}
+
+/* The short identifiers — a code, a slug, a date — on one quiet line under
+   the name a person would use. */
+.adm-ident-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+  color: var(--adm-muted);
+  font-size: 0.8125rem;
+}
+
+.adm-ident-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The dot between them, drawn rather than typed, so it never reaches a
+   screen reader as a word. */
+.adm-ident-sep {
+  flex: none;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentcolor;
+  opacity: 0.55;
+}
+
+.adm-ident-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.5rem;
+}
+
+.adm-ident-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* A record-level action is a control, not a sentence: bordered, the same
+   height as its neighbour, aligned on one line. */
+.adm-ident-action {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding: 0 0.95rem;
+  border: 1px solid var(--adm-rule);
+  background: var(--ivory);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+a.adm-ident-action:hover {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ivory);
+}
+
+/* A fact worth setting off from running text, at badge weight but without a
+   badge's status meaning. */
+.adm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.6rem;
+  border: 1px solid var(--adm-rule);
+  background: var(--ivory);
+  color: var(--adm-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+/* ---- Sections ----------------------------------------------------------- */
+.adm-sheet {
+  display: grid;
+  align-content: start;
+}
+
+/* The heading row: the section name and its one management action, over a
+   rule that separates the label from the content it labels. */
+.adm-sheet-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--adm-rule);
+}
+
+.adm-sheet-title {
+  margin: 0;
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--adm-muted);
+}
+
+.adm-sheet-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.85rem;
+}
+
+/* Explanatory prose sits on the panel's inner margin, ruled off from the
+   body below so it is read as preamble and not as a first row. */
+.adm-sheet-note {
+  margin: 0;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--adm-rule-soft);
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--adm-muted);
+}
+
+.adm-sheet > .adm-notice {
+  margin: 0.9rem 1.25rem;
+}
+
+/* Several advisories in one box, each still its own paragraph-length point. */
+.adm-notice-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding-left: 1.1rem;
+  list-style: disc;
+  font-weight: 400;
+}
+
+/* A section with nothing in it still has a body, so the panel does not
+   collapse into a bare heading strip. */
+.adm-empty-row {
+  margin: 0;
+  padding: 1.15rem 1.25rem;
+  font-size: 0.9rem;
+  color: var(--adm-muted);
+}
+
+.adm-sheet-link {
+  font-size: 0.86rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+/* A form or an action group is the body of its section, so it needs no rule
+   of its own above it — the heading row, or the preamble under it, already
+   drew one. */
+.adm-sheet > .adm-form,
+.adm-sheet > .adm-actions,
+.adm-sheet > .adm-detail-note {
+  border-top: 0;
+}
+
+/* A form is the body, so it needs the panel's bottom margin too; on its own
+   it only pads the top, expecting an action bar below it. */
+.adm-sheet > .adm-form:last-child {
+  padding-bottom: 1.25rem;
+}
+
+/* A section that is only a heading and an explanation — the archived note —
+   must not draw a rule where the panel border already is. */
+.adm-sheet > .adm-sheet-note:last-child {
+  border-bottom: 0;
+}
+
+/* ---- Compact tables -----------------------------------------------------
+   The admin's table language, tightened vertically because a detail page
+   carries several tables, and padded at the edges to the panel's own inner
+   margin so a row starts where the heading above it starts. */
+.adm-table-compact th,
+.adm-table-compact td {
+  padding: 0.65rem 0.9rem;
+  vertical-align: middle;
+}
+
+.adm-table-compact th:first-child,
+.adm-table-compact td:first-child {
+  padding-left: 1.25rem;
+}
+
+.adm-table-compact th:last-child,
+.adm-table-compact td:last-child {
+  padding-right: 1.25rem;
+}
+
+.adm-table-compact td.adm-cell-top {
+  vertical-align: top;
+  padding-top: 0.8rem;
+  padding-bottom: 0.9rem;
+}
+
+/* Column names read as column names. Scoped to the compact tables, so the
+   list screens keep the header they already had. */
+.adm-detail .adm-table-compact thead th {
+  background: rgba(30, 24, 21, 0.035);
+  font-size: 0.75rem;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The panel head already rules off the table; a second line above the column
+   names would draw a double edge. */
+.adm-sheet .adm-table thead th {
+  border-top: 0;
+}
+
+.adm-sheet .adm-list > li:first-child {
+  border-top: 0;
+}
+
+/* A table that outgrows its panel scrolls inside it. Without this the panel
+   itself widens and the whole workspace gains a scrollbar. */
+.adm-detail .adm-table-wrap {
+  overflow-x: auto;
+}
+
+/* A row label in a two-column metadata table: quiet, narrow, never bold, and
+   tinted so the label column reads as one thing down the page. */
+.adm-cell-label {
+  width: 12rem;
+  background: rgba(30, 24, 21, 0.022);
+  font-weight: 400;
+  color: var(--adm-muted);
+  white-space: nowrap;
+}
+
+.adm-cell-muted {
+  color: var(--adm-muted);
+}
+
+/* A value that must be read exactly: a reference, a total, a room number. */
+.adm-cell-strong {
+  font-weight: 600;
+}
+
+.adm-cell-money {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The one cell that must be noticed — a variant nobody can book. A chip with
+   its own mark, so the state is not carried by colour alone. */
+.adm-cell-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.22rem 0.6rem;
+  border: 1px solid rgba(155, 51, 36, 0.45);
+  background: rgba(155, 51, 36, 0.07);
+  color: var(--danger);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.adm-cell-alert-mark {
+  flex: none;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+/* A secondary identifier under a value: a variant key, a slug. */
+.adm-cell-sub {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  color: var(--adm-muted);
+}
+
+/* Lines inside a content column, tight enough to read as one list. */
+.adm-cell-lines {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.25rem;
+  list-style: disc;
+}
+
+.adm-col-narrow {
+  width: 7rem;
+}
+
+.adm-col-medium {
+  width: 13rem;
+}
+
+/* Two ranks of controls need a reserved column; left to share what remains,
+   the links wrapped a word at a time. */
+.adm-col-actions {
+  width: 16rem;
+}
+
+/* ---- Row actions --------------------------------------------------------
+   Everyday links on the first line, the composed controls under them. One
+   wrapping run of links and buttons was the messiest part of these pages. */
+.adm-row-actions {
+  display: grid;
+  justify-items: start;
+  gap: 0.45rem;
+}
+
+.adm-row-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.1rem 0.85rem;
+}
+
+.adm-row-extra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
+}
+
+.adm-row-extra form {
+  display: inline-flex;
+}
+
+.adm-row-action {
+  font-size: 0.82rem;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+/* Inside a row these are secondary controls, not page-level buttons. */
+.adm-row-extra .adm-action-btn {
+  min-height: 1.9rem;
+  padding: 0 0.6rem;
+  font-size: 0.78rem;
+}
+
+/* The per-row delete disclosure. Open, it must stay inside its cell and read
+   as one contained warning rather than loose text under a button. */
+.adm-row-extra .adm-confirm > summary {
+  font-size: 0.82rem;
+}
+
+.adm-row-extra .adm-confirm[open] {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(155, 51, 36, 0.45);
+  background: rgba(155, 51, 36, 0.06);
+}
+
+.adm-row-extra .adm-confirm > * + * {
+  margin-top: 0;
+}
+
+/* ---- Danger zone --------------------------------------------------------
+   Deliberately unlike every other panel: destructive removal must not read
+   as one more management task, and must not be as large as one. Set apart
+   by a gap above it as well as by colour, so it is plainly not the last
+   item in the run of management sections. */
+.adm-panel[data-tone="danger"] {
+  margin-top: 2.25rem;
+  /* The same `--danger` the destructive button already uses, so the panel
+     and the control inside it read as one warning rather than two. */
+  border-color: var(--danger);
+  border-top: 2px solid var(--danger);
+  background:
+    linear-gradient(0deg, rgba(155, 51, 36, 0.045), rgba(155, 51, 36, 0.045)),
+    var(--adm-panel);
+}
+
+.adm-panel[data-tone="danger"] .adm-panel-head {
+  padding-bottom: 0.75rem;
+}
+
+.adm-panel[data-tone="danger"] .adm-panel-title {
+  color: var(--danger);
+}
+
+/* The advisory and the disclosure share the panel's inner margin, so the
+   destructive control lines up with the words that explain it. */
+.adm-panel[data-tone="danger"] > .adm-notice {
+  margin: 0 1.25rem 1rem;
+}
+
+.adm-panel[data-tone="danger"] > .adm-detail-note {
+  border-top: 1px solid rgba(155, 51, 36, 0.25);
+}
+
+/* ---- Confirmations ------------------------------------------------------
+   A two-step destructive control: a summary that opens, then the button.
+   Unstyled it sat flush against the panel edge with its parts unspaced. */
+.adm-panel > .adm-confirm {
+  padding: 0 1.25rem 1.25rem;
+}
+
+.adm-confirm > summary {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--danger);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.adm-confirm > summary::marker,
+.adm-confirm > summary::-webkit-details-marker {
+  color: var(--danger);
+}
+
+.adm-confirm > * + * {
+  margin-top: 0.6rem;
+}
+
+.adm-confirm[open] > summary {
+  margin-bottom: 0.2rem;
+}
+
+/* ==== Admin create pages ================================================
+   The two screens that make a new record. They share the detail pages'
+   frame — a stack of panels with a masthead on top — and add what a form
+   needs on top of it: an action bar, checkbox presentation and a width for
+   numeric fields. Everything is scoped to `.adm-form-page`, so the edit
+   screens and every other `.adm-form` consumer keep exactly what they have. */
+.adm-form-page {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.adm-form-page .adm-panel {
+  box-shadow: 0 1px 2px rgba(30, 24, 21, 0.05);
+}
+
+.adm-form-masthead {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1.15rem 1.25rem 1.25rem;
+}
+
+.adm-form-lede {
+  max-width: 46rem;
+  color: var(--adm-muted);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+/* The one <form>, holding the sections. The sections are its grid children,
+   so they sit at the same rhythm as the panels above and below it. */
+.adm-form-stack {
+  display: grid;
+  gap: 1.25rem;
+}
+
+/* ---- Fields -------------------------------------------------------------
+   A section is a panel, so its form body is the panel's body. The rule above
+   it and the margin below it are already handled by the shared section
+   styles, which is the point of reusing them.
+
+   A fieldset grouping one question's checkboxes. Browsers give it a border
+   and padding of their own, which this admin's reset does not cover. */
+.adm-form-page fieldset.adm-field {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+/* A number is a few characters wide; stretched to the panel it reads as a
+   text field that happens to hold digits. */
+.adm-form-page .adm-field-short .field-control {
+  max-width: 12rem;
+}
+
+/* ---- Checkboxes ---------------------------------------------------------
+   A bare checkbox and its text had no styling at all, so a set of seven ran
+   together as one paragraph. Each choice is now its own target. */
+.adm-form-page .adm-checkboxes {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+}
+
+.adm-form-page .adm-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--adm-rule);
+  background: var(--field-surface);
+  font-size: 0.9375rem;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.adm-form-page .adm-checkbox:hover {
+  border-color: var(--ink);
+}
+
+.adm-form-page .adm-checkbox:has(input:checked) {
+  border-color: var(--aged-gold);
+  background: rgba(176, 138, 81, 0.1);
+  font-weight: 600;
+}
+
+.adm-form-page .adm-checkbox input[type="checkbox"] {
+  flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  accent-color: var(--aged-gold);
+}
+
+/* ---- Action bar ---------------------------------------------------------
+   At the foot of the form rather than inside the last section, so it reads
+   as the end of the page and not as the end of whichever group of fields
+   happens to come last. */
+.adm-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--adm-rule);
+  border-top: 2px solid var(--brass);
+  background: var(--adm-panel);
+  box-shadow: 0 1px 2px rgba(30, 24, 21, 0.05);
+}
+
+/* Leaving is a link, not a peer of the submit: nothing has been created yet,
+   so there is nothing to cancel and no second button to weigh up. */
+.adm-form-cancel {
+  color: var(--adm-muted);
+  font-size: 0.9375rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+a.adm-form-cancel:hover {
+  color: var(--ink);
 }
 
 /* ---- Reservation detail ------------------------------------------------ */
@@ -917,63 +1527,6 @@ a.adm-pager-link:hover {
 
 .adm-status[data-tone="terracotta"] .adm-status-mark {
   color: var(--terracotta);
-}
-
-/* ---- Room units -------------------------------------------------------- */
-.adm-room-meter {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0.85rem;
-  margin-top: 0.15rem;
-}
-
-.adm-units {
-  display: inline-flex;
-  gap: 3px;
-}
-
-.adm-unit {
-  display: inline-block;
-  width: 0.75rem;
-  height: 0.75rem;
-  border: 1px solid var(--ink);
-  vertical-align: -1px;
-}
-
-.adm-unit[data-state="occupied"] {
-  background: var(--ink);
-}
-
-.adm-unit[data-state="available"] {
-  background: transparent;
-}
-
-.adm-unit[data-state="blocked"] {
-  border-color: var(--danger);
-  background: repeating-linear-gradient(135deg, var(--danger) 0 2px, transparent 2px 4px);
-}
-
-.adm-legend > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.adm-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1.25rem;
-}
-
-/* ---- Management areas -------------------------------------------------- */
-.adm-areas > li {
-  padding: 0.8rem 1.25rem;
-  border-top: 1px solid var(--adm-rule-soft);
-}
-
-.adm-areas > li:first-child {
-  border-top: 1px solid var(--adm-rule);
 }
 
 /* ---- Breakpoints ------------------------------------------------------- */
