@@ -8,7 +8,7 @@ import {
 import type { AdminPhysicalRoom } from "../types";
 import { AdminActionButton } from "./AdminActionButton";
 import { AdminFormField } from "./AdminFormField";
-import { PanelHeader } from "./PanelHeader";
+import { DetailEmpty, DetailSection } from "./AdminDetail";
 import { StatusBadge } from "./StatusBadge";
 
 // The hotel's physical rooms of one room type — what the backend actually
@@ -52,12 +52,11 @@ export function AdminPhysicalRoomsPanel({
   const addRoom = addAdminPhysicalRoomAction.bind(null, roomTypeSlug);
 
   return (
-    <section className="adm-panel" aria-labelledby="room-type-rooms">
-      <PanelHeader
-        id="room-type-rooms"
-        title="Physical rooms"
-        note="The rooms the hotel has of this type. A room type with none can never be allocated to a guest."
-      />
+    <DetailSection
+      id="room-type-rooms"
+      title="Physical rooms"
+      note="The rooms the hotel has of this type. A room type with none can never be allocated to a guest."
+    >
 
       <form className="adm-form" action={addRoom}>
         <AdminFormField
@@ -90,19 +89,17 @@ export function AdminPhysicalRoomsPanel({
       </form>
 
       {rooms === null ? (
-        <p className="adm-detail-note">
+        <DetailEmpty>
           {/* Deliberately not "no rooms yet": nothing is known about this room
               type's inventory, and an empty list would be a different claim. */}
           The list of rooms could not be loaded just now. The room type details above are
           unaffected. Reload the page in a moment; if it keeps failing, contact the hotel’s system
           administrator.
-        </p>
+        </DetailEmpty>
       ) : rooms.length === 0 ? (
-        <p className="adm-detail-note">
-          <span className="adm-detail-empty">
-            No rooms have been added to this room type yet, so it cannot be booked. Add one above.
-          </span>
-        </p>
+        <DetailEmpty>
+          No rooms have been added to this room type yet, so it cannot be booked. Add one above.
+        </DetailEmpty>
       ) : (
         <ul className="adm-rooms">
           {rooms.map((room) => (
@@ -110,7 +107,7 @@ export function AdminPhysicalRoomsPanel({
           ))}
         </ul>
       )}
-    </section>
+    </DetailSection>
   );
 }
 

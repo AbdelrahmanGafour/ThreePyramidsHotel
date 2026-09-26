@@ -4,6 +4,7 @@
 export type AdminNavKey =
   | "overview"
   | "reservations"
+  | "packageReservations"
   | "rooms"
   | "journeys"
   | "inquiries"
@@ -361,4 +362,187 @@ export type AdminInquiry = {
   /** Hotel wall-clock time, ISO without offset (YYYY-MM-DDTHH:mm). */
   receivedAt: string;
   status: InquiryStatus;
+};
+
+// ---------------------------------------------------------------------------
+// Package reservations
+//
+// Deliberately separate from the room reservation types above. The two look
+// alike and are not the same thing: a package reservation consumes no room
+// inventory, is priced in USD, and may legitimately carry no total at all.
+// ---------------------------------------------------------------------------
+
+export type AdminPackageReservationStatus = "pending" | "confirmed" | "cancelled";
+
+/**
+ * What an administrator may ask a package reservation to become.
+ *
+ * Derived from the status union rather than restated, so the two cannot drift.
+ * The API is stricter still: only a `pending` reservation may move at all, and
+ * both `confirmed` and `cancelled` are terminal. That rule lives there, and
+ * this type only says which words a request may carry.
+ */
+export type AdminPackageReservationStatusTarget = Exclude<
+  AdminPackageReservationStatus,
+  "pending"
+>;
+
+/**
+ * Whether the stored total is a real quote or a promise to quote later.
+ *
+ * `requires_confirmation` is not an error and not a missing value: the API
+ * returns `totalAmountSnapshot: null` for exactly these, which must be shown
+ * as "to be confirmed" and never as zero.
+ */
+export type AdminPackageReservationPricingStatus = "quoted" | "requires_confirmation";
+
+/**
+ * One row of the admin package reservations list, exactly as the API returns
+ * it. Declared here rather than beside the server-only client so a table
+ * component can use it without importing across the server boundary.
+ *
+ * No database id of any kind: a reservation is identified by its booking
+ * reference, and a package or variant by slug and key.
+ */
+export type AdminPackageReservationListItem = {
+  bookingReference: string;
+  package: {
+    code: string;
+    slug: string;
+    title: string;
+  };
+  variant: {
+    key: string;
+    label: string;
+  };
+  guestName: string;
+  guestEmail: string;
+  guestPhone: string;
+  /** "YYYY-MM-DD". */
+  tourDate: string;
+  adults: number;
+  children: number;
+  status: AdminPackageReservationStatus;
+  pricingStatus: AdminPackageReservationPricingStatus;
+  currency: "USD";
+  /** The exact decimal string, or null when the total awaits confirmation. */
+  totalAmountSnapshot: string | null;
+  /** ISO 8601 instant. */
+  createdAt: string;
+};
+
+/** No pagination yet: the API returns every reservation, newest first. */
+export type AdminPackageReservationList = {
+  reservations: AdminPackageReservationListItem[];
+};
+
+/**
+ * One package reservation in full.
+ *
+ * Defined as the list item plus the rest, so "the detail shows everything the
+ * list shows" is true by construction and cannot drift as either changes.
+ * Still no database id of any kind.
+ */
+export type AdminPackageReservationDetail = AdminPackageReservationListItem & {
+  guestCountry: string;
+  /** One age per child, or null when exact child pricing never needed them. */
+  childAges: number[] | null;
+  specialRequests: string | null;
+  /** The exact decimal strings the reservation was quoted at, never recomputed. */
+  adultUnitRateSnapshot: string;
+  childUnitRateSnapshot: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// Package catalogue
+// ---------------------------------------------------------------------------
+
+/**
+ * Who authors a package row.
+ *
+ * The API reports this; the database's own `seed_managed` boolean never
+ * reaches this app. `brochure` means the catalogue seed still reconciles the
+ * offering, so an edit would be overwritten until ownership moves; `admin`
+ * means an administrator owns it and the seed leaves it alone.
+ */
+export type AdminPackageManagementSource = "brochure" | "admin";
+
+/**
+ * One row of the admin catalogue list, exactly as the API returns it.
+ *
+ * Declared here rather than beside the server-only client so a table
+ * component can use it without importing across the server boundary. No
+ * database id of any kind: a package is addressed by `code` and `slug`.
+ */
+export type AdminPackageListItem = {
+  code: string;
+  /** Kept for the detail route this list will link to once that page exists. */
+  slug: string;
+  title: string;
+  summary: string | null;
+  durationLabel: string | null;
+  scheduleLabel: string | null;
+  requiresPriceConfirmation: boolean;
+  isActive: boolean;
+  sortOrder: number;
+  managementSource: AdminPackageManagementSource;
+  variantCount: number;
+  defaultVariantLabel: string | null;
+};
+
+/** No pagination yet: the API returns the whole catalogue in running order. */
+export type AdminPackageList = {
+  packages: AdminPackageListItem[];
+};
+
+/** One party-size tier, exactly as the API stored it. No figure is computed. */
+export type AdminPackageRateTier = {
+  minPartySize: number;
+  /** null means unbounded — a "3 or more" tier. */
+  maxPartySize: number | null;
+  adultUnitRate: string;
+  currency: "USD";
+};
+
+/**
+ * One variant of a journey. The child-pricing trio is all-or-nothing: the
+ * three fields are null together or set together.
+ */
+export type AdminPackageVariant = {
+  key: string;
+  label: string;
+  isDefault: boolean;
+  sortOrder: number;
+  childMinAge: number | null;
+  childMaxAge: number | null;
+  childDiscountPercent: string | null;
+  rates: AdminPackageRateTier[];
+};
+
+export type AdminPackageItinerarySection = {
+  /** null for a section about the whole journey rather than one day. */
+  dayNumber: number | null;
+  heading: string | null;
+  body: string;
+};
+
+/** The content items, already grouped by the API into the three kinds. */
+export type AdminPackageContent = {
+  included: string[];
+  excluded: string[];
+  notes: string[];
+};
+
+/**
+ * One journey in full.
+ *
+ * Defined as the list item plus the rest, so "the detail shows everything the
+ * list shows" is true by construction. Still no database id of any kind.
+ */
+export type AdminPackageDetail = AdminPackageListItem & {
+  description: string | null;
+  operatingDays: string[] | null;
+  itinerary: AdminPackageItinerarySection[];
+  content: AdminPackageContent;
+  variants: AdminPackageVariant[];
 };

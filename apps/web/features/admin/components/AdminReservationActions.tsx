@@ -1,7 +1,7 @@
 import { updateReservationStatusAction } from "../server/adminReservationActions";
 import type { AdminReservationStatus, AdminReservationStatusTarget } from "../types";
 import { AdminActionButton } from "./AdminActionButton";
-import { PanelHeader } from "./PanelHeader";
+import { DetailEmpty, DetailSection } from "./AdminDetail";
 
 // What an administrator can do to this reservation right now.
 //
@@ -53,13 +53,11 @@ export function AdminReservationActions({
   const canCancel = status === "pending" || status === "confirmed";
 
   return (
-    <section className="adm-panel" aria-labelledby="detail-actions">
-      <PanelHeader
-        id="detail-actions"
-        title="Reservation actions"
-        note="Changes apply immediately and are recorded against this booking."
-      />
-
+    <DetailSection
+      id="detail-actions"
+      title="Reservation actions"
+      note="Changes apply immediately and are recorded against this booking."
+    >
       {canConfirm || canCancel ? (
         <div className="adm-actions">
           {canConfirm ? (
@@ -83,13 +81,11 @@ export function AdminReservationActions({
           ) : null}
         </div>
       ) : (
-        <p className="adm-detail-note">
-          <span className="adm-detail-empty">
-            Cancelled reservations cannot be reopened. Taking the guest back means creating a new
-            booking.
-          </span>
-        </p>
+        <DetailEmpty>
+          Cancelled reservations cannot be reopened. Taking the guest back means creating a new
+          booking.
+        </DetailEmpty>
       )}
-    </section>
+    </DetailSection>
   );
 }

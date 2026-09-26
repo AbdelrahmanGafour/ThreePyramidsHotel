@@ -4,7 +4,7 @@ import { updateRoomTypeAction } from "../server/adminRoomTypeActions";
 import type { AdminRoomTypeDetail } from "../types";
 import { AdminActionButton } from "./AdminActionButton";
 import { AdminFormField } from "./AdminFormField";
-import { PanelHeader } from "./PanelHeader";
+import { DetailFacts, DetailSection } from "./AdminDetail";
 import { StatusBadge } from "./StatusBadge";
 
 // One room type: what cannot be changed here, and what can.
@@ -24,73 +24,64 @@ import { StatusBadge } from "./StatusBadge";
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
-/** One labelled fact. `<div>` inside `<dl>` keeps each pair together. */
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd>{children}</dd>
-    </div>
-  );
-}
-
 export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail }) {
   // Bound server-side from the route, so the form posts no slug as an editable
   // field. Binding is not a security boundary — the action re-checks the value
   // and the admin session plus the API's validation are what protect the data.
   const save = updateRoomTypeAction.bind(null, roomType.slug);
 
-  // A fragment, not a grid: the page owns the stack these panels sit in, so
+  // A fragment, not a stack: the page owns the stack these panels sit in, so
   // the capacity panel beside them shares the same spacing.
   return (
     <>
       {roomType.isActive ? null : (
-        <section className="adm-panel" aria-labelledby="room-type-archived">
-          <PanelHeader id="room-type-archived" title="This room type is archived" />
-          <p className="adm-detail-note">
-            It is hidden from the website, from availability searches and from new bookings, so no
-            guest can book it. Reservations already taken for it are unaffected. You can still edit
-            the details below and they will be ready if it is offered again — bringing a room type
-            back is not something this page can do yet.
-          </p>
-        </section>
+        <DetailSection
+          id="room-type-archived"
+          title="Archived"
+          note="It is hidden from the website, from availability searches and from new bookings, so no guest can book it. Reservations already taken for it are unaffected. You can still edit the details below and they will be ready if it is offered again — bringing a room type back is not something this page can do yet."
+        >
+          {null}
+        </DetailSection>
       )}
 
-      <section className="adm-panel" aria-labelledby="room-type-fixed">
-        <PanelHeader
-          id="room-type-fixed"
-          title="Fixed details"
-          note="These are set when the room type is created and cannot be changed here."
+      <DetailSection
+        id="room-type-fixed"
+        title="Fixed details"
+        note="These are set when the room type is created and cannot be changed here."
+      >
+        <DetailFacts
+          rows={[
+            { label: "Reference", value: <span className="adm-ref">{roomType.slug}</span> },
+            // Capacity is deliberately absent: it has its own panel, because
+            // it is the one value a change to can be refused. One
+            // authoritative place for it beats a read-only copy that can fall
+            // out of step.
+            {
+              label: "Status",
+              value: (
+                <StatusBadge meta={roomTypeStatus[roomType.isActive ? "active" : "archived"]} />
+              ),
+            },
+            // Inventory, not availability: how many rooms belong to this type.
+            {
+              label: "Physical rooms assigned",
+              value: roomType.roomCount === 0 ? "None" : plural(roomType.roomCount, "room"),
+            },
+            {
+              label: "Stored base nightly rate",
+              value: <span className="adm-cell-money">{formatEgp(roomType.baseNightlyRate)}</span>,
+            },
+            { label: "Created", value: formatInstant(roomType.createdAt) },
+            { label: "Last changed", value: formatInstant(roomType.updatedAt) },
+          ]}
         />
-        <dl className="adm-facts">
-          <Fact label="Reference">{roomType.slug}</Fact>
-          {/* Capacity is deliberately absent: it has its own panel, because it
-              is the one value a change to can be refused. One authoritative
-              place for it beats a read-only copy that can fall out of step. */}
-          {/* Inventory, not availability: how many rooms belong to this type. */}
-          <Fact label="Physical rooms assigned">
-            {roomType.roomCount === 0 ? "None" : plural(roomType.roomCount, "room")}
-          </Fact>
-          <Fact label="Status">
-            <StatusBadge meta={roomTypeStatus[roomType.isActive ? "active" : "archived"]} />
-          </Fact>
-          <Fact label="Created">{formatInstant(roomType.createdAt)}</Fact>
-          <Fact label="Last changed">{formatInstant(roomType.updatedAt)}</Fact>
-        </dl>
-        <p className="adm-detail-note">
-          <span className="adm-detail-empty">
-            Stored base nightly rate: {formatEgp(roomType.baseNightlyRate)}.
-          </span>
-        </p>
-      </section>
+      </DetailSection>
 
-      <section className="adm-panel" aria-labelledby="room-type-edit">
-        <PanelHeader
-          id="room-type-edit"
-          title="Edit room type"
-          note="Changes are saved together and take effect immediately."
-        />
-
+      <DetailSection
+        id="room-type-edit"
+        title="Edit room type"
+        note="Changes are saved together and take effect immediately."
+      >
         <form className="adm-form" action={save}>
           <AdminFormField
             id="room-type-name"
@@ -247,7 +238,7 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
             </AdminActionButton>
           </div>
         </form>
-      </section>
+      </DetailSection>
     </>
   );
 }

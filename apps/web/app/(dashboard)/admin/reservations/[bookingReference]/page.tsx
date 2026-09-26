@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import { DetailPage } from "@/features/admin/components/AdminDetail";
+import { AdminReservationActions } from "@/features/admin/components/AdminReservationActions";
 import { AdminReservationDetailView } from "@/features/admin/components/AdminReservationDetail";
 import { fetchAdminReservation } from "@/features/admin/server/adminReservationsApi";
 
@@ -97,7 +99,7 @@ export default async function AdminReservationDetailPage({ params, searchParams 
   if (result.state === "unavailable") {
     return (
       <>
-        <PageHeader />
+        <PageHeader title="Reservation" />
         {/* Not a missing reservation: nothing is known about this booking. */}
         <section className="adm-panel" aria-labelledby="detail-unavailable-title">
           <div className="adm-panel-head">
@@ -118,14 +120,32 @@ export default async function AdminReservationDetailPage({ params, searchParams 
 
   return (
     <>
-      <PageHeader reference={data.bookingReference} guestName={`${data.guest.firstName} ${data.guest.lastName}`} />
+      <PageHeader />
       <StatusNotice notice={statusAction} />
-      <AdminReservationDetailView reservation={data} />
+      <DetailPage>
+        <AdminReservationDetailView
+          reservation={data}
+          actions={
+            <AdminReservationActions
+              bookingReference={data.bookingReference}
+              status={data.status}
+            />
+          }
+        />
+      </DetailPage>
     </>
   );
 }
 
-function PageHeader({ reference, guestName }: { reference?: string; guestName?: string }) {
+/**
+ * The way back, and a heading only where nothing else provides one.
+ *
+ * On a reservation that loaded, the detail view's masthead carries the <h1>
+ * — the booking reference — along with the guest's name, the stay dates and
+ * the status. The fallback branches have no masthead and keep a heading
+ * here, so every state of this route still has exactly one.
+ */
+function PageHeader({ title }: { title?: string }) {
   return (
     <header className="adm-page-head">
       <p className="adm-detail-back">
@@ -133,8 +153,7 @@ function PageHeader({ reference, guestName }: { reference?: string; guestName?: 
           Back to reservations
         </Link>
       </p>
-      <h1 className="adm-page-title">{reference ?? "Reservation"}</h1>
-      {guestName ? <p className="adm-page-lede">Booked by {guestName}.</p> : null}
+      {title ? <h1 className="adm-page-title">{title}</h1> : null}
     </header>
   );
 }

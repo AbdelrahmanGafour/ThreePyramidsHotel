@@ -2,6 +2,11 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import {
+  DetailChip,
+  DetailMasthead,
+  DetailPage,
+} from "@/features/admin/components/AdminDetail";
 import { AdminPhysicalRoomsPanel } from "@/features/admin/components/AdminPhysicalRoomsPanel";
 import { AdminRoomTypeCapacityPanel } from "@/features/admin/components/AdminRoomTypeCapacityPanel";
 import { AdminRoomTypeForm } from "@/features/admin/components/AdminRoomTypeForm";
@@ -16,6 +21,9 @@ import {
 } from "@/features/admin/lib/roomTypes";
 import { fetchAdminPhysicalRooms } from "@/features/admin/server/adminRoomsApi";
 import { fetchAdminRoomTypeImages } from "@/features/admin/server/adminRoomTypeImagesApi";
+import { StatusBadge } from "@/features/admin/components/StatusBadge";
+import { formatEgp } from "@/features/admin/lib/format";
+import { roomTypeStatus } from "@/features/admin/lib/status";
 import { fetchAdminRoomType } from "@/features/admin/server/adminRoomTypesApi";
 
 // One room type, with the fields an administrator may change.
@@ -101,7 +109,7 @@ export default async function AdminRoomTypePage({ params, searchParams }: PagePr
   if (result.state === "unavailable") {
     return (
       <>
-        <PageHeader />
+        <PageHeader title="Room type" />
         {/* Not a missing room type: nothing is known about this one. An outage
             is never turned into a 404 — that would say the room type had been
             removed. */}
@@ -124,17 +132,30 @@ export default async function AdminRoomTypePage({ params, searchParams }: PagePr
 
   return (
     <>
-      <PageHeader name={data.name} />
+      <PageHeader />
       {notice ? (
         <p className="adm-notice" data-tone={notice.tone} role="status">
           {notice.message}
         </p>
       ) : null}
       {/* One stack, so the capacity panel sits beside the T01 panels with the
-          same spacing. Order: archived note, fixed details, general edit, then
-          capacity — the operation that can be refused comes last and stands
-          on its own. */}
-      <div className="adm-detail-grid">
+          same spacing. Order: masthead, archived note, fixed details, general
+          edit, then capacity — the operation that can be refused comes last
+          and stands on its own. */}
+      <DetailPage>
+        {/* The same masthead the other detail pages open with: what this
+            record is called, how it is identified, and the state it is in. */}
+        <DetailMasthead
+          title={data.name}
+          meta={[<span className="adm-ref" key="slug">{data.slug}</span>]}
+          badges={
+            <>
+              <StatusBadge meta={roomTypeStatus[data.isActive ? "active" : "archived"]} />
+              <DetailChip>Sleeps {data.capacity}</DetailChip>
+              <DetailChip>{formatEgp(data.baseNightlyRate)} per night</DetailChip>
+            </>
+          }
+        />
         <AdminRoomTypeForm roomType={data} />
         <AdminRoomTypeCapacityPanel slug={data.slug} capacity={data.capacity} />
         {/* `null` when the inventory read failed, which the panel reports as
@@ -155,12 +176,20 @@ export default async function AdminRoomTypePage({ params, searchParams }: PagePr
           slug={data.slug}
           images={imagesResult.state === "ok" ? imagesResult.data : null}
         />
-      </div>
+      </DetailPage>
     </>
   );
 }
 
-function PageHeader({ name }: { name?: string }) {
+/**
+ * The way back, and a heading only where nothing else provides one.
+ *
+ * On a room type that loaded, the detail view's masthead carries the <h1>
+ * — the room type's name — along with its reference, its status, what it
+ * sleeps and its stored rate. The fallback branches have no masthead and
+ * keep a heading here, so every state of this route still has exactly one.
+ */
+function PageHeader({ title }: { title?: string }) {
   return (
     <header className="adm-page-head">
       <p className="adm-detail-back">
@@ -168,7 +197,7 @@ function PageHeader({ name }: { name?: string }) {
           Back to room types
         </Link>
       </p>
-      <h1 className="adm-page-title">{name ?? "Room type"}</h1>
+      {title ? <h1 className="adm-page-title">{title}</h1> : null}
     </header>
   );
 }

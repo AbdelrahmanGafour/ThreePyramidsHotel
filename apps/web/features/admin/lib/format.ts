@@ -69,17 +69,34 @@ export function formatInstant(iso: string): string {
  * format it would reintroduce exactly the float error the whole money path
  * exists to avoid. An unexpected shape is shown unchanged rather than mangled.
  */
-export function formatEgp(amount: string): string {
+function formatMoney(currency: string, amount: string): string {
   const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(amount);
 
   if (!match) {
-    return `EGP ${amount}`;
+    return `${currency} ${amount}`;
   }
 
   const [, sign, whole, fraction = "00"] = match;
   const grouped = whole!.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
-  return `EGP ${sign}${grouped}.${fraction.padEnd(2, "0")}`;
+  return `${currency} ${sign}${grouped}.${fraction.padEnd(2, "0")}`;
+}
+
+export function formatEgp(amount: string): string {
+  return formatMoney("EGP", amount);
+}
+
+/**
+ * Exact USD money, for package reservations — the same string-only treatment
+ * as `formatEgp`, which shares its implementation so the two can never format
+ * the same figure differently.
+ *
+ * Takes only a string. A null total is not a zero and is not this function's
+ * to describe: the caller decides what "no total yet" reads as, so that
+ * decision stays in one place rather than hiding inside a formatter.
+ */
+export function formatUsd(amount: string): string {
+  return formatMoney("USD", amount);
 }
 
 export const daysBetween = (fromIso: string, toIso: string) =>

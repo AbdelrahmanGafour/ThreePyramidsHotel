@@ -11,7 +11,7 @@ import {
 import type { AdminRoomTypeImage } from "../types";
 import { AdminActionButton } from "./AdminActionButton";
 import { AdminFormField } from "./AdminFormField";
-import { PanelHeader } from "./PanelHeader";
+import { DetailEmpty, DetailSection } from "./AdminDetail";
 import { StatusBadge } from "./StatusBadge";
 
 // A room type's gallery: upload, alt text, cover, order and delete.
@@ -52,13 +52,11 @@ export function AdminRoomTypeImagesPanel({
   const editingOrder = images === null ? null : toEditingOrder(images);
 
   return (
-    <section className="adm-panel" aria-labelledby="room-type-images">
-      <PanelHeader
-        id="room-type-images"
-        title="Images"
-        note={`Up to ${MAX_IMAGES} images per room type. Upload a JPEG, PNG, or WebP file — the system normalizes every image before it is shown to guests.`}
-      />
-
+    <DetailSection
+      id="room-type-images"
+      title="Images"
+      note={`Up to ${MAX_IMAGES} images per room type. Upload a JPEG, PNG, or WebP file — the system normalizes every image before it is shown to guests.`}
+    >
       <form className="adm-form" action={upload}>
         <AdminFormField
           id="room-type-image-upload"
@@ -84,18 +82,16 @@ export function AdminRoomTypeImagesPanel({
       </form>
 
       {editingOrder === null ? (
-        <p className="adm-detail-note">
+        <DetailEmpty>
           {/* Deliberately not "no images yet": nothing is known about this
               room type's gallery, and an empty list would be a different
               claim. */}
           The list of images could not be loaded just now. The room type details above are
           unaffected. Reload the page in a moment; if it keeps failing, contact the hotel’s system
           administrator.
-        </p>
+        </DetailEmpty>
       ) : editingOrder.length === 0 ? (
-        <p className="adm-detail-note">
-          <span className="adm-detail-empty">No images have been added yet.</span>
-        </p>
+        <DetailEmpty>No images have been added yet.</DetailEmpty>
       ) : (
         <ul className="adm-images">
           {editingOrder.map((image, index) => (
@@ -111,7 +107,7 @@ export function AdminRoomTypeImagesPanel({
           ))}
         </ul>
       )}
-    </section>
+    </DetailSection>
   );
 }
 

@@ -1,4 +1,9 @@
 import type { PoolClient } from 'pg';
+import {
+  isUnreadableVariantSortOrderError,
+  isVariantSortOrderExhaustedError,
+  parkPackageVariantSortOrders,
+} from '../packageVariantOrdering';
 
 export const PACKAGE_WEEKDAYS = [
   'monday',
@@ -209,9 +214,25 @@ export function assertBrochureCatalogue(catalogue: readonly BrochurePackageSeed[
   }
 }
 
-async function resolvePackageId(client: PoolClient, item: BrochurePackageSeed): Promise<string> {
-  const existing = await client.query<{ id: string; code: string; slug: string }>(
-    `SELECT id, code, slug
+/**
+ * Finds or creates the package this brochure entry describes, or reports that
+ * an administrator now owns it.
+ *
+ * Returns null for a row whose `seed_managed` is false. That is not a failure
+ * and not a conflict: it is an offering an administrator has taken over, and
+ * the brochure no longer has an opinion about it. The caller skips it whole.
+ */
+async function resolvePackageId(
+  client: PoolClient,
+  item: BrochurePackageSeed,
+): Promise<string | null> {
+  const existing = await client.query<{
+    id: string;
+    code: string;
+    slug: string;
+    seed_managed: boolean;
+  }>(
+    `SELECT id, code, slug, seed_managed
        FROM packages
       WHERE code = $1 OR slug = $2
       FOR UPDATE`,
@@ -223,6 +244,20 @@ async function resolvePackageId(client: PoolClient, item: BrochurePackageSeed): 
   }
 
   const current = existing.rows[0];
+
+  // Checked before the identity guard below, and deliberately so. Once a row
+  // is an administrator's, its code and slug are theirs to change; measuring
+  // them against the brochure would turn an ordinary rename into a conflict
+  // that aborts the whole run. A row the brochure does not own is a row the
+  // brochure does not judge.
+  //
+  // Exactly `false`, never merely falsy: the column is NOT NULL, so anything
+  // else means the row was read from somewhere that does not have it, and
+  // reconciling is the safer reading of that.
+  if (current?.seed_managed === false) {
+    return null;
+  }
+
   if (current && (current.code !== item.code || current.slug !== item.slug)) {
     throw new Error(
       `Package seed conflict: immutable package identity mismatch for ${item.code}/${item.slug}`,
@@ -257,12 +292,15 @@ async function resolvePackageId(client: PoolClient, item: BrochurePackageSeed): 
     return current.id;
   }
 
+  // `seed_managed` is stated rather than left to the column default: a row
+  // this function creates is one the brochure owns, and that should be legible
+  // here rather than inferred from a migration.
   const inserted = await client.query<{ id: string }>(
     `INSERT INTO packages (
        code, slug, title, summary, description, duration_label, schedule_label,
-       operating_days, is_active, requires_price_confirmation, sort_order
+       operating_days, is_active, requires_price_confirmation, sort_order, seed_managed
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10, true)
      RETURNING id`,
     [
       item.code,
@@ -330,52 +368,26 @@ async function reconcilePackageVariants(
   }
 
   // Reordering variants in place would otherwise trip
-  // UNIQUE(package_id, sort_order), which is NOT DEFERRABLE: PostgreSQL checks
-  // it as each row's index entry is written, not at statement end, so a single
-  // multi-row UPDATE can still collide with a row it has not reached yet.
+  // UNIQUE(package_id, sort_order), which is NOT DEFERRABLE. The mechanics of
+  // parking every existing row clear of the final range live in
+  // `packageVariantOrdering`, shared with the admin reordering endpoint so
+  // there is one implementation rather than two that could drift.
   //
-  // Every existing row is therefore parked above both the highest value in use
-  // and the final range 1..n before any final position is written. Existing
-  // rows are updated, never deleted and re-inserted: `package_reservations`
-  // references (variant_id, package_id) with ON DELETE RESTRICT, so variant
-  // ids have to survive.
-  const variantCount = item.variants.length;
-  const existingCount = existing.rows.length;
-  const maxExistingSortOrder = existing.rows.reduce((max, row) => {
-    if (!isPostgresInteger(row.sort_order)) {
+  // The errors come back as types and are re-worded here: a seed failure
+  // names the brochure entry that caused it, which is the only thing that
+  // makes it actionable when forty-two packages are being reconciled.
+  try {
+    await parkPackageVariantSortOrders(client, packageId, existing.rows, item.variants.length);
+  } catch (error) {
+    if (isUnreadableVariantSortOrderError(error)) {
       throw new Error(`Package seed conflict: ${item.code} has an unreadable variant sort order`);
     }
-    return Math.max(max, row.sort_order);
-  }, 0);
-  const base = Math.max(maxExistingSortOrder, variantCount);
-
-  // `sort_order` is int4. Written as a subtraction so the comparison itself
-  // cannot overflow, and checked before the first mutation so an impossible
-  // reorder is refused rather than surfacing as a mid-statement 22003.
-  if (base > POSTGRES_INTEGER_MAX - existingCount) {
-    throw new Error(
-      `Package seed conflict: ${item.code} cannot reorder variants without exceeding the sort order range`,
-    );
-  }
-
-  if (existingCount > 0) {
-    await client.query(
-      // ROW_NUMBER() is bigint, so the addition is performed in bigint and
-      // cannot overflow; the narrowing cast to int4 is safe because the guard
-      // above already proved base + e fits. ORDER BY id only makes the
-      // assignment reproducible — correctness does not depend on which row
-      // receives which temporary position.
-      `WITH parked AS (
-         SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn
-           FROM package_variants
-          WHERE package_id = $1
-       )
-       UPDATE package_variants AS pv
-          SET sort_order = ($2::int + parked.rn)::int
-         FROM parked
-        WHERE pv.id = parked.id`,
-      [packageId, base],
-    );
+    if (isVariantSortOrderExhaustedError(error)) {
+      throw new Error(
+        `Package seed conflict: ${item.code} cannot reorder variants without exceeding the sort order range`,
+      );
+    }
+    throw error;
   }
 
   await client.query('UPDATE package_variants SET is_default = false WHERE package_id = $1', [packageId]);
@@ -435,6 +447,17 @@ export async function seedBrochurePackageCatalogue(
 
   for (const [index, item] of catalogue.entries()) {
     const packageId = await resolvePackageId(client, item);
+
+    // An administrator owns this offering now: its fields, itinerary, content
+    // items, variants and rate tiers are all left exactly as they are. Even
+    // `sort_order` is left alone — where an administrator's package sits in
+    // the list is their arrangement, not the brochure's. The gap this leaves
+    // in the brochure's own numbering is harmless: `packages.sort_order` is
+    // only ordered by, never required to be contiguous or unique.
+    if (packageId === null) {
+      continue;
+    }
+
     await client.query('UPDATE packages SET sort_order = $2 WHERE id = $1', [packageId, index + 1]);
     await reconcilePackageContent(client, packageId, item);
     await reconcilePackageVariants(client, packageId, item);

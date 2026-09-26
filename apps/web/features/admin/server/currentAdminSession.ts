@@ -1,6 +1,7 @@
 import "server-only";
 
 import { headers } from "next/headers";
+import { cache } from "react";
 import { ApiConfigurationError } from "@/shared/server/apiBaseUrl";
 import { fetchAdminSession, type AdminSessionResult } from "./adminAuthApi";
 
@@ -20,8 +21,13 @@ import { fetchAdminSession, type AdminSessionResult } from "./adminAuthApi";
  * Returns `unavailable` rather than throwing when the API cannot answer -
  * including when it is misconfigured - so a caller can never mistake a server
  * fault for a signed-out administrator.
+ *
+ * Memoised per request, not cached: `cache` de-duplicates the calls made while
+ * one request renders, and holds nothing between requests. The layout asks
+ * who is signed in, and so does the overview page it wraps; both get the one
+ * answer, from the one call to the API.
  */
-export async function getCurrentAdminSession(): Promise<AdminSessionResult> {
+export const getCurrentAdminSession = cache(async (): Promise<AdminSessionResult> => {
   const requestHeaders = await headers();
   const cookie = requestHeaders.get("cookie") ?? undefined;
 
@@ -36,4 +42,4 @@ export async function getCurrentAdminSession(): Promise<AdminSessionResult> {
 
     throw error;
   }
-}
+});
