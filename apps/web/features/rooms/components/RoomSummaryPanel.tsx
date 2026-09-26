@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { RoomFactList } from "@/features/rooms/components/RoomFactList";
 import { formatRoomRate } from "@/features/rooms/lib/money";
 import type { RoomWithPresentation } from "@/features/rooms/api";
 
@@ -7,8 +6,11 @@ type RoomSummaryPanelProps = {
   room: RoomWithPresentation;
 };
 
-// The fast path: name, one-line description, key facts, price, and the one
-// primary action, condensed beside the gallery. Deeper detail follows below.
+// The fast path: name, one-line summary, price, and the one primary action,
+// condensed beside the gallery — nothing else. Sleeps/bed/size/view live in
+// their own explicitly-labelled "Room details" section right below this
+// opening, never inline here too: one obvious place for facts, not a preview
+// copy plus the real thing.
 export function RoomSummaryPanel({ room }: RoomSummaryPanelProps) {
   return (
     <div className="mt-6 lg:mt-0">
@@ -16,9 +18,7 @@ export function RoomSummaryPanel({ room }: RoomSummaryPanelProps) {
 
       <h1 className="page-title mt-2 text-[clamp(1.9rem,3.2vw,2.4rem)]!">{room.name}</h1>
 
-      <p className="prose-body mt-3">{room.description}</p>
-
-      <RoomFactList room={room} className="mt-5 border-t border-ink/12 pt-5" />
+      <p className="prose-body mt-3">{room.shortDescription ?? room.description}</p>
 
       <div className="mt-6 border-t border-ink/12 pt-5">
         <p className="text-[0.875rem] text-ink/68">Starting price</p>

@@ -28,7 +28,7 @@ const PAGE_LINKS: Record<string, string> = {
 const LIGHT_BACKGROUND_ROUTES = [...Object.values(PAGE_LINKS), "/contact", "/faq", "/policies", "/privacy"];
 
 function slugify(item: string) {
-  return item.toLowerCase().replace(" ", "-");
+  return item.toLowerCase().replace(/ /g, "-");
 }
 
 export function Header() {
@@ -101,7 +101,17 @@ export function Header() {
     );
 
     sections.forEach((section) => observer.observe(section));
-    return () => observer.disconnect();
+    // Resetting `activeAnchor` here — as this effect tears down, whether from
+    // leaving the homepage or unmounting — rather than in a second effect
+    // keyed on `isHome`, is what stops a section highlighted just before
+    // navigating away (e.g. "Gallery") from reappearing as active the
+    // instant the guest returns to "/", before a fresh intersection reading
+    // has arrived: by the time `isHome` is true again, this cleanup has
+    // already cleared it.
+    return () => {
+      observer.disconnect();
+      setActiveAnchor("");
+    };
   }, [isHome]);
 
   useEffect(() => {

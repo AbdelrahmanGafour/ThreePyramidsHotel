@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { RelatedRooms } from "@/features/rooms/components/RelatedRooms";
-import { RoomAmenities } from "@/features/rooms/components/RoomAmenities";
+import { RoomAtAGlance } from "@/features/rooms/components/RoomAtAGlance";
+import { RoomBeforeYouArrive } from "@/features/rooms/components/RoomBeforeYouArrive";
 import { RoomBreadcrumb } from "@/features/rooms/components/RoomBreadcrumb";
 import { RoomDetailOpening } from "@/features/rooms/components/RoomDetailOpening";
-import { RoomFacts } from "@/features/rooms/components/RoomFacts";
+import { RoomExperience } from "@/features/rooms/components/RoomExperience";
 import { RoomMobileBookingBar } from "@/features/rooms/components/RoomMobileBookingBar";
-import { RoomStayDetails } from "@/features/rooms/components/RoomStayDetails";
 import { RoomsReservationBand } from "@/features/rooms/components/RoomsReservationBand";
-import { RoomStory } from "@/features/rooms/components/RoomStory";
 import { getRoomBySlug, getRooms } from "@/features/rooms/api";
+import { formatRoomRate } from "@/features/rooms/lib/money";
 
 type RoomDetailPageProps = {
   params: Promise<{ slug: string }>;
@@ -53,18 +53,18 @@ export default async function RoomDetailPage({ params }: RoomDetailPageProps) {
     <main id="main-content" className="pb-24 lg:pb-0">
       <RoomBreadcrumb room={room} />
       <RoomDetailOpening room={room} />
-      <RoomFacts room={room} />
-      <RoomAmenities room={room} />
-      <RoomStory room={room} />
-      <RoomStayDetails />
-      <RelatedRooms rooms={relatedRooms} />
+      <RoomAtAGlance room={room} />
+      <RoomExperience room={room} />
+      <RoomBeforeYouArrive />
       <RoomsReservationBand
-        title={`Reserve ${room.name}`}
-        text="Choose your dates and guests to continue. You can review everything before you confirm."
+        title={`Ready to book ${room.name}?`}
+        text={`${formatRoomRate(room.baseNightlyRate, room.currency)} per night`}
         href={`/booking?room=${room.slug}`}
         actionLabel="Reserve this room"
         hideActionOnMobile
+        hideSecondary
       />
+      <RelatedRooms rooms={relatedRooms} />
       <RoomMobileBookingBar room={room} />
     </main>
   );

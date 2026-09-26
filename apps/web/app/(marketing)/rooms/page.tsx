@@ -33,7 +33,7 @@ export default async function RoomsPage() {
 
   return (
     <main id="main-content">
-      <RoomsHero rooms={rooms} />
+      <RoomsHero />
       <RoomsAvailabilityBar />
       <RoomCatalogue rooms={rooms} />
       <RoomsReservationBand
