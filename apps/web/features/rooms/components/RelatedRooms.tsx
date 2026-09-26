@@ -13,7 +13,7 @@ export function RelatedRooms({ rooms }: { rooms: RoomWithPresentation[] }) {
     >
       <div className="page-grid">
         <h2 id="related-rooms-title" className="section-title col-span-10 col-start-2 max-md:col-span-full">
-          You may also like
+          Other rooms you may like
         </h2>
       </div>
 

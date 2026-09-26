@@ -8,6 +8,10 @@ type RoomsReservationBandProps = {
   hideActionOnMobile?: boolean;
   href?: string;
   actionLabel?: string;
+  /** A specific room's final decision block is deliberately ONE action —
+   * the listing's own closing band still offers "Contact the hotel" as a
+   * second path for a guest who isn't ready to pick a room yet. */
+  hideSecondary?: boolean;
 };
 
 // The page's single closing reservation prompt — shared by the listing and
@@ -18,6 +22,7 @@ export function RoomsReservationBand({
   hideActionOnMobile,
   href = "/booking",
   actionLabel = "Check dates and availability",
+  hideSecondary,
 }: RoomsReservationBandProps) {
   return (
     <CtaBand
@@ -25,7 +30,7 @@ export function RoomsReservationBand({
       title={title}
       text={text}
       primary={{ href, label: actionLabel }}
-      secondary={{ href: "/contact", label: "Contact the hotel" }}
+      secondary={hideSecondary ? undefined : { href: "/contact", label: "Contact the hotel" }}
       hideActionsOnMobile={hideActionOnMobile}
     />
   );

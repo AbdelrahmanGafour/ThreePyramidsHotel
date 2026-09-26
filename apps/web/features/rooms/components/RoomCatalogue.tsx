@@ -34,7 +34,7 @@ export function RoomCatalogue({ rooms }: RoomCatalogueProps) {
     <section aria-labelledby="room-list-title" className="bg-ivory pb-[clamp(2.5rem,4vw,3.5rem)]">
       <div className="page-grid">
         <div className="col-span-10 col-start-2 max-md:col-span-full">
-          <h2 id="room-list-title" className="section-title">
+          <h2 id="room-list-title" className="group-title">
             Choose a room type
           </h2>
 

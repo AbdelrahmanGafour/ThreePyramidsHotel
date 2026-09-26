@@ -25,3 +25,25 @@ export const contactInfo: ContactInfo = {
   mapsDirectionsUrl: `https://www.google.com/maps/dir/?api=1&destination=${encodedAddress}`,
   shortDirectionsNote: "On the edge of the Giza Plateau, around 15 minutes from Cairo International Airport.",
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SOCIAL MESSAGING DESTINATIONS — for the public floating contact launcher.
+//
+// No WhatsApp number or Messenger link for Three Pyramids Boutique Hotel has
+// been confirmed yet. `href` stays `null` until a real one is provided —
+// never a fabricated phone number or social URL — and the launcher renders
+// that option as a disabled, clearly-labelled "coming soon" control instead
+// of a working link. This is the one centralized place either destination
+// belongs; swapping the two `href` values is the only change needed once
+// they're confirmed.
+// ═══════════════════════════════════════════════════════════════════════════
+export type SocialLink = {
+  label: string;
+  /** A real `https://wa.me/...` or `https://m.me/...` link, or `null` while unconfirmed. */
+  href: string | null;
+};
+
+export const socialLinks: { whatsapp: SocialLink; messenger: SocialLink } = {
+  whatsapp: { label: "WhatsApp", href: null },
+  messenger: { label: "Messenger", href: null },
+};
