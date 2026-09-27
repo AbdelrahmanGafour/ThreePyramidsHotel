@@ -28,15 +28,17 @@
 
 import { closeDatabasePool, dbPool } from '../pool';
 import { hashPassword } from '../../modules/admin-auth/admin-auth.password';
+import {
+  describeAdminEmailProblem,
+  describeAdminPasswordProblem,
+  normalizeAdminEmail,
+} from '../../modules/admin-auth/admin-auth.policy';
 
-// V1 policy: length plus at least one digit. No case or symbol rules, which
-// push people towards shorter, more predictable passwords.
-const MIN_PASSWORD_LENGTH = 9;
-const DIGIT_PATTERN = /[0-9]/;
-
-const MAX_EMAIL_LENGTH = 254;
-const MAX_LOCAL_PART_LENGTH = 64;
-const DOMAIN_LABEL_PATTERN = /^[A-Za-z0-9-]+$/;
+// The email syntax rules and the password policy live in
+// admin-auth.policy.ts, shared with the login validator and the account
+// settings endpoints. They used to be copied here, which meant three places
+// could disagree about what may be stored. Each rule still reports itself, so
+// the messages below stay per-rule and operator-facing.
 
 function requireEnv(name: string): string {
   const value = process.env[name];
@@ -49,66 +51,32 @@ function requireEnv(name: string): string {
 }
 
 /**
+ * Reports the one rule the address breaks, in the shared policy's words.
+ *
  * Deliberately modest structural validation, not RFC 5322: it catches
- * malformed addresses, never typos in an otherwise valid one.
+ * malformed addresses, never typos in an otherwise valid one. The rules are
+ * the same ones login and account settings apply, because an address this
+ * script can store must be one they can accept.
  */
 function assertValidEmail(email: string): void {
-  if (email.length > MAX_EMAIL_LENGTH) {
-    throw new Error(`ADMIN_EMAIL must be ${MAX_EMAIL_LENGTH} characters or fewer`);
-  }
-  if (/\s/.test(email)) {
-    throw new Error('ADMIN_EMAIL must not contain spaces');
-  }
+  const problem = describeAdminEmailProblem(email);
 
-  const parts = email.split('@');
-
-  if (parts.length !== 2) {
-    throw new Error('ADMIN_EMAIL must contain exactly one @');
-  }
-
-  const [localPart = '', domain = ''] = parts;
-
-  if (localPart.length === 0) {
-    throw new Error('ADMIN_EMAIL must have something before the @');
-  }
-  if (localPart.length > MAX_LOCAL_PART_LENGTH) {
-    throw new Error(`ADMIN_EMAIL must have ${MAX_LOCAL_PART_LENGTH} characters or fewer before the @`);
-  }
-  if (domain.length === 0) {
-    throw new Error('ADMIN_EMAIL must have a domain after the @');
-  }
-  if (!domain.includes('.')) {
-    throw new Error('ADMIN_EMAIL domain must contain a dot, for example example.com');
-  }
-  if (domain.startsWith('.') || domain.endsWith('.')) {
-    throw new Error('ADMIN_EMAIL domain must not start or end with a dot');
-  }
-
-  for (const label of domain.split('.')) {
-    if (label.length === 0) {
-      throw new Error('ADMIN_EMAIL domain must not contain an empty part');
-    }
-    if (label.startsWith('-') || label.endsWith('-')) {
-      throw new Error('ADMIN_EMAIL domain parts must not start or end with a hyphen');
-    }
-    if (!DOMAIN_LABEL_PATTERN.test(label)) {
-      throw new Error('ADMIN_EMAIL domain may contain only letters, digits and hyphens');
-    }
+  if (problem) {
+    throw new Error(`ADMIN_EMAIL ${problem}`);
   }
 }
 
 function assertValidPassword(password: string): void {
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`ADMIN_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters`);
-  }
-  if (!DIGIT_PATTERN.test(password)) {
-    throw new Error('ADMIN_PASSWORD must contain at least one digit (0-9)');
+  const problem = describeAdminPasswordProblem(password);
+
+  if (problem) {
+    throw new Error(`ADMIN_PASSWORD ${problem}`);
   }
 }
 
 async function createAdmin(): Promise<void> {
   // Normalized to match the database's lowercase/trimmed email constraints.
-  const email = requireEnv('ADMIN_EMAIL').trim().toLowerCase();
+  const email = normalizeAdminEmail(requireEnv('ADMIN_EMAIL'));
   const displayName = requireEnv('ADMIN_DISPLAY_NAME').trim();
   // Not trimmed: leading or trailing spaces are part of the password.
   const password = requireEnv('ADMIN_PASSWORD');

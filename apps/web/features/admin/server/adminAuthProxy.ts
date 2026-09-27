@@ -20,6 +20,12 @@ const BODILESS_STATUSES = new Set([204, 205, 304]);
  * Set-Cookie is copied header by header, never parsed or rebuilt, so the
  * session cookie keeps the attributes the API set - HttpOnly included - and the
  * token itself stays out of reach of client JavaScript.
+ *
+ * This is how the login and logout routes own the cookie: whatever Express
+ * sets or clears, the browser receives unchanged, and this module never needs
+ * to know what the cookie is called. `adminSessionCookie` states the name for
+ * the one case that cannot work this way - a Server Action, which has no
+ * upstream response to relay - and the two are pinned together by test.
  */
 export function relayAdminAuthResponse(upstream: Response): Response {
   const headers = new Headers();

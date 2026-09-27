@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
 import { dbPool } from '../../db/pool';
-import type { AdminAccount, AuthenticatedAdministrator } from './admin-auth.types';
+import type { AdminAccount, AuthenticatedAdminSession } from './admin-auth.types';
 
 type AdminAccountRow = {
   id: string;
@@ -72,12 +72,19 @@ export async function lockAdminById(client: PoolClient, id: string): Promise<Adm
  * session or a disabled account.
  *
  * Read-only: it never touches expiry, and no transaction is needed.
+ *
+ * The account id is selected alongside the two public fields and returned
+ * BESIDE them rather than inside `administrator`. An account endpoint needs
+ * the id to act on the session's own row without taking a target parameter;
+ * `administrator` is serialised verbatim as the `/session` body, so the id
+ * must stay out of it.
  */
-export async function findAdministratorBySessionTokenHash(
+export async function findAdminSessionByTokenHash(
   tokenHash: string,
-): Promise<AuthenticatedAdministrator | null> {
-  const { rows } = await dbPool.query<{ email: string; display_name: string }>(
-    `SELECT u.email,
+): Promise<AuthenticatedAdminSession | null> {
+  const { rows } = await dbPool.query<{ id: string; email: string; display_name: string }>(
+    `SELECT u.id,
+            u.email,
             u.display_name
        FROM admin_sessions s
        JOIN admin_users u ON u.id = s.admin_user_id
@@ -90,7 +97,12 @@ export async function findAdministratorBySessionTokenHash(
 
   const row = rows[0];
 
-  return row ? { email: row.email, displayName: row.display_name } : null;
+  return row
+    ? {
+        adminUserId: row.id,
+        administrator: { email: row.email, displayName: row.display_name },
+      }
+    : null;
 }
 
 /**
@@ -121,4 +133,107 @@ export async function insertSession(
      VALUES ($1, $2, $3)`,
     [input.adminUserId, input.tokenHash, input.expiresAt],
   );
+}
+
+// ---------------------------------------------------------------------------
+// Account settings
+//
+// Every statement below is addressed by the internal id the session resolved
+// to. None of them accepts an email or any other caller-supplied identity, so
+// there is no shape in which one administrator's request can reach another's
+// row.
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads one account by internal id, outside any transaction.
+ *
+ * Deliberately on the pool with no client held: the password verification
+ * that follows is slow by design, and the login flow already establishes that
+ * such work must not hold a connection or an open transaction.
+ */
+export async function findAdminById(id: string): Promise<AdminAccount | null> {
+  const { rows } = await dbPool.query<AdminAccountRow>(
+    `SELECT ${ADMIN_COLUMNS}
+       FROM admin_users
+      WHERE id = $1`,
+    [id],
+  );
+
+  const row = rows[0];
+
+  return row ? toAdminAccount(row) : null;
+}
+
+/**
+ * Writes the new address onto the account the caller already locked.
+ *
+ * `updated_at` moves only on a real change, so setting an address to the one
+ * already stored answers success without disturbing the row. The same
+ * `IS DISTINCT FROM` guard the journey and room-type status writes use.
+ *
+ * Uniqueness is not checked here and must not be: a `23505` on
+ * `admin_users_email_key` propagates to the service, which is the only thing
+ * entitled to say the address is taken. A SELECT beforehand would widen the
+ * window in which that answer changes.
+ */
+export async function updateAdminEmail(
+  client: PoolClient,
+  id: string,
+  email: string,
+): Promise<boolean> {
+  const { rowCount } = await client.query(
+    `UPDATE admin_users
+        SET email = $2,
+            updated_at = CASE WHEN email IS DISTINCT FROM $2 THEN now() ELSE updated_at END
+      WHERE id = $1`,
+    [id, email],
+  );
+
+  return (rowCount ?? 0) > 0;
+}
+
+/**
+ * Writes the new password hash onto the account the caller already locked.
+ *
+ * The hash is derived by the caller before the transaction opens; this
+ * statement only stores it. `updated_at` moves unconditionally, because a
+ * caller only reaches here once the new password has been proved different
+ * from the current one.
+ */
+export async function updateAdminPasswordHash(
+  client: PoolClient,
+  id: string,
+  passwordHash: string,
+): Promise<boolean> {
+  const { rowCount } = await client.query(
+    `UPDATE admin_users
+        SET password_hash = $2,
+            updated_at = now()
+      WHERE id = $1`,
+    [id, passwordHash],
+  );
+
+  return (rowCount ?? 0) > 0;
+}
+
+/**
+ * Removes every session belonging to one account, the current one included.
+ *
+ * A hard delete, like every other invalidation in this module: sessions are
+ * derived authentication state, not records worth keeping, and `revoked_at`
+ * has never been the mechanism here.
+ *
+ * Runs inside the caller's transaction, alongside the password write, so a
+ * committed new password can never leave an old session usable — the same
+ * pairing `admin:create` performs when it resets a password.
+ */
+export async function deleteAllSessionsForAdmin(
+  client: PoolClient,
+  adminUserId: string,
+): Promise<number> {
+  const { rowCount } = await client.query('DELETE FROM admin_sessions WHERE admin_user_id = $1', [
+    adminUserId,
+  ]);
+
+  return rowCount ?? 0;
 }

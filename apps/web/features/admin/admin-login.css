@@ -113,6 +113,16 @@
   color: var(--danger);
 }
 
+/* A confirmation, not a problem: reached only after a password change, which
+   signs every device out and sends the administrator here on purpose. The same
+   moss the dashboard's own `done` notices use, restated because this screen has
+   no admin shell around it and so no access to admin.css. */
+.adml-alert[data-tone="done"] {
+  border-color: #4a6a3c;
+  background: rgba(74, 106, 60, 0.08);
+  color: #4a6a3c;
+}
+
 .adml-alert[data-tone="unavailable"] {
   border-color: var(--aged-gold);
   background: rgba(176, 138, 81, 0.12);

@@ -10,7 +10,8 @@ export type AdminNavKey =
   | "inquiries"
   | "content"
   | "media"
-  | "settings";
+  | "settings"
+  | "account";
 
 export type AdminNavItem = {
   key: AdminNavKey;

@@ -14,6 +14,10 @@ import {
 // loaded here — so the one structural fact the data cannot carry, that
 // `View Website` is the sixth and last entry and leaves the admin, is
 // asserted against the component's source.
+//
+// "sixth and last" below counts the in-admin entries as they were; the
+// `View Website` link is still the one that leaves the admin, whatever
+// number it now sits at.
 
 const sidebarSource = readFileSync(
   "features/admin/components/AdminSidebar.tsx",
@@ -31,10 +35,14 @@ const EXPECTED = [
     label: "Journey Reservations",
     href: "/admin/package-reservations",
   },
+  // Last, and the one entry that is about the person signed in rather than
+  // about the hotel. Deliberately not the `settings` entry, which is hotel
+  // details and is still unbuilt.
+  { key: "account", label: "My account", href: "/admin/account" },
 ] as const;
 
 describe("admin sidebar navigation", () => {
-  it("renders exactly the five in-admin entries, in order", () => {
+  it("renders exactly the six in-admin entries, in order", () => {
     assert.deepEqual(
       sidebarNavigation.map((item) => [item.label, item.href]),
       EXPECTED.map((item) => [item.label, item.href]),

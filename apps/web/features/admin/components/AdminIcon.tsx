@@ -17,6 +17,11 @@ const paths: Record<AdminIconName, string> = {
   content: "M5 2.5h7.5L16 6v11.5H5zM12.5 2.5V6H16M7.5 9.5h6M7.5 12.5h6",
   media: "M2.5 4h15v12h-15zM2.5 14l4.5-4.5 3.5 3.5 2.5-2.5 5 4.5M13 8h.01",
   settings: "M3 6h8M14 6h3M3 14h3M9 14h8M12.5 4v4M7.5 12v4",
+  // The person, not the hotel: a head over shoulders, so `My account` cannot
+  // be mistaken for the `settings` sliders above it. Two strokes on the same
+  // 20px grid, the head left clear of the shoulder line as every other glyph
+  // here keeps its parts separate.
+  account: "M10 3.5a3 3 0 1 0 0 6a3 3 0 1 0 0-6M3.5 16.5a6.5 6.5 0 0 1 13 0",
   menu: "M3 5.5h14M3 10h14M3 14.5h14",
   close: "M4.5 4.5l11 11M15.5 4.5l-11 11",
   external: "M7 4.5h8.5V13M15.5 4.5 5 15",
