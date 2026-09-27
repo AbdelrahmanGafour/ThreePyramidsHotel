@@ -369,6 +369,46 @@ export type AdminReservationStatusChange = {
 
 type LockedReservationRow = {
   status: string;
+  guest_first_name: string;
+  guest_last_name: string;
+  guest_email: string;
+  room_type_name: string;
+  check_in: string;
+  check_out: string;
+  nights: number;
+  adults: number;
+  children: number;
+  nightly_rate: string;
+  total_amount: string;
+  special_requests: string | null;
+};
+
+/**
+ * What the lock read hands back, and deliberately not an exported type.
+ *
+ * It is the transaction's private working copy of the reservation: the status
+ * the transition is judged against, plus exactly the facts a guest confirmation
+ * has to snapshot. Nothing outside this module's own transaction sees it, and
+ * nothing in it reaches an HTTP response — `AdminReservationStatusChange` is
+ * still the only thing a status change returns, and it carries no guest at all.
+ *
+ * Kept unexported so that stays true by construction: a caller cannot pass this
+ * around if it cannot name it.
+ */
+type LockedReservation = {
+  status: AdminReservationStatus;
+  guestFirstName: string;
+  guestLastName: string;
+  guestEmail: string;
+  roomTypeName: string;
+  checkIn: string;
+  checkOut: string;
+  nights: number;
+  adults: number;
+  children: number;
+  nightlyRate: string;
+  totalAmount: string;
+  specialRequests: string | null;
 };
 
 type StatusChangeRow = {
@@ -391,23 +431,75 @@ type StatusChangeRow = {
  *
  * Takes the caller's client so it runs inside the caller's transaction — the
  * lock means nothing outside one. It begins, commits and rolls back nothing.
+ *
+ * It also reads what a guest confirmation has to say, because the one moment
+ * this data is provably consistent with the status being changed is while that
+ * status is locked. Reading it afterwards would be a second trip that could
+ * see a different row; reading it before would be a snapshot nothing was
+ * holding still. None of it leaves the transaction except inside the
+ * notification event.
+ *
+ * `FOR UPDATE OF r` names its target deliberately. The join to `room_types`
+ * exists only to read a name, and an unqualified `FOR UPDATE` would lock that
+ * row too — taking a `room_types` lock this path has no business holding, in
+ * the opposite order from the admin capacity path, which locks `room_types`
+ * first. Locking only the reservation keeps the canonical order intact.
  */
 export async function lockReservationForStatusChange(
   client: PoolClient,
   bookingReference: string,
-): Promise<{ status: AdminReservationStatus } | null> {
+): Promise<LockedReservation | null> {
   const { rows } = await client.query<LockedReservationRow>(
-    `SELECT status
-       FROM reservations
-      WHERE booking_reference = $1
-        FOR UPDATE`,
+    `SELECT r.status,
+            r.guest_first_name,
+            r.guest_last_name,
+            r.guest_email,
+            rt.name AS room_type_name,
+            -- ::text keeps calendar days exactly as stored. Read as a Date
+            -- they would shift by a day in a negative-offset timezone.
+            r.check_in::text AS check_in,
+            r.check_out::text AS check_out,
+            -- DATE minus DATE is an integer count of days, and the stay is
+            -- half-open, so that count is exactly the nights slept.
+            (r.check_out - r.check_in) AS nights,
+            r.adults,
+            r.children,
+            -- The rate accepted at booking time, never the room type's today.
+            r.nightly_rate_snapshot::text AS nightly_rate,
+            r.total_amount::text AS total_amount,
+            r.special_requests
+       FROM reservations r
+       -- Safe: room_type_id is NOT NULL and foreign-key backed, so the join
+       -- cannot drop the reservation being locked.
+       JOIN room_types rt ON rt.id = r.room_type_id
+      WHERE r.booking_reference = $1
+        FOR UPDATE OF r`,
     [bookingReference],
   );
 
   const row = rows[0];
 
   // booking_reference is unique, so there is at most one row to lock.
-  return row ? { status: toReservationStatus(requireText('status', row.status)) } : null;
+  if (!row) {
+    return null;
+  }
+
+  return {
+    status: toReservationStatus(requireText('status', row.status)),
+    guestFirstName: requireText('guest_first_name', row.guest_first_name),
+    guestLastName: requireText('guest_last_name', row.guest_last_name),
+    guestEmail: requireText('guest_email', row.guest_email),
+    roomTypeName: requireText('room type name', row.room_type_name),
+    checkIn: requireText('check_in', row.check_in),
+    checkOut: requireText('check_out', row.check_out),
+    nights: requireCount('nights', row.nights, 1),
+    adults: requireCount('adults', row.adults, 1),
+    children: requireCount('children', row.children, 0),
+    nightlyRate: requireText('nightly_rate_snapshot', row.nightly_rate),
+    totalAmount: requireText('total_amount', row.total_amount),
+    specialRequests:
+      row.special_requests === null ? null : requireText('special_requests', row.special_requests),
+  };
 }
 
 /**

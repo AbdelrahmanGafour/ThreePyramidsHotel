@@ -33,6 +33,30 @@ const updatedRow = (status: string) => ({
   updated_at: UPDATED_AT,
 });
 
+/**
+ * A locked reservation row, as the widened `FOR UPDATE` read now returns it.
+ *
+ * The lock read carries the guest and stay facts a confirmation notification
+ * has to snapshot, so a fixture of `{ status }` alone would now fail the
+ * repository's own column guards before any of these tests reached what they
+ * are about.
+ */
+const lockedRow = (status: string) => ({
+  status,
+  guest_first_name: 'Amina',
+  guest_last_name: 'Khalil',
+  guest_email: 'amina@example.test',
+  room_type_name: 'Nile View Suite',
+  check_in: '2030-04-10',
+  check_out: '2030-04-13',
+  nights: 3,
+  adults: 2,
+  children: 1,
+  nightly_rate: '4200.00',
+  total_amount: '12600.00',
+  special_requests: 'Late arrival, around 23:00.',
+});
+
 /** The statements issued, reduced to their first keyword for readability. */
 const sequence = () =>
   calls.map((call) => {
@@ -40,6 +64,10 @@ const sequence = () =>
 
     if (text.startsWith('BEGIN') || text.startsWith('COMMIT') || text.startsWith('ROLLBACK')) {
       return text;
+    }
+
+    if (text.startsWith('INSERT INTO notification_outbox')) {
+      return 'OUTBOX';
     }
 
     return text.startsWith('SELECT') ? 'SELECT' : 'UPDATE';
@@ -99,30 +127,35 @@ beforeEach(() => {
 describe('changeAdminReservationStatus', () => {
   describe('the transaction it runs', () => {
     it('locks the row, updates it and commits, in that order', async () => {
-      lockedRows = [{ status: 'pending' }];
+      lockedRows = [lockedRow('pending')];
       updatedRows = [updatedRow('confirmed')];
 
       await changeAdminReservationStatus(REFERENCE, 'confirmed');
 
-      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'COMMIT']);
+      // A confirmation also queues the guest's notification, inside the same
+      // transaction and before the COMMIT.
+      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'OUTBOX', 'COMMIT']);
     });
 
     it('takes the row lock rather than reading it unlocked', async () => {
-      lockedRows = [{ status: 'pending' }];
+      lockedRows = [lockedRow('pending')];
       updatedRows = [updatedRow('cancelled')];
 
       await changeAdminReservationStatus(REFERENCE, 'cancelled');
 
       const select = statementStartingWith('SELECT');
       assert.ok(select, 'expected a SELECT');
-      assert.match(select.text, /FOR UPDATE/);
-      assert.match(select.text, /WHERE booking_reference = \$1/);
+      // `OF r` and not a bare FOR UPDATE: the read joins room_types to get a
+      // name, and locking that row too would take a lock this path has no
+      // business holding, in the opposite order from the admin capacity path.
+      assert.match(select.text, /FOR UPDATE OF r\b/);
+      assert.match(select.text, /WHERE r\.booking_reference = \$1/);
       // A case-insensitive lookup would also defeat the unique index.
       assert.doesNotMatch(select.text, /lower\(|upper\(|ILIKE/i);
     });
 
     it('passes the reference and status as parameters, never as SQL text', async () => {
-      lockedRows = [{ status: 'pending' }];
+      lockedRows = [lockedRow('pending')];
       updatedRows = [updatedRow('confirmed')];
 
       await changeAdminReservationStatus(REFERENCE, 'confirmed');
@@ -138,7 +171,7 @@ describe('changeAdminReservationStatus', () => {
     });
 
     it('writes the status and updated_at, and nothing else', async () => {
-      lockedRows = [{ status: 'pending' }];
+      lockedRows = [lockedRow('pending')];
       updatedRows = [updatedRow('cancelled')];
 
       await changeAdminReservationStatus(REFERENCE, 'cancelled');
@@ -155,7 +188,7 @@ describe('changeAdminReservationStatus', () => {
     });
 
     it('encodes no transition rule in SQL', async () => {
-      lockedRows = [{ status: 'pending' }];
+      lockedRows = [lockedRow('pending')];
       updatedRows = [updatedRow('confirmed')];
 
       await changeAdminReservationStatus(REFERENCE, 'confirmed');
@@ -168,7 +201,7 @@ describe('changeAdminReservationStatus', () => {
     });
 
     it('releases the client', async () => {
-      lockedRows = [{ status: 'pending' }];
+      lockedRows = [lockedRow('pending')];
       updatedRows = [updatedRow('confirmed')];
 
       await changeAdminReservationStatus(REFERENCE, 'confirmed');
@@ -186,7 +219,7 @@ describe('changeAdminReservationStatus', () => {
 
     for (const [from, to] of permitted) {
       it(`${from} -> ${to} updates and returns the change`, async () => {
-        lockedRows = [{ status: from }];
+        lockedRows = [lockedRow(from)];
         updatedRows = [updatedRow(to)];
 
         const result = await changeAdminReservationStatus(REFERENCE, to);
@@ -198,12 +231,20 @@ describe('changeAdminReservationStatus', () => {
           status: to,
           updatedAt: UPDATED_AT.toISOString(),
         });
-        assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'COMMIT']);
+        // Only a confirmation owes the guest a message; a cancellation does
+        // not, so the statement is there for one of these cases and not the
+        // other.
+        assert.deepEqual(
+          sequence(),
+          to === 'confirmed'
+            ? ['BEGIN', 'SELECT', 'UPDATE', 'OUTBOX', 'COMMIT']
+            : ['BEGIN', 'SELECT', 'UPDATE', 'COMMIT'],
+        );
       });
     }
 
     it('returns only the reference, status and updatedAt', async () => {
-      lockedRows = [{ status: 'pending' }];
+      lockedRows = [lockedRow('pending')];
       updatedRows = [{ ...updatedRow('confirmed'), id: '42', room_id: '7', guest_email: 'a@b.c' }];
 
       const result = await changeAdminReservationStatus(REFERENCE, 'confirmed');
@@ -216,7 +257,7 @@ describe('changeAdminReservationStatus', () => {
     });
 
     it('returns updatedAt as an ISO instant', async () => {
-      lockedRows = [{ status: 'confirmed' }];
+      lockedRows = [lockedRow('confirmed')];
       updatedRows = [updatedRow('cancelled')];
 
       const result = await changeAdminReservationStatus(REFERENCE, 'cancelled');
@@ -235,7 +276,7 @@ describe('changeAdminReservationStatus', () => {
 
     for (const [from, to] of forbidden) {
       it(`${from} -> ${to} is refused without writing`, async () => {
-        lockedRows = [{ status: from }];
+        lockedRows = [lockedRow(from)];
 
         const result = await changeAdminReservationStatus(REFERENCE, to);
 
@@ -245,7 +286,7 @@ describe('changeAdminReservationStatus', () => {
     }
 
     it('does not treat a same-state request as a quiet success', async () => {
-      lockedRows = [{ status: 'confirmed' }];
+      lockedRows = [lockedRow('confirmed')];
 
       const result = await changeAdminReservationStatus(REFERENCE, 'confirmed');
 
@@ -266,7 +307,7 @@ describe('changeAdminReservationStatus', () => {
 
   describe('a fault', () => {
     it('raises rather than becoming not-found or invalid-transition', async () => {
-      lockedRows = [{ status: 'pending' }];
+      lockedRows = [lockedRow('pending')];
       failOn = 'UPDATE';
 
       await assert.rejects(() => changeAdminReservationStatus(REFERENCE, 'confirmed'), /database failure/);

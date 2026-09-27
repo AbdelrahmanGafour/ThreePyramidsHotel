@@ -1,4 +1,6 @@
 import { dbPool } from '../../db/pool';
+import { buildRoomReservationConfirmedEvent } from '../notifications/notifications.events';
+import { insertNotificationEvent } from '../notifications/notifications.repository';
 import {
   findAdminReservationByReference,
   findAdminReservationPage,
@@ -122,6 +124,52 @@ export async function changeAdminReservationStatus(
     }
 
     const reservation = await updateReservationStatus(client, bookingReference, nextStatus);
+
+    if (nextStatus === 'confirmed') {
+      // The guest's copy of the confirmation, queued in the same transaction.
+      //
+      // Only on confirmation. A cancellation is a different conversation and a
+      // different event, and this slice owes the guest nothing when a booking
+      // is called off — so nothing is queued and no template decides later
+      // whether to stay silent.
+      //
+      // After the UPDATE, so the status this announces is the one that was
+      // actually written. Before the COMMIT, so the confirmed booking and the
+      // obligation to tell the guest become durable together: there is no
+      // instant at which a reservation reads `confirmed` and nobody is going
+      // to hear about it.
+      //
+      // Every field comes from the row locked at the top of this transaction,
+      // which is the only moment they are provably consistent with the status
+      // being changed. No re-read, and no `process.env`.
+      //
+      // Strict, and allowed to be fatal. `insertNotificationEvent` carries no
+      // `ON CONFLICT` and translates nothing, so a failure raises past here
+      // into the catch below and rolls the confirmation back with it. An
+      // administrator who sees an error and retries costs less than a guest
+      // who is never told their stay was confirmed.
+      await insertNotificationEvent(
+        client,
+        buildRoomReservationConfirmedEvent({
+          bookingReference: reservation.bookingReference,
+          guestFirstName: locked.guestFirstName,
+          guestLastName: locked.guestLastName,
+          // Becomes `recipientEmail`, not a payload field: the address as it
+          // stood when the hotel confirmed, so a later edit cannot redirect a
+          // notification that was already owed to somebody.
+          guestEmail: locked.guestEmail,
+          roomTypeName: locked.roomTypeName,
+          checkIn: locked.checkIn,
+          checkOut: locked.checkOut,
+          nights: locked.nights,
+          adults: locked.adults,
+          children: locked.children,
+          nightlyRate: locked.nightlyRate,
+          totalAmount: locked.totalAmount,
+          specialRequests: locked.specialRequests,
+        }),
+      );
+    }
 
     // Cleared only after COMMIT returns, so a commit that fails is still an
     // open transaction as far as the handler below is concerned.
