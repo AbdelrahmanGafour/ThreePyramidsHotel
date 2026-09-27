@@ -1,11 +1,13 @@
 import { dbPool } from '../../db/pool';
 import {
+  countActivePhysicalRooms,
   countReservationsAboveCapacity,
   findAdminRoomTypeBySlug,
   insertAdminRoomType,
   listAdminRoomTypes,
   lockAdminRoomTypeBySlug,
   updateAdminRoomType,
+  updateAdminRoomTypeActiveState,
   updateAdminRoomTypeCapacity,
 } from './admin-room-types.repository';
 import type {
@@ -231,6 +233,123 @@ export async function changeAdminRoomTypeCapacity(
         await client.query('ROLLBACK');
       } catch (rollbackError) {
         console.error('Failed to roll back room type capacity transaction:', rollbackError);
+      }
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Three things that can happen. A caller that forgets one should fail to
+ * compile rather than fail in production.
+ */
+export type AdminRoomTypeStatusResult =
+  | { outcome: 'updated'; roomType: AdminRoomTypeDetail }
+  | { outcome: 'not-found' }
+  | { outcome: 'no-active-rooms' };
+
+/**
+ * Publishes or archives one room type, serialized against every booking, every
+ * capacity change and every physical-room edit on the same room type.
+ *
+ * The whole decision happens inside one transaction holding the room type's
+ * `FOR UPDATE` lock: read the current state, count the rooms actually in
+ * service, then write. That lock is the FIRST of the canonical admin order,
+ * the same one the capacity change and the physical-room edit take before
+ * anything else, so this path introduces no new ordering and can deadlock
+ * against neither. A booking for the same room type holds `FOR KEY SHARE`,
+ * which conflicts, so it either finished before this lock was granted or
+ * waits and then reads the state this transaction committed.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE COUNT IS NOT `room_count`
+ *
+ * Availability requires `room_types.is_active AND rooms.is_active`. A room
+ * type published with rooms that are all out of service is therefore visible
+ * on the website and unbookable in every search — the precise outcome that
+ * makes creation produce a draft. `room_count` counts every room regardless of
+ * `rooms.is_active`, because it answers an inventory question, so using it
+ * here would enforce the rule in name only. `countActivePhysicalRooms` asks
+ * the question this decision actually turns on, under this transaction's lock.
+ * ---------------------------------------------------------------------------
+ *
+ * Only a real transition into published is guarded. A room type that is
+ * already active is not being published by a request that asks for what is
+ * already true, and refusing an idempotent PATCH would refuse to leave things
+ * exactly as they are — the same reasoning `changeAdminPhysicalRoom` applies
+ * to taking a room out of service. A no-op still answers 200 with the current
+ * detail, and the write leaves `updated_at` alone, so re-sending a known state
+ * never makes the catalogue look edited.
+ *
+ * Archiving is never refused. It is reversible, it strands nothing, and it is
+ * what an administrator reaches for when something is wrong — a system that
+ * argues at that moment is a system that keeps a broken room type on sale.
+ * Reservations already taken are untouched: this path writes `room_types` and
+ * nothing else, so the stays the hotel promised survive the room type leaving
+ * the website.
+ */
+export async function changeAdminRoomTypeStatus(
+  slug: string,
+  isActive: boolean,
+): Promise<AdminRoomTypeStatusResult> {
+  const client = await dbPool.connect();
+  let inTransaction = false;
+
+  try {
+    await client.query('BEGIN');
+    inTransaction = true;
+
+    const locked = await lockAdminRoomTypeBySlug(client, slug);
+
+    if (!locked) {
+      // Nothing was read that matters and nothing was written; the rollback
+      // just ends the transaction. The flag is cleared only once it has
+      // actually succeeded, so a rollback that throws still reaches the
+      // handler below.
+      await client.query('ROLLBACK');
+      inTransaction = false;
+
+      return { outcome: 'not-found' };
+    }
+
+    // Only a real transition into published can put an unbookable room type
+    // in front of guests.
+    if (isActive && !locked.isActive) {
+      const activeRooms = await countActivePhysicalRooms(client, locked.roomTypeId);
+
+      if (activeRooms === 0) {
+        await client.query('ROLLBACK');
+        inTransaction = false;
+
+        return { outcome: 'no-active-rooms' };
+      }
+    }
+
+    const roomType = await updateAdminRoomTypeActiveState(client, locked.roomTypeId, isActive);
+
+    if (!roomType) {
+      // The row is held by this transaction's own lock, so it cannot have
+      // disappeared. A fault, never a missing room type.
+      throw new Error('Room type vanished while its status was being updated');
+    }
+
+    // Cleared only after COMMIT returns, so a commit that fails is still an
+    // open transaction as far as the handler below is concerned.
+    await client.query('COMMIT');
+    inTransaction = false;
+
+    return { outcome: 'updated', roomType };
+  } catch (error) {
+    // One rollback path for every failure, including a failed COMMIT.
+    if (inTransaction) {
+      inTransaction = false;
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        console.error('Failed to roll back room type status transaction:', rollbackError);
       }
     }
 

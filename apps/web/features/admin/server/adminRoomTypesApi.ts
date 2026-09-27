@@ -75,6 +75,16 @@ const ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_ERROR = {
   message: "Room type capacity conflicts with existing upcoming reservations",
 } as const;
 
+const INVALID_ROOM_TYPE_STATUS_ERROR = {
+  code: "INVALID_ROOM_TYPE_STATUS",
+  message: "Invalid room type status",
+} as const;
+
+const ROOM_TYPE_NO_ACTIVE_ROOMS_ERROR = {
+  code: "ROOM_TYPE_NO_ACTIVE_ROOMS",
+  message: "Room type cannot be published without at least one active physical room",
+} as const;
+
 // The two ways this client can fail before the API answers. Distinct on
 // purpose: a wrong or missing API address is a deployment fault, not an
 // outage, and saying "could not be reached" about it would send someone to
@@ -790,6 +800,115 @@ export async function updateAdminRoomTypeCapacity(
     return { state: "unavailable", reason: UNREADABLE_RESPONSE_REASON };
   }
 
+  const data = toDetail(payload, slug);
+
+  if (!data) {
+    return { state: "unavailable", reason: UNEXPECTED_RESPONSE_REASON };
+  }
+
+  return { state: "ok", data };
+}
+
+/**
+ * Six outcomes for a status change. A malformed slug, a malformed body and a
+ * room type with nothing in service to allocate are three different answers,
+ * and a page that treated them alike would tell an administrator to fix the
+ * wrong thing.
+ */
+export type AdminRoomTypeStatusResult =
+  | { state: "ok"; data: AdminRoomTypeDetail }
+  | { state: "unauthenticated" }
+  | { state: "invalid-reference" }
+  | { state: "invalid-status" }
+  | { state: "not-found" }
+  | { state: "no-active-rooms" }
+  | { state: "unavailable"; reason: string };
+
+/**
+ * Publishes or unpublishes one room type.
+ *
+ * Its own endpoint rather than a field of the general update, because it is
+ * an operation that can be refused: publishing a room type with no physical
+ * room in service would put it on the website and make it unbookable in every
+ * search, so the API says no.
+ *
+ * The body is exactly `{ isActive }`, a real boolean. Nothing is coerced here
+ * and nothing else is sent — a status change must not be able to carry an
+ * edit to anything else.
+ *
+ * Exactly one HTTP request, and never retried — the same reasoning as every
+ * other mutation here. An answer that never arrives is `unavailable`, which
+ * means unknown rather than failed.
+ *
+ * The slug is passed through untouched, never trimmed or lower-cased.
+ */
+export async function updateAdminRoomTypeStatus(
+  slug: string,
+  isActive: boolean,
+  cookie?: string,
+): Promise<AdminRoomTypeStatusResult> {
+  const resolved = resolveBaseUrl();
+
+  if (!resolved.ok) {
+    return { state: "unavailable", reason: resolved.reason };
+  }
+
+  // Encoded as exactly one path segment: the slug is caller input, and a slash
+  // or a query character in it must not become part of the URL's structure.
+  const url = `${resolved.baseUrl}${ADMIN_ROOM_TYPES_PATH}/${encodeURIComponent(slug)}/status`;
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...authHeaders(cookie) },
+      body: JSON.stringify({ isActive }),
+      cache: "no-store",
+    });
+  } catch {
+    return { state: "unavailable", reason: UNREACHABLE_REASON };
+  }
+
+  if (response.status === 401) {
+    return await classifyUnauthenticated(response);
+  }
+
+  if (response.status === 400 || response.status === 404 || response.status === 409) {
+    const payload = await readJson(response);
+
+    if (response.status === 400) {
+      if (matchesApiError(payload, INVALID_ROOM_TYPE_SLUG_ERROR)) {
+        return { state: "invalid-reference" };
+      }
+      if (matchesApiError(payload, INVALID_ROOM_TYPE_STATUS_ERROR)) {
+        return { state: "invalid-status" };
+      }
+    }
+
+    if (response.status === 404 && matchesApiError(payload, ROOM_TYPE_NOT_FOUND_ERROR)) {
+      return { state: "not-found" };
+    }
+
+    if (response.status === 409 && matchesApiError(payload, ROOM_TYPE_NO_ACTIVE_ROOMS_ERROR)) {
+      return { state: "no-active-rooms" };
+    }
+
+    return { state: "unavailable", reason: `The hotel API returned ${response.status}.` };
+  }
+
+  if (!response.ok) {
+    return { state: "unavailable", reason: `The hotel API returned ${response.status}.` };
+  }
+
+  const payload = await readJson(response);
+
+  if (payload === undefined) {
+    return { state: "unavailable", reason: UNREADABLE_RESPONSE_REASON };
+  }
+
+  // Checked against the slug that was asked for, like every other mutation
+  // here: a response describing a different room type cannot be interpreted.
   const data = toDetail(payload, slug);
 
   if (!data) {

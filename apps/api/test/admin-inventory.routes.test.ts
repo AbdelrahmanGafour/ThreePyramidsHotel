@@ -32,6 +32,7 @@ const EXPECTED_ADMIN_ROUTES = [
   'GET    /api/v1/admin/room-types/:slug/rooms',
   'POST   /api/v1/admin/room-types/:slug/rooms',
   'PATCH  /api/v1/admin/room-types/:slug/capacity',
+  'PATCH  /api/v1/admin/room-types/:slug/status',
   'GET    /api/v1/admin/room-types/:slug',
   'PATCH  /api/v1/admin/room-types/:slug',
 ];
@@ -141,7 +142,7 @@ describe('the admin inventory route table', () => {
     ]);
   });
 
-  it('adds no DELETE, status, archive, move or slug-edit route', async () => {
+  it('adds no DELETE, move or slug-edit route', async () => {
     const { adminRoomTypesRouter } = await import(
       '../src/modules/admin-room-types/admin-room-types.routes.js'
     );
@@ -153,10 +154,14 @@ describe('the admin inventory route table', () => {
     ].join('\n');
 
     assert.doesNotMatch(all, /DELETE/);
-    assert.doesNotMatch(all, /\/status\b/);
-    assert.doesNotMatch(all, /archive|reactivate|activate/i);
     assert.doesNotMatch(all, /\/move\b|reassign/i);
     assert.doesNotMatch(all, /\/slug\b/);
+
+    // `/:slug/status` is now a real route. What must still not exist is a
+    // second way to say the same thing: publishing and archiving are one
+    // endpoint taking a boolean, not a pair of verb routes.
+    assert.doesNotMatch(all, /archive|reactivate|activate|publish|unpublish/i);
+    assert.equal((all.match(/\/status\b/g) ?? []).length, 1, 'exactly one status route');
   });
 
   it('leaves the public routers untouched', async () => {
@@ -193,6 +198,7 @@ describe('the admin inventory route table', () => {
       ['GET /:slug/rooms', chainFor(adminRoomTypesRouter as never, 'GET', '/:slug/rooms')],
       ['POST /:slug/rooms', chainFor(adminRoomTypesRouter as never, 'POST', '/:slug/rooms')],
       ['PATCH /:slug/capacity', chainFor(adminRoomTypesRouter as never, 'PATCH', '/:slug/capacity')],
+      ['PATCH /:slug/status', chainFor(adminRoomTypesRouter as never, 'PATCH', '/:slug/status')],
       ['GET /:slug', chainFor(adminRoomTypesRouter as never, 'GET', '/:slug')],
       ['PATCH /:slug', chainFor(adminRoomTypesRouter as never, 'PATCH', '/:slug')],
       ['PATCH /:roomNumber', chainFor(adminRoomsRouter as never, 'PATCH', '/:roomNumber')],
@@ -213,6 +219,7 @@ describe('the admin inventory route table', () => {
       chainFor(adminRoomTypesRouter as never, method, path)[1];
 
     assert.equal(handler('PATCH', '/:slug/capacity'), 'updateAdminRoomTypeCapacityHandler');
+    assert.equal(handler('PATCH', '/:slug/status'), 'updateAdminRoomTypeStatusHandler');
     assert.equal(handler('GET', '/:slug/rooms'), 'listAdminPhysicalRoomsHandler');
     assert.equal(handler('POST', '/:slug/rooms'), 'createAdminPhysicalRoomHandler');
     // The T01 routes still reach the T01 handlers.
@@ -234,6 +241,9 @@ describe('authentication precedence on the new endpoints', () => {
     ['POST', '/api/v1/admin/room-types', JSON.stringify({})],
     ['PATCH', '/api/v1/admin/room-types/garden-suite/capacity', JSON.stringify({ capacity: 2 })],
     ['PATCH', '/api/v1/admin/room-types/NOT-CANONICAL/capacity', JSON.stringify({ capacity: 0 })],
+    ['PATCH', '/api/v1/admin/room-types/garden-suite/status', JSON.stringify({ isActive: true })],
+    ['PATCH', '/api/v1/admin/room-types/garden-suite/status', JSON.stringify({ isActive: 'yes' })],
+    ['PATCH', '/api/v1/admin/room-types/NOT-CANONICAL/status', JSON.stringify({ isActive: false })],
     ['GET', '/api/v1/admin/room-types/garden-suite/rooms', undefined],
     ['GET', '/api/v1/admin/room-types/NOT-CANONICAL/rooms', undefined],
     ['POST', '/api/v1/admin/room-types/garden-suite/rooms', JSON.stringify({ roomNumber: 'D-101' })],

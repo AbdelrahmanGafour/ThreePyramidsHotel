@@ -599,3 +599,91 @@ export async function updateAdminRoomTypeCapacity(
 
   return row ? toAdminRoomTypeDetail(row) : null;
 }
+
+/**
+ * How many of a room type's physical rooms are actually in service.
+ *
+ * Deliberately NOT `room_count`. That figure counts every room regardless of
+ * `rooms.is_active`, because it answers an inventory question — "how many
+ * rooms does this type have?" — and a type whose only two rooms are both out
+ * of service still has two. Publishing is a different question, and reading
+ * the inventory figure for it would let a room type go live with nothing a
+ * guest could ever be allocated.
+ *
+ * The condition is the admin half of what availability already requires:
+ *
+ *     room_types.is_active = true  AND  rooms.is_active = true
+ *
+ * This statement owns the second half. The first is what the caller is about
+ * to write.
+ *
+ * Counted, never listed: the answer to "may this be published?" is a number.
+ * No room number and no id leaves this function.
+ *
+ * Takes the caller's client so it runs inside the caller's transaction, under
+ * the room-type lock. Outside one the count would be a guess that another
+ * administrator could invalidate before the write landed.
+ */
+export async function countActivePhysicalRooms(
+  client: PoolClient,
+  roomTypeId: string,
+): Promise<number> {
+  const { rows } = await client.query<{ active_rooms: string }>(
+    `SELECT COUNT(*)::text AS active_rooms
+       FROM rooms r
+      WHERE r.room_type_id = $1
+        AND r.is_active = true`,
+    [roomTypeId],
+  );
+
+  const row = rows[0];
+
+  if (!row) {
+    throw new Error('Active room count returned no row');
+  }
+
+  return parseReservationConflictCount(row.active_rooms);
+}
+
+/**
+ * Publishes or archives the room type the caller already locked.
+ *
+ * Addressed by the internal id from that lock rather than by slug, for the
+ * same reason the capacity write is: the row is already held, and re-resolving
+ * the slug would be a second lookup able to disagree with the first.
+ *
+ * `is_active` and `updated_at` are the only columns this statement touches.
+ * It writes neither `rooms` nor `reservations`: archiving a room type hides it
+ * from the website, from availability and from new bookings, and changes
+ * nothing about the stays already promised to guests.
+ *
+ * `updated_at` moves only on a real change. Setting a value to what it already
+ * is answers 200 without disturbing the row, so a client that re-sends the
+ * state it can already see does not make the catalogue look edited. That is
+ * the same `IS DISTINCT FROM` guard the journey status write uses.
+ *
+ * Whether the change is *allowed* is not decided here. The service counts the
+ * active rooms under the same lock and refuses if it must.
+ */
+export async function updateAdminRoomTypeActiveState(
+  client: PoolClient,
+  roomTypeId: string,
+  isActive: boolean,
+): Promise<AdminRoomTypeDetail | null> {
+  const { rows } = await client.query<AdminRoomTypeDetailRow>(
+    `UPDATE room_types rt
+        SET is_active = $2,
+            updated_at = CASE
+              WHEN rt.is_active IS DISTINCT FROM $2 THEN now()
+              ELSE rt.updated_at
+            END
+      WHERE rt.id = $1
+     RETURNING ${DETAIL_COLUMNS},
+               ${ROOM_COUNT_SQL} AS room_count`,
+    [roomTypeId, isActive],
+  );
+
+  const row = rows[0];
+
+  return row ? toAdminRoomTypeDetail(row) : null;
+}

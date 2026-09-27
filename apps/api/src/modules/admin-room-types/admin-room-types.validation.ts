@@ -14,9 +14,11 @@ import {
   InvalidRoomTypeCapacityError,
   InvalidRoomTypeCreateError,
   InvalidRoomTypeSlugError,
+  InvalidRoomTypeStatusError,
   InvalidRoomTypeUpdateError,
   type AdminRoomTypeCapacityUpdate,
   type AdminRoomTypeCreate,
+  type AdminRoomTypeStatusUpdate,
   type AdminRoomTypeUpdate,
 } from './admin-room-types.types';
 
@@ -253,5 +255,42 @@ export function parseAdminRoomTypeCapacity(body: unknown): AdminRoomTypeCapacity
   return underContract(
     () => buildCapacityUpdate(body),
     () => new InvalidRoomTypeCapacityError(),
+  );
+}
+
+function buildStatusUpdate(body: unknown): AdminRoomTypeStatusUpdate {
+  const record = requirePlainJsonObject(body);
+  const keys = Object.keys(record);
+
+  // Exactly one key, by name, like the capacity body beside it. A caller who
+  // sent `{ isActive: true, name: "..." }` believing both would apply must be
+  // told neither did.
+  if (keys.length !== 1 || keys[0] !== 'isActive') {
+    throw new FieldError();
+  }
+
+  // A real boolean, and nothing that merely looks like one. `"true"`, `1`,
+  // `"false"`, `0` and `null` are mistakes to report, not input to interpret:
+  // publishing a room type and withdrawing it are opposite acts, and a server
+  // that guesses which way a malformed request leaned will eventually guess
+  // wrong in front of guests.
+  if (typeof record.isActive !== 'boolean') {
+    throw new FieldError();
+  }
+
+  return { isActive: record.isActive };
+}
+
+/**
+ * Validates a publish/archive request.
+ *
+ * Shape only. Whether the room type may actually be published depends on how
+ * many of its physical rooms are in service, which no pure function can
+ * answer — that is the service's job, under the room type's own lock.
+ */
+export function parseAdminRoomTypeStatus(body: unknown): AdminRoomTypeStatusUpdate {
+  return underContract(
+    () => buildStatusUpdate(body),
+    () => new InvalidRoomTypeStatusError(),
   );
 }

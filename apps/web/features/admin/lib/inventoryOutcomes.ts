@@ -112,6 +112,76 @@ export function planRoomTypeCapacity(state: CapacityState): InventoryOutcome {
   }
 }
 
+/** The states `updateAdminRoomTypeStatus` can return. */
+type RoomTypeStatusState =
+  | "ok"
+  | "unauthenticated"
+  | "invalid-reference"
+  | "invalid-status"
+  | "not-found"
+  | "no-active-rooms"
+  | "unavailable";
+
+/**
+ * Publishing or unpublishing a room type.
+ *
+ * The success token depends on which direction was asked for, so this takes
+ * the target as well as the state — the same shape `planPhysicalRoomStatus`
+ * uses for the same reason.
+ *
+ * Both the list and the detail are re-read on success: a room type appearing
+ * or disappearing from the public site is a change the catalogue row shows
+ * too.
+ *
+ * `no-active-rooms` is the only refusal an administrator can act on, and it
+ * re-reads the detail so the rooms panel beside the notice shows what is
+ * actually in service — which is where the fix is.
+ */
+export function planRoomTypeStatus(
+  state: RoomTypeStatusState,
+  targetIsActive: boolean,
+): InventoryOutcome {
+  switch (state) {
+    case "ok":
+      return {
+        kind: "notice",
+        surface: "detail",
+        token: targetIsActive ? "published" : "unpublished",
+        revalidate: "list-and-detail",
+      };
+
+    case "unauthenticated":
+      return { kind: "login" };
+
+    case "invalid-status":
+      // The API refused the body. Nothing was written, and nothing about the
+      // room type changed, so there is nothing to re-read.
+      return { kind: "notice", surface: "detail", token: "status-refused", revalidate: "none" };
+
+    case "no-active-rooms":
+      return {
+        kind: "notice",
+        surface: "detail",
+        token: "status-no-active-rooms",
+        revalidate: "detail",
+      };
+
+    case "invalid-reference":
+    case "not-found":
+      return { kind: "stale", revalidate: "list" };
+
+    case "unavailable":
+      // The PATCH may already have committed. Never reported as a failure,
+      // and never retried.
+      return {
+        kind: "notice",
+        surface: "detail",
+        token: "status-uncertain",
+        revalidate: "list-and-detail",
+      };
+  }
+}
+
 /** The states `createAdminPhysicalRoom` can return. */
 type AddRoomState =
   | "ok"

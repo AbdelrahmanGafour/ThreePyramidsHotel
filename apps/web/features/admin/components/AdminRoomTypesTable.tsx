@@ -82,7 +82,7 @@ export function AdminRoomTypesTable({ roomTypes }: { roomTypes: AdminRoomTypeLis
                 <td className="adm-cell-money">{formatEgp(roomType.baseNightlyRate)}</td>
                 <td>{rooms(roomType.roomCount)}</td>
                 <td>
-                  <StatusBadge meta={roomTypeStatus[roomType.isActive ? "active" : "archived"]} />
+                  <StatusBadge meta={roomTypeStatus[roomType.isActive ? "active" : "inactive"]} />
                 </td>
                 <td>{roomType.sortOrder}</td>
               </tr>
@@ -98,7 +98,7 @@ export function AdminRoomTypesTable({ roomTypes }: { roomTypes: AdminRoomTypeLis
               <Link className="adm-strong adm-ref-link" href={roomTypeDetailHref(roomType.slug)}>
                 {roomType.name}
               </Link>
-              <StatusBadge meta={roomTypeStatus[roomType.isActive ? "active" : "archived"]} />
+              <StatusBadge meta={roomTypeStatus[roomType.isActive ? "active" : "inactive"]} />
             </div>
             <p className="adm-sub">{roomType.slug}</p>
             <p className="adm-sub">Sleeps {plural(roomType.capacity, "guest")}</p>

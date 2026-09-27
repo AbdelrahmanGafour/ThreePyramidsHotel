@@ -7,6 +7,7 @@ import { parseCapacityForm, parseRoomTypeCreateForm } from "../lib/inventoryForm
 import {
   planRoomTypeCapacity,
   planRoomTypeCreate,
+  planRoomTypeStatus,
   type InventoryOutcome,
   type RevalidationScope,
 } from "../lib/inventoryOutcomes";
@@ -16,6 +17,7 @@ import {
   createAdminRoomType,
   updateAdminRoomType,
   updateAdminRoomTypeCapacity,
+  updateAdminRoomTypeStatus,
 } from "./adminRoomTypesApi";
 
 // The one way the administration UI edits a room type.
@@ -402,4 +404,52 @@ export async function updateAdminRoomTypeCapacityAction(
   const result = await updateAdminRoomTypeCapacity(slug, parsed.value, cookie);
 
   completeOutcome(planRoomTypeCapacity(result.state), slug);
+}
+
+/**
+ * Publishes or unpublishes one room type.
+ *
+ * Both arguments are bound on the server: the slug from the route this page
+ * rendered, and the target from the state it rendered. Neither is read from
+ * the submission — a Server Action is a public endpoint, and between them
+ * they decide which room type changes and which way.
+ *
+ * The form that calls this carries no fields at all, so there is nothing for
+ * a crafted submission to substitute.
+ *
+ * Every path ends in a redirect back to the room type, so the status on
+ * screen afterwards is always freshly read rather than assumed from what was
+ * asked for. The updated room type the API returns is deliberately not
+ * rendered from here: re-reading is one code path instead of two, and it
+ * cannot show a state that disagrees with what the next reader would see.
+ *
+ * Only `isActive` changes. The room type's wording, its capacity, its rooms
+ * and its images are untouched by this action and are not sent — and neither
+ * are its reservations, which unpublishing leaves exactly as they are.
+ */
+export async function updateAdminRoomTypeStatusAction(
+  slug: string,
+  isActive: boolean,
+): Promise<void> {
+  // Treated as untrusted despite the bound types.
+  if (typeof slug !== "string" || slug.length === 0) {
+    redirect(ROOM_TYPES_PATH);
+  }
+
+  if (typeof isActive !== "boolean") {
+    // Nothing was asked of the API, so this is not reported as an API
+    // failure. There is no direction to apply, and guessing one would
+    // publish or withdraw a room type nobody asked to change.
+    redirect(`${roomTypeDetailHref(slug)}?action=status-refused`);
+  }
+
+  // The browser's own Cookie header, forwarded verbatim: this app never parses
+  // it and never decides whether the session is valid.
+  const cookie = (await headers()).get("cookie") ?? undefined;
+  const result = await updateAdminRoomTypeStatus(slug, isActive, cookie);
+
+  // redirect() works by throwing, so this is deliberately outside any
+  // try/catch. The same-state case arrives as `ok`: the API treats asking for
+  // the state a room type already holds as a success, and so does this.
+  completeOutcome(planRoomTypeStatus(result.state, isActive), slug);
 }

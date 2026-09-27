@@ -30,7 +30,17 @@ const page = readFileSync("app/(dashboard)/admin/journeys/[slug]/page.tsx", "utf
 const actions = readFileSync("features/admin/server/adminPackageImageActions.ts", "utf8");
 
 /** The branch of the panel that runs when the journey has no image. */
-const emptyState = panel.slice(panel.indexOf("if (image === null)"), panel.indexOf("return (\n    <DetailSection\n      id=\"journey-detail-image\"\n      title=\"Image\"\n      note=\"The picture"));
+// Newline-agnostic: this checkout carries CRLF, so a literal \n run pins the
+// bytes a checkout happened to write rather than the branch this slice is
+// about. `search` finds the populated branch's own opening — the empty one
+// above it opens with a different note — and an unmatched boundary would
+// return -1 here exactly as `indexOf` did.
+const emptyState = panel.slice(
+  panel.indexOf("if (image === null)"),
+  panel.search(
+    /return \(\s*<DetailSection\s*id="journey-detail-image"\s*title="Image"\s*note="The picture/,
+  ),
+);
 
 /** The branch that runs when it has one. */
 const populated = panel.slice(panel.indexOf('note="The picture guests see'));
