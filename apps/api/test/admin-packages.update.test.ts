@@ -72,6 +72,9 @@ function storedRow(state: {
     operating_days: ['saturday', 'sunday'],
     variant_count: 1,
     default_variant_label: 'Standard',
+    // Selected by PACKAGE_DETAIL_COLUMNS now; a row without it is one
+    // this repository would never produce. null is no image.
+    image: null,
     itinerary: [],
     content: [],
     variants: [{

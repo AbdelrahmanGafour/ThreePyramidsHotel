@@ -347,10 +347,16 @@ function VariantsTable({
 export function AdminPackageDetailView({
   journey,
   actions,
+  imagePanel,
   variantActions,
 }: {
   journey: Journey;
   actions?: React.ReactNode;
+  /**
+   * The journey's image section, composed at the page for the same reason
+   * `actions` is: it binds Server Actions this view cannot load.
+   */
+  imagePanel?: React.ReactNode;
   variantActions?: ReadonlyMap<string, React.ReactNode>;
 }) {
   const pricing = journey.requiresPriceConfirmation
@@ -424,6 +430,10 @@ export function AdminPackageDetailView({
           putting a panel inside the masthead's action row was what made the
           top of this page look assembled by accident. */}
       {actions}
+
+      {/* The picture, high on the page: it is the first thing an
+          administrator checks about a journey they can already see. */}
+      {imagePanel}
 
       <DetailSection id="journey-detail-details" title="Details">
         <DetailFacts rows={details} />

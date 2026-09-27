@@ -49,7 +49,10 @@ describe("make-default control", () => {
   it("renders nothing when the tested helper offers nothing", () => {
     assert.ok(source.includes("packageDefaultVariantAction(journey, variant)"));
     assert.ok(
-      source.includes("if (!action) {\n    return null;\n  }"),
+      // Newline-agnostic: checkouts of this repository carry CRLF, so an
+      // assertion hard-coding \n pins the bytes a checkout happened to
+      // write rather than the code it is about.
+      /if \(!action\) \{\s*return null;\s*\}/.test(source),
       "no control, no markup",
     );
   });
@@ -133,7 +136,10 @@ describe("make-default action", () => {
   it("sends an ended session to the login page", () => {
     assert.match(
       defaultVariantAction,
-      /case "unauthenticated":\s*\n(\s*\/\/.*\n)*\s*redirect\("\/admin\/login"\);/,
+      // Newline-agnostic, and necessarily so: this branch carries a comment
+      // between the label and the redirect, and `.` never matches \r, so a
+      // `.*\n` run cannot cross a CRLF line end at all.
+      /case "unauthenticated":(\s|\/\/[^\r\n]*)*redirect\("\/admin\/login"\);/,
     );
   });
 

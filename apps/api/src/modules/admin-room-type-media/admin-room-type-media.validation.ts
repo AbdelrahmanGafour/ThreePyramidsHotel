@@ -1,3 +1,4 @@
+import { hasExactlyKey, isPlainJsonObject } from '../media/media.body';
 import { InvalidRoomTypeImageUpdateError } from './admin-room-type-media.types';
 
 /**
@@ -40,24 +41,19 @@ function underContract<T>(parse: () => T): T {
 }
 
 /**
- * A JSON object and nothing else.
+ * A JSON object and nothing else, raising this module's own error.
  *
- * A null prototype is accepted because `JSON.parse` with a reviver can produce
- * one. A Date, Map, Set or class instance is an object whose fields would not
- * survive a JSON round-trip, so it is not a body this API was sent.
+ * The rule itself lives in `media/media.body.ts` and is shared with the
+ * journey media routes — the prototype subtlety is exactly the kind of thing
+ * that should not be written twice. What stays here is which error a failure
+ * becomes, which is this feature's own.
  */
 function requirePlainJsonObject(body: unknown): Record<string, unknown> {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+  if (!isPlainJsonObject(body)) {
     fail();
   }
 
-  const prototype = Object.getPrototypeOf(body);
-
-  if (prototype !== Object.prototype && prototype !== null) {
-    fail();
-  }
-
-  return body as Record<string, unknown>;
+  return body;
 }
 
 /**
@@ -77,9 +73,8 @@ function requirePlainJsonObject(body: unknown): Record<string, unknown> {
 export function parseAltTextUpdateBody(body: unknown): unknown {
   return underContract(() => {
     const record = requirePlainJsonObject(body);
-    const keys = Object.keys(record);
 
-    if (keys.length !== 1 || keys[0] !== 'altText') {
+    if (!hasExactlyKey(record, 'altText')) {
       fail();
     }
 
@@ -99,9 +94,8 @@ export function parseAltTextUpdateBody(body: unknown): unknown {
 export function parseOrderUpdateBody(body: unknown): unknown {
   return underContract(() => {
     const record = requirePlainJsonObject(body);
-    const keys = Object.keys(record);
 
-    if (keys.length !== 1 || keys[0] !== 'direction') {
+    if (!hasExactlyKey(record, 'direction')) {
       fail();
     }
 

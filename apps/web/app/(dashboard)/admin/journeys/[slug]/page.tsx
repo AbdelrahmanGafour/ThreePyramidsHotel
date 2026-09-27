@@ -6,6 +6,11 @@ import { notFound, redirect } from "next/navigation";
 import { AdminPackageActions } from "@/features/admin/components/AdminPackageActions";
 import { DetailPage } from "@/features/admin/components/AdminDetail";
 import { AdminPackageDeleteAction } from "@/features/admin/components/AdminPackageDeleteAction";
+import { AdminPackageImagePanel } from "@/features/admin/components/AdminPackageImagePanel";
+import {
+  PACKAGE_IMAGE_NOTICES,
+  parsePackageImageNotice,
+} from "@/features/admin/lib/packageImageOutcomes";
 import { AdminPackageDefaultVariantAction } from "@/features/admin/components/AdminPackageDefaultVariantAction";
 import { AdminPackageDetailView } from "@/features/admin/components/AdminPackageDetail";
 import { AdminPackageVariantDeleteAction } from "@/features/admin/components/AdminPackageVariantDeleteAction";
@@ -331,11 +336,36 @@ function PackageDeleteNotice({ notice }: { notice: string | string[] | undefined
   );
 }
 
+/**
+ * Feedback the image actions left behind.
+ *
+ * Unlike the six blocks above, the tokens and their wording are not restated
+ * here: they live in `lib/packageImageOutcomes.ts` beside the planner that
+ * chooses them, so a notice and the decision to show it cannot drift apart.
+ * The value in the URL is still never rendered — it only picks an entry from
+ * that closed map, and anything unrecognised shows nothing.
+ */
+function ImageNotice({ notice }: { notice: string | string[] | undefined }) {
+  const token = parsePackageImageNotice(notice);
+
+  if (token === null) {
+    return null;
+  }
+
+  const known = PACKAGE_IMAGE_NOTICES[token];
+
+  return (
+    <p className="adm-notice" data-tone={known.tone} role="status">
+      {known.message}
+    </p>
+  );
+}
+
 export default async function AdminJourneyDetailPage({ params, searchParams }: PageProps) {
   const { slug } = await params;
   const {
     statusAction, defaultVariant, variantOrder, variantDelete, content, itinerary,
-    packageDelete,
+    packageDelete, image,
   } = await searchParams;
 
   // The browser's own Cookie header, forwarded verbatim: this app never parses
@@ -413,12 +443,14 @@ export default async function AdminJourneyDetailPage({ params, searchParams }: P
       <ContentNotice notice={content} />
       <ItineraryNotice notice={itinerary} />
       <PackageDeleteNotice notice={packageDelete} />
+      <ImageNotice notice={image} />
       {/* The page owns the stack, so the danger zone below shares its
           spacing and its detail-page styling rather than trailing after it. */}
       <DetailPage>
         <AdminPackageDetailView
           journey={data}
           actions={<AdminPackageActions slug={data.slug} isActive={data.isActive} />}
+          imagePanel={<AdminPackageImagePanel slug={data.slug} image={data.image} />}
           variantActions={variantActions}
         />
         {/* Last on the page, below everything it would destroy. */}

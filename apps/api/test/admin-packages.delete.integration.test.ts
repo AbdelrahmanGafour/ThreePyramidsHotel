@@ -80,6 +80,9 @@ async function packageExists(id: string): Promise<boolean> {
 
 let sequence = 0;
 
+/** Every media asset this run inserted, so the sweep can name them exactly. */
+const createdAssetIds: string[] = [];
+
 /**
  * One journey furnished with every kind of child row, so a cascade has
  * something of each to take.
@@ -202,7 +205,15 @@ before(async () => {
 });
 
 after(async () => {
-  // Reservations first: they reference variants with ON DELETE RESTRICT, so
+  // Media relations first of all: both of their foreign keys are RESTRICT,
+  // so neither the journey nor the asset can go while one still stands.
+  await dbPool.query(
+    `DELETE FROM package_media
+      WHERE package_id IN (SELECT id FROM packages WHERE code LIKE $1 OR slug LIKE $2)`,
+    [`${codePrefix}%`, `${slugPrefix}%`],
+  );
+
+  // Reservations next: they reference variants with ON DELETE RESTRICT, so
   // nothing below them can go while they stand.
   await dbPool.query(
     `DELETE FROM package_reservations
@@ -215,11 +226,26 @@ after(async () => {
   // named by their own prefix rather than by the shared one.
   await dbPool.query('DELETE FROM packages WHERE slug LIKE $1', [`${slugPrefix}%`]);
 
+  // Exactly the assets this run created, by id. Deliberately not a pattern
+  // over `storage_key`: the key shape is shared with room-type media, so a
+  // LIKE would reach rows this suite never made.
+  if (createdAssetIds.length > 0) {
+    await dbPool.query('DELETE FROM media_assets WHERE id = ANY($1::bigint[])', [createdAssetIds]);
+  }
+
   const { rows } = await dbPool.query<{ n: number }>(
     'SELECT count(*)::int AS n FROM packages WHERE code LIKE $1 OR slug LIKE $2',
     [`${codePrefix}%`, `${slugPrefix}%`],
   );
   assert.equal(rows[0]!.n, 0, 'every fixture this run created was removed');
+
+  if (createdAssetIds.length > 0) {
+    const { rows: assetRows } = await dbPool.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM media_assets WHERE id = ANY($1::bigint[])',
+      [createdAssetIds],
+    );
+    assert.equal(assetRows[0]!.n, 0, 'and so was every media asset it inserted');
+  }
 
   await closeDatabasePool();
 });
@@ -344,5 +370,138 @@ describe('admin package removal against PostgreSQL', () => {
     const result = await deleteAdminPackage(`${slugPrefix}-absent`);
 
     assert.equal(result.outcome, 'package-not-found');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The journey's one image
+// ---------------------------------------------------------------------------
+//
+// `package_media` does NOT cascade: both of its foreign keys are ON DELETE
+// RESTRICT, which is the whole reason the delete transaction names it. These
+// tests are the proof that it does, against the real constraints — a
+// repository that forgot either statement would be refused by PostgreSQL
+// here, not pass quietly against a fake.
+//
+// Nothing in this file contacts object storage. The repository does not have
+// a `MediaStorage` and must not: it only carries the key back out, and the
+// service removes the object after the commit. That half is covered by the
+// mocked-storage tests in `admin-packages.delete.test.ts`.
+
+/** One journey image: a media asset and the relation that places it. */
+async function attachImage(packageId: string): Promise<{ assetId: string; storageKey: string }> {
+  const reference = randomUUID();
+  const storageKey = `media/${reference}.webp`;
+
+  const { rows } = await dbPool.query<{ id: string }>(
+    `INSERT INTO media_assets
+       (reference, storage_key, content_type, byte_size, checksum_sha256, width, height)
+     VALUES ($1, $2, 'image/webp', 4096, $3, 1200, 800)
+     RETURNING id`,
+    [reference, storageKey, 'b'.repeat(64)],
+  );
+  const assetId = rows[0]!.id;
+  createdAssetIds.push(assetId);
+
+  await dbPool.query(
+    `INSERT INTO package_media (package_id, media_asset_id, alt_text)
+     VALUES ($1, $2, 'Fixture image')`,
+    [packageId, assetId],
+  );
+
+  return { assetId, storageKey };
+}
+
+async function mediaCounts(packageId: string, assetId: string): Promise<{
+  relations: number;
+  assets: number;
+}> {
+  const { rows } = await dbPool.query<{ relations: number; assets: number }>(
+    `SELECT
+       (SELECT count(*)::int FROM package_media WHERE package_id = $1) AS relations,
+       (SELECT count(*)::int FROM media_assets WHERE id = $2) AS assets`,
+    [packageId, assetId],
+  );
+
+  return rows[0]!;
+}
+
+describe('admin package delete: the journey image, against real PostgreSQL', () => {
+  it('reports no key for a journey that never had an image', async () => {
+    const fixture = await createFixture();
+
+    const result = await deleteAdminPackage(fixture.slug);
+
+    assert.deepEqual(result, { outcome: 'deleted', mediaStorageKey: null });
+  });
+
+  it('removes the relation, the asset and the journey, and carries the key out', async () => {
+    const fixture = await createFixture();
+    const image = await attachImage(fixture.packageId);
+
+    assert.deepEqual(await mediaCounts(fixture.packageId, image.assetId), {
+      relations: 1,
+      assets: 1,
+    });
+
+    const result = await deleteAdminPackage(fixture.slug);
+
+    // The key is the one thing that survives the transaction, because it is
+    // the only thing the caller still needs: the rows that named it are gone.
+    assert.deepEqual(result, { outcome: 'deleted', mediaStorageKey: image.storageKey });
+
+    assert.equal(await packageExists(fixture.packageId), false);
+    assert.deepEqual(await mediaCounts(fixture.packageId, image.assetId), {
+      relations: 0,
+      assets: 0,
+    });
+
+    // And the cascading children still went, exactly as before.
+    assert.deepEqual(await childCounts(fixture.packageId), {
+      itinerary: 0, content: 0, variants: 0, rates: 0,
+    });
+  });
+
+  it('leaves the image untouched when the journey is refused', async () => {
+    // One refusal is enough to prove the ordering: every refusal rolls back
+    // before reaching the media statements, and they all share that path.
+    const fixture = await createFixture({ isActive: true });
+    const image = await attachImage(fixture.packageId);
+
+    const result = await deleteAdminPackage(fixture.slug);
+
+    assert.equal(result.outcome, 'package-active');
+    assert.equal(await packageExists(fixture.packageId), true);
+    assert.deepEqual(await mediaCounts(fixture.packageId, image.assetId), {
+      relations: 1,
+      assets: 1,
+    });
+  });
+
+  it('is refused by the schema if the relation is not removed first', async () => {
+    // The constraint the delete transaction exists to satisfy. Deleting the
+    // journey directly, without clearing `package_media`, must be refused —
+    // otherwise the explicit statements in the repository would be dead code
+    // and a CASCADE would have stranded the asset row instead.
+    const fixture = await createFixture();
+    const image = await attachImage(fixture.packageId);
+
+    await assert.rejects(
+      dbPool.query('DELETE FROM packages WHERE id = $1', [fixture.packageId]),
+      (error: unknown) => {
+        const failure = error as { code?: string; constraint?: string };
+        assert.equal(failure.constraint, 'package_media_package_id_fkey');
+        // 23503 on PostgreSQL 16, the more specific 23001 on 18.
+        assert.ok(['23001', '23503'].includes(failure.code ?? ''), `unexpected ${failure.code}`);
+        return true;
+      },
+    );
+
+    // Still there, and still deletable through the repository.
+    assert.equal(await packageExists(fixture.packageId), true);
+    assert.deepEqual(await deleteAdminPackage(fixture.slug), {
+      outcome: 'deleted',
+      mediaStorageKey: image.storageKey,
+    });
   });
 });

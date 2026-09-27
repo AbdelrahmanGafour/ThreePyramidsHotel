@@ -1431,6 +1431,30 @@ a.adm-ref-link:hover {
   min-width: 0;
 }
 
+/* ---- One journey image --------------------------------------------------
+   A single picture rather than a gallery, so it needs no grid and no row —
+   just the preview and the dimensions under it, inside the section's own
+   inner margin. */
+.adm-journey-image {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  padding: 1rem 1.25rem 0;
+}
+
+.adm-journey-image-preview {
+  overflow: hidden;
+  max-width: 20rem;
+  border: 1px solid var(--adm-rule);
+  background: rgba(30, 24, 21, 0.04);
+}
+
+.adm-journey-image-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 /* ---- Pager ------------------------------------------------------------- */
 .adm-pager {
   display: flex;

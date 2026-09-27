@@ -188,6 +188,9 @@ function detailRow(state: {
     operating_days: null,
     variant_count: 0,
     default_variant_label: null,
+    // Selected by PACKAGE_DETAIL_COLUMNS now; a row without it is one
+    // this repository would never produce. null is no image.
+    image: null,
     itinerary: [...state.sections]
       .sort((l, r) => l.sort_order - r.sort_order)
       .map((s) => ({ day_number: s.day_number, heading: s.heading, body: s.body })),

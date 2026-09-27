@@ -1,9 +1,18 @@
 import { Router } from 'express';
 import { requireAdminSession } from '../admin-auth/admin-auth.middleware';
 import {
+  createLazyPublicMediaBaseUrlProvider,
+  type PublicMediaBaseUrlProvider,
+} from '../media/media.delivery';
+import {
+  createLazyR2MediaStorageProvider,
+  type MediaStorageProvider,
+} from '../media/media.storage';
+import { attachMediaBaseResolver } from './admin-packages.projection';
+import {
   createAdminPackageHandler,
   createAdminPackageVariantHandler,
-  deleteAdminPackageHandler,
+  createDeleteAdminPackageHandler,
   deleteAdminPackageVariantHandler,
   replaceAdminPackageContentHandler,
   replaceAdminPackageItineraryHandler,
@@ -17,7 +26,33 @@ import {
   updateAdminPackageVariantHandler,
 } from './admin-packages.controller';
 
-export const adminPackagesRouter = Router();
+/**
+ * The admin journey routes.
+ *
+ * A factory because one route needs object storage: deleting a journey that
+ * holds an image removes the object after the transaction commits, and the
+ * `MediaStorage` that does it is injected rather than reached for. `app.ts`
+ * passes the same provider the room-type media routers already share, so a
+ * process builds exactly one R2 client however many routers use it.
+ *
+ * `getStorage` defaults to a lazy provider of its own, which reads no
+ * environment variable until it is called — and it is called only when a
+ * deleted journey actually had an image. Every other route here is
+ * unaffected, and importing this module still requires no R2 configuration.
+ */
+export function createAdminPackagesRouter(
+  getStorage: MediaStorageProvider = createLazyR2MediaStorageProvider(),
+  getPublicMediaBaseUrl: PublicMediaBaseUrlProvider = createLazyPublicMediaBaseUrlProvider(),
+): Router {
+  const adminPackagesRouter = Router();
+
+  // Not a guard. `requireAdminSession` stays stated on every route below, as
+  // it always has; this carries one per-request value — where a journey
+  // image's URL is composed from — so the twelve endpoints that answer with
+  // a whole journey share one projection instead of twelve copies of it.
+  // Reading it is lazy, so a journey with no image never touches media
+  // configuration at all.
+  adminPackagesRouter.use(attachMediaBaseResolver(getPublicMediaBaseUrl));
 
 // The guard sits in the route chain rather than inside the handler, so the
 // protection is visible at the route itself and a future route added here
@@ -33,18 +68,18 @@ export const adminPackagesRouter = Router();
 // simply a different shape. The order is therefore for a reader rather than
 // for the matcher, and is stated so it stays that way: a later
 // optional-segment pattern would make it load-bearing.
-adminPackagesRouter.get('/', requireAdminSession, listAdminPackagesHandler);
+  adminPackagesRouter.get('/', requireAdminSession, listAdminPackagesHandler);
 
 // Creating the parent row only. A new journey arrives unpublished and
 // admin-owned, with no variants, rates, itinerary or content yet; each of
 // those is its own later step against its own sub-resource.
-adminPackagesRouter.post('/', requireAdminSession, createAdminPackageHandler);
+  adminPackagesRouter.post('/', requireAdminSession, createAdminPackageHandler);
 
 // Whether guests can see the offering is its own sub-resource rather than a
 // field of a general update: it is the one thing an administrator may change
 // about a package today, and it is safe for a brochure-owned offering in a
 // way that editing its wording is not.
-adminPackagesRouter.patch('/:slug/status', requireAdminSession, updateAdminPackageStatusHandler);
+  adminPackagesRouter.patch('/:slug/status', requireAdminSession, updateAdminPackageStatusHandler);
 
 // The running order of the journey's variants. A slot on the package, like
 // the default above: the order is one property of the journey rather than of
@@ -55,7 +90,7 @@ adminPackagesRouter.patch('/:slug/status', requireAdminSession, updateAdminPacka
 // same arrangement. Allowed while the journey is active — unlike adding a
 // variant or moving the default, nothing in the reservation path reads a
 // variant's position.
-adminPackagesRouter.put(
+  adminPackagesRouter.put(
   '/:slug/variant-order',
   requireAdminSession,
   reorderAdminPackageVariantsHandler,
@@ -68,7 +103,7 @@ adminPackagesRouter.put(
 // PUT because the body states what the itinerary is, so sending it twice
 // leaves the same rows. Allowed while the journey is active — these rows are
 // prose on the detail page, and no part of the reservation path reads them.
-adminPackagesRouter.put(
+  adminPackagesRouter.put(
   '/:slug/itinerary',
   requireAdminSession,
   replaceAdminPackageItineraryHandler,
@@ -81,7 +116,7 @@ adminPackagesRouter.put(
 // PUT because the body states what the lists are, so sending it twice leaves
 // the same rows. Allowed while the journey is active — these rows are prose
 // on the detail page, and no part of the reservation path reads them.
-adminPackagesRouter.put('/:slug/content', requireAdminSession, replaceAdminPackageContentHandler);
+  adminPackagesRouter.put('/:slug/content', requireAdminSession, replaceAdminPackageContentHandler);
 
 // Which variant leads the journey. A slot on the package rather than a toggle
 // on a variant, and deliberately so: at most one variant can hold the flag,
@@ -92,7 +127,7 @@ adminPackagesRouter.put('/:slug/content', requireAdminSession, replaceAdminPacka
 // PUT because the request states which variant leads, so sending it twice
 // leaves the same row leading and asking for the one that already leads is an
 // ordinary success.
-adminPackagesRouter.put(
+  adminPackagesRouter.put(
   '/:slug/default-variant',
   requireAdminSession,
   setAdminPackageDefaultVariantHandler,
@@ -105,13 +140,13 @@ adminPackagesRouter.put(
 // The variant arrives with no rate tiers, which is why this is allowed only
 // while the journey is inactive; its position and its default flag are the
 // server's to assign, and the body may offer neither.
-adminPackagesRouter.post('/:slug/variants', requireAdminSession, createAdminPackageVariantHandler);
+  adminPackagesRouter.post('/:slug/variants', requireAdminSession, createAdminPackageVariantHandler);
 
 // One variant's metadata. A three-segment path, so it cannot be confused with
 // either of the routes above. Only the label and the child rule are editable
 // here: the key, the default flag, the order and the rates each decide
 // something a reservation depends on, and each is its own later step.
-adminPackagesRouter.patch(
+  adminPackagesRouter.patch(
   '/:slug/variants/:key',
   requireAdminSession,
   updateAdminPackageVariantHandler,
@@ -124,7 +159,7 @@ adminPackagesRouter.patch(
 // journey leads with unless it is the last one: a removal must not decide,
 // on the way past, what an unqualified booking resolves to. A variant that
 // has ever been booked cannot be removed at all.
-adminPackagesRouter.delete(
+  adminPackagesRouter.delete(
   '/:slug/variants/:key',
   requireAdminSession,
   deleteAdminPackageVariantHandler,
@@ -135,19 +170,18 @@ adminPackagesRouter.delete(
 // it twice leaves the same rows, and there is no way to add or remove a
 // single tier in isolation — which is what keeps the set from drifting into
 // an overlapping or gapped state one edit at a time.
-adminPackagesRouter.put(
+  adminPackagesRouter.put(
   '/:slug/variants/:key/rates',
   requireAdminSession,
   replaceAdminPackageRatesHandler,
 );
-
-adminPackagesRouter.get('/:slug', requireAdminSession, getAdminPackageHandler);
+  adminPackagesRouter.get('/:slug', requireAdminSession, getAdminPackageHandler);
 
 // Editing the package-level fields. Deliberately separate from the status
 // route above: publishing a journey and rewriting one are different
 // operations with different consequences, and only the second takes ownership
 // of a brochure offering.
-adminPackagesRouter.patch('/:slug', requireAdminSession, updateAdminPackageHandler);
+  adminPackagesRouter.patch('/:slug', requireAdminSession, updateAdminPackageHandler);
 
 // Removing a journey outright. The same address a read and an edit use,
 // under a different method, because it is the same resource.
@@ -156,4 +190,19 @@ adminPackagesRouter.patch('/:slug', requireAdminSession, updateAdminPackageHandl
 // brochure catalogue owns - the seed would simply recreate it - and never for
 // a journey that has ever been booked. Everything the journey owns goes with
 // it by cascade.
-adminPackagesRouter.delete('/:slug', requireAdminSession, deleteAdminPackageHandler);
+  adminPackagesRouter.delete(
+    '/:slug',
+    requireAdminSession,
+    createDeleteAdminPackageHandler(getStorage),
+  );
+
+  return adminPackagesRouter;
+}
+
+/**
+ * The router as a value, built with the default provider.
+ *
+ * Preserved because it is what every existing test imports, and because a
+ * caller that does not care about storage injection should not have to.
+ */
+export const adminPackagesRouter = createAdminPackagesRouter();

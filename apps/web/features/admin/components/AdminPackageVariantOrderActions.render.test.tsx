@@ -56,7 +56,8 @@ describe("reorder controls", () => {
   it("asks the tested helper which moves exist", () => {
     assert.ok(source.includes("packageVariantMoves(orderedKeys, index)"));
     assert.ok(
-      source.includes("if (!moves.up && !moves.down) {\n    return null;\n  }"),
+      // Newline-agnostic, for the reason given in the default-variant suite.
+      /if \(!moves\.up && !moves\.down\) \{\s*return null;\s*\}/.test(source),
       "a variant with nowhere to go renders nothing",
     );
   });

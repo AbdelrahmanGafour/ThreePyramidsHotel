@@ -121,8 +121,13 @@ it('lists active products in deterministic sort_order/id order', async () => {
 });
 it('returns only card-safe fields and qualified numeric from pricing', async () => {
   const card = (await list()).find(item => item.slug === standard)!;
+  // Exact, not a subset: this is what keeps an internal media field — a
+  // reference, a storage key, an asset id, a checksum, a content type, a
+  // byte size or a bucket — from reaching a guest by simply appearing.
+  // `image` is the public four-field object or null, and nothing else here
+  // gained a key.
   assert.deepEqual(Object.keys(card).sort(), ['code','slug','title','summary','durationLabel','scheduleLabel',
-    'operatingDays','currency','requiresPriceConfirmation','pricing'].sort());
+    'operatingDays','currency','requiresPriceConfirmation','pricing','image'].sort());
   assert.deepEqual(card.pricing, { status: 'from', unit: 'per_person',
     from: { adultUnitRate: '9.25', variantKey: 'double', minPartySize: 2, maxPartySize: null } });
   assert.equal(card.currency, 'USD');

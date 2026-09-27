@@ -207,6 +207,9 @@ function detailRow(state: {
     operating_days: null,
     variant_count: ordered.length,
     default_variant_label: ordered.find((variant) => variant.is_default)?.label ?? null,
+    // Selected by PACKAGE_DETAIL_COLUMNS now; a row without it is one
+    // this repository would never produce. null is no image.
+    image: null,
     itinerary: [],
     content: [],
     // Every variant carries an empty rate set: this endpoint inserts none,

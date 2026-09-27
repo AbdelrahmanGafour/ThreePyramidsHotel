@@ -19,10 +19,20 @@ const pool = new Pool({ connectionString: databaseUrl, max: 1 });
 let client: PoolClient;
 const tables = ['packages', 'package_itinerary_sections', 'package_content_items',
   'package_variants', 'package_rate_tiers', 'package_reservations'].sort();
+/**
+ * Tables a LATER migration creates that still match the `package_%` sweep
+ * below. They are not this suite's subject — `package_media` has its own
+ * schema suite — but they exist by the time the migrations are fully applied,
+ * so the sweep has to expect them. Every index, constraint and column
+ * assertion here stays scoped to `tables`.
+ */
+const laterPackageTables = ['package_media'];
+const allPackageTables = [...tables, ...laterPackageTables].sort();
 const migrationName = '1790200000000_create-packages-and-package-reservations';
 const ownershipMigrationName = '1790300000000_add-packages-seed-managed';
-/** Everything this suite owns, in apply order, on top of main's baseline. */
-const packageMigrations = [migrationName, ownershipMigrationName];
+const mediaMigrationName = '1790400000000_create-package-media';
+/** Everything this suite applies, in apply order, on top of main's baseline. */
+const packageMigrations = [migrationName, ownershipMigrationName, mediaMigrationName];
 /** Migrations that exist before any package migration. */
 const BASELINE = 6;
 let baseline: unknown;
@@ -44,7 +54,7 @@ async function packageTables() {
 
 async function assertNoFixtures() {
   for (const table of await packageTables()) {
-    assert.ok(tables.includes(table));
+    assert.ok(allPackageTables.includes(table));
     assert.equal((await client.query(`SELECT count(*)::int AS n FROM "${table}"`)).rows[0].n, 0, `${table} residue`);
   }
 }
@@ -134,6 +144,7 @@ it('migrates UP / DOWN / UP, removes owned objects, and makes repeated UP a no-o
   // the rest of this suite runs against the schema a deployment actually has.
   assert.equal((await migrate('up')).length, packageMigrations.length - 1);
   assert.equal((await migrate('up')).length, 0);
+  assert.deepEqual(await packageTables(), allPackageTables, 'later package migrations have applied too');
   assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n,
     BASELINE + packageMigrations.length);
   t.diagnostic('UP/DOWN/UP/no-op UP passed; existing hotel schema, rows and sequences unchanged');
@@ -147,10 +158,12 @@ it('backfills seed_managed as true and reverses cleanly on its own', async t => 
     FROM information_schema.columns
     WHERE table_schema='public' AND table_name='packages' AND column_name='seed_managed'`)).rows[0].n;
 
-  // Down one step: the ownership column goes, the package tables stay.
-  assert.equal((await migrate('down', 1)).length, 1);
+  // Down two steps. The ownership column is the subject, but node-pg-migrate
+  // unwinds newest-first and the package-media table now sits above it, so
+  // that comes off first and goes back on at the end.
+  assert.equal((await migrate('down', 2)).length, 2);
   assert.equal(await columnCount(), 0, 'DOWN removes the column');
-  assert.deepEqual(await packageTables(), tables, 'DOWN takes no table with it');
+  assert.deepEqual(await packageTables(), tables, 'and leaves the tables it did not create');
   assert.deepEqual(await hotelSnapshot(), baseline, 'and touches nothing outside packages');
 
   // A package row that predates the column, so the backfill is real rather
@@ -162,7 +175,7 @@ it('backfills seed_managed as true and reverses cleanly on its own', async t => 
   );
 
   try {
-    assert.equal((await migrate('up', 1)).length, 1);
+    assert.equal((await migrate('up', 2)).length, 2);
     assert.equal(await columnCount(), 1, 'UP restores the column');
 
     const column = (await client.query(`SELECT data_type, is_nullable, column_default
@@ -176,7 +189,7 @@ it('backfills seed_managed as true and reverses cleanly on its own', async t => 
     assert.equal(existing.seed_managed, true, 'a package that predates the column is seed-owned');
 
     // Nothing else about the table moved.
-    assert.deepEqual(await packageTables(), tables);
+    assert.deepEqual(await packageTables(), allPackageTables);
     assert.deepEqual(await hotelSnapshot(), baseline);
   } finally {
     await client.query('DELETE FROM packages WHERE code = $1', [code]);

@@ -1,5 +1,10 @@
 import type { Request, Response } from 'express';
 import {
+  createLazyR2MediaStorageProvider,
+  type MediaStorageProvider,
+} from '../media/media.storage';
+import { respondWithAdminPackage } from './admin-packages.projection';
+import {
   addAdminPackageVariant,
   chooseAdminPackageDefaultVariant,
   createAdminPackage,
@@ -113,7 +118,7 @@ export async function createAdminPackageHandler(req: Request, res: Response): Pr
     return;
   }
 
-  res.status(201).json({ data: result.package });
+  respondWithAdminPackage(res, 201, result.package);
 }
 
 /**
@@ -180,7 +185,7 @@ export async function getAdminPackageHandler(
     return;
   }
 
-  res.status(200).json({ data: found });
+  respondWithAdminPackage(res, 200, found);
 }
 
 /**
@@ -233,7 +238,7 @@ export async function updateAdminPackageStatusHandler(
     return;
   }
 
-  res.status(200).json({ data: updated });
+  respondWithAdminPackage(res, 200, updated);
 }
 
 /**
@@ -282,7 +287,7 @@ export async function updateAdminPackageHandler(
     return;
   }
 
-  res.status(200).json({ data: updated });
+  respondWithAdminPackage(res, 200, updated);
 }
 
 /**
@@ -361,7 +366,7 @@ export async function createAdminPackageVariantHandler(
     return;
   }
 
-  res.status(201).json({ data: result.package });
+  respondWithAdminPackage(res, 201, result.package);
 }
 
 /**
@@ -421,7 +426,7 @@ export async function updateAdminPackageVariantHandler(
     return;
   }
 
-  res.status(200).json({ data: result.package });
+  respondWithAdminPackage(res, 200, result.package);
 }
 
 /**
@@ -473,7 +478,7 @@ export async function replaceAdminPackageItineraryHandler(
   // `replaced` and `unchanged` answer identically. The caller asked for an
   // itinerary and that itinerary holds; which of the two it took is not a
   // difference they can act on.
-  res.status(200).json({ data: result.package });
+  respondWithAdminPackage(res, 200, result.package);
 }
 
 /**
@@ -526,7 +531,7 @@ export async function replaceAdminPackageContentHandler(
   // `replaced` and `unchanged` answer identically. The caller asked for a set
   // and that set holds; which of the two it took is not a difference they can
   // act on.
-  res.status(200).json({ data: result.package });
+  respondWithAdminPackage(res, 200, result.package);
 }
 
 /**
@@ -549,49 +554,65 @@ export async function replaceAdminPackageContentHandler(
  * return, and handing back a representation of something that no longer
  * exists would be worse than handing back nothing.
  */
-export async function deleteAdminPackageHandler(
-  req: Request<{ slug: string }>,
-  res: Response,
-): Promise<void> {
-  let slug: string;
+export function createDeleteAdminPackageHandler(
+  getStorage: MediaStorageProvider,
+): (req: Request<{ slug: string }>, res: Response) => Promise<void> {
+  return async function deleteAdminPackage(req, res): Promise<void> {
+    let slug: string;
 
-  try {
-    slug = parseAdminPackageSlugParam(req.params.slug);
-  } catch (error) {
-    if (isInvalidAdminPackageSlugError(error)) {
-      res.status(400).json({ error: { code: error.code, message: error.message } });
+    try {
+      slug = parseAdminPackageSlugParam(req.params.slug);
+    } catch (error) {
+      if (isInvalidAdminPackageSlugError(error)) {
+        res.status(400).json({ error: { code: error.code, message: error.message } });
+        return;
+      }
+
+      throw error;
+    }
+
+    // Deliberately outside the catch above: Express 5 turns a rejected async
+    // handler into a 500, which is what a database failure is.
+    const result = await removeAdminPackage(slug, getStorage);
+
+    if (result.outcome === 'package-not-found') {
+      res.status(404).json(PACKAGE_NOT_FOUND_RESPONSE);
       return;
     }
 
-    throw error;
-  }
+    if (result.outcome === 'package-active') {
+      res.status(409).json(PACKAGE_DELETE_MUST_BE_INACTIVE_RESPONSE);
+      return;
+    }
 
-  // Deliberately outside the catch above: Express 5 turns a rejected async
-  // handler into a 500, which is what a database failure is.
-  const result = await removeAdminPackage(slug);
+    if (result.outcome === 'brochure-managed') {
+      res.status(409).json(PACKAGE_IS_BROCHURE_MANAGED_RESPONSE);
+      return;
+    }
 
-  if (result.outcome === 'package-not-found') {
-    res.status(404).json(PACKAGE_NOT_FOUND_RESPONSE);
-    return;
-  }
+    if (result.outcome === 'has-reservations') {
+      res.status(409).json(PACKAGE_HAS_RESERVATIONS_RESPONSE);
+      return;
+    }
 
-  if (result.outcome === 'package-active') {
-    res.status(409).json(PACKAGE_DELETE_MUST_BE_INACTIVE_RESPONSE);
-    return;
-  }
-
-  if (result.outcome === 'brochure-managed') {
-    res.status(409).json(PACKAGE_IS_BROCHURE_MANAGED_RESPONSE);
-    return;
-  }
-
-  if (result.outcome === 'has-reservations') {
-    res.status(409).json(PACKAGE_HAS_RESERVATIONS_RESPONSE);
-    return;
-  }
-
-  res.status(204).end();
+    // 204, with no body at all. There is nothing to say, and in particular no
+    // object key: the service has already used and dropped it, and its own
+    // result type has no field that could carry one here.
+    res.status(204).end();
+  };
 }
+
+/**
+ * The handler as a value, for the router's default and for direct callers.
+ *
+ * Its provider is lazy and is asked for nothing until a journey that actually
+ * had an image is deleted, so building it here reads no R2 variable and costs
+ * nothing. In a running app the router is constructed with `app.ts`'s shared
+ * provider instead, so exactly one client is ever built.
+ */
+export const deleteAdminPackageHandler = createDeleteAdminPackageHandler(
+  createLazyR2MediaStorageProvider(),
+);
 
 /**
  * Removes one variant from a journey for a signed-in administrator.
@@ -664,7 +685,7 @@ export async function deleteAdminPackageVariantHandler(
     return;
   }
 
-  res.status(200).json({ data: result.package });
+  respondWithAdminPackage(res, 200, result.package);
 }
 
 /**
@@ -735,7 +756,7 @@ export async function reorderAdminPackageVariantsHandler(
   // `reordered` and `unchanged` answer identically. The caller asked for an
   // order and that order holds; which of the two it took is not a difference
   // they can act on.
-  res.status(200).json({ data: result.package });
+  respondWithAdminPackage(res, 200, result.package);
 }
 
 /**
@@ -802,7 +823,7 @@ export async function setAdminPackageDefaultVariantHandler(
   // `updated` and `unchanged` answer identically. The caller asked for a
   // state and that state holds; which of the two it took to get there is not
   // a difference they can act on.
-  res.status(200).json({ data: result.package });
+  respondWithAdminPackage(res, 200, result.package);
 }
 
 /**
@@ -875,5 +896,5 @@ export async function replaceAdminPackageRatesHandler(
     return;
   }
 
-  res.status(200).json({ data: result.package });
+  respondWithAdminPackage(res, 200, result.package);
 }
