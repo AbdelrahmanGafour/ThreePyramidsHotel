@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { classifyPackageDetailResult, classifyPackageListResult } from "./publicPackages";
 
-const card = { code: "T001", slug: "sample-tour", title: "Sample tour", summary: null, durationLabel: null, scheduleLabel: null, operatingDays: null, currency: "USD", requiresPriceConfirmation: false, pricing: { status: "unavailable", unit: "per_person", from: null } };
+const card = { code: "T001", slug: "sample-tour", title: "Sample tour", summary: null, durationLabel: null, scheduleLabel: null, operatingDays: null, currency: "USD", requiresPriceConfirmation: false, pricing: { status: "unavailable", unit: "per_person", from: null }, image: null };
 const detail = { ...card, description: null, itinerary: [], included: [], excluded: [], notes: [], variants: [] };
 
 describe("public package page loaders", () => {

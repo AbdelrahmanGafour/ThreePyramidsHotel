@@ -18,6 +18,7 @@ type BrochureModule = typeof import('../src/modules/admin-packages/admin-package
 
 let __setClientFactoryForTests: RepositoryModule['__setClientFactoryForTests'];
 let deleteAdminPackageHandler: ControllerModule['deleteAdminPackageHandler'];
+let createDeleteAdminPackageHandler: ControllerModule['createDeleteAdminPackageHandler'];
 let adminPackagesRouter: RoutesModule['adminPackagesRouter'];
 let reservedBrochureIdentities: BrochureModule['reservedBrochureIdentities'];
 
@@ -34,7 +35,7 @@ before(async () => {
   ({ __setClientFactoryForTests } = await import(
     '../src/modules/admin-packages/admin-packages.repository.js'
   ));
-  ({ deleteAdminPackageHandler } = await import(
+  ({ deleteAdminPackageHandler, createDeleteAdminPackageHandler } = await import(
     '../src/modules/admin-packages/admin-packages.controller.js'
   ));
   ({ adminPackagesRouter } = await import('../src/modules/admin-packages/admin-packages.routes.js'));
@@ -80,6 +81,7 @@ function storedJourney(options: {
   slug?: string;
   reserved?: boolean;
   hideReservationsFromPreCheck?: boolean;
+  image?: { mediaAssetId: string; storageKey: string } | null;
 } = {}) {
   const state = {
     packageExists: options.packageExists ?? true,
@@ -89,6 +91,9 @@ function storedJourney(options: {
     slug: options.slug ?? SLUG,
     reserved: options.reserved ?? false,
     hideReservationsFromPreCheck: options.hideReservationsFromPreCheck ?? false,
+    image: options.image ?? null,
+    mediaRelations: options.image ? 1 : 0,
+    mediaAssets: options.image ? 1 : 0,
     itinerary: 3,
     content: 4,
     variants: 2,
@@ -125,7 +130,35 @@ function storedJourney(options: {
         return { rows: blocked ? [{ exists: 1 }] : [] } as never;
       }
 
+      if (text.includes('FROM package_media pm')) {
+        return {
+          rows: state.image
+            ? [{ media_asset_id: state.image.mediaAssetId, storage_key: state.image.storageKey }]
+            : [],
+        } as never;
+      }
+
+      if (text.includes('DELETE FROM package_media')) {
+        state.mediaRelations = 0;
+        return { rows: [] } as never;
+      }
+
+      if (text.includes('DELETE FROM media_assets')) {
+        // RESTRICT on the relation's side: the asset cannot go while the
+        // relation still points at it.
+        if (state.mediaRelations > 0) {
+          throw foreignKeyViolation('package_media_media_asset_id_fkey');
+        }
+        state.mediaAssets = 0;
+        return { rows: [] } as never;
+      }
+
       if (text.includes('DELETE FROM packages')) {
+        // RESTRICT on package_media: the journey cannot go while its image
+        // relation stands. `media_assets` never cascades from a package.
+        if (state.mediaRelations > 0) {
+          throw foreignKeyViolation('package_media_package_id_fkey');
+        }
         // What ON DELETE RESTRICT would do, reached through the variant
         // cascade: the constraint named is the reservations one.
         if (state.reserved) {
@@ -494,11 +527,12 @@ describe('admin package delete: transaction and locking', () => {
       if (call.text.startsWith('COMMIT')) return 'COMMIT';
       if (call.text.includes('FROM packages WHERE slug')) return 'LOCK-PACKAGE';
       if (call.text.includes('FROM package_reservations')) return 'BOOKED?';
+      if (call.text.includes('FROM package_media pm')) return 'IMAGE?';
       if (call.text.includes('DELETE FROM packages')) return 'DELETE';
       return 'OTHER';
     });
 
-    assert.deepEqual(shape, ['BEGIN', 'LOCK-PACKAGE', 'BOOKED?', 'DELETE', 'COMMIT']);
+    assert.deepEqual(shape, ['BEGIN', 'LOCK-PACKAGE', 'BOOKED?', 'IMAGE?', 'DELETE', 'COMMIT']);
     assert.equal(stored.released, true);
     assert.equal(stored.discarded, false);
   });
@@ -582,5 +616,294 @@ describe('admin package delete: transaction and locking', () => {
     assert.ok(calls.includes('ROLLBACK'), 'the transaction is rolled back');
     assert.ok(!calls.includes('COMMIT'));
     assert.equal(released, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The journey's one image
+// ---------------------------------------------------------------------------
+//
+// `package_media.package_id` is ON DELETE RESTRICT, so unlike the four
+// cascading child tables the relation has to be named. The fake above models
+// that RESTRICT in both directions, so a test that forgot either delete would
+// fail with the foreign-key violation PostgreSQL would really raise rather
+// than pass quietly.
+//
+// The other half is the seam between two systems that do not commit together.
+// The object lives in R2; the rows live in PostgreSQL. The rule the whole
+// feature is built on is that the database is the truth and storage follows,
+// so every test here is ultimately about one question: was `deleteObject`
+// called, and was it called only after a commit that answered?
+
+const IMAGE = { mediaAssetId: '900', storageKey: 'media/11111111-2222-4333-8444-555555555555.webp' };
+
+/** A `MediaStorage` that records, and can be told to fail. */
+function recordingStorage(options: { failDelete?: boolean } = {}) {
+  const deleted: string[] = [];
+
+  const storage = {
+    async putObject() {
+      throw new Error('deleting a journey must never write an object');
+    },
+    async deleteObject(key: string) {
+      deleted.push(key);
+      if (options.failDelete) {
+        throw new Error('R2 unavailable');
+      }
+    },
+  };
+
+  let resolutions = 0;
+
+  return {
+    deleted,
+    get resolutions() {
+      return resolutions;
+    },
+    provider: (() => {
+      resolutions += 1;
+      return storage;
+    }) as never,
+  };
+}
+
+/** The handler with storage injected, which is how the router builds it. */
+async function deleteWithStorage(slug: string, provider: never): Promise<Captured> {
+  const { res, captured } = fakeResponse();
+  await createDeleteAdminPackageHandler(provider)(request(slug), res);
+  return captured;
+}
+
+describe('admin package delete: the journey image', () => {
+  it('touches no media table and never resolves storage when there is no image', async () => {
+    const stored = storedJourney();
+    const storage = recordingStorage();
+
+    const captured = await deleteWithStorage(SLUG, storage.provider);
+
+    assert.equal(captured.status, 204);
+    assert.deepEqual(storage.deleted, [], 'nothing to remove, so nothing is asked of R2');
+    assert.ok(
+      !stored.calls.some((call) => /DELETE FROM (package_media|media_assets)/.test(call.text)),
+      'no media row is deleted for a journey that had no image',
+    );
+    // The provider is never even called, which is what lets a deployment with
+    // no R2 configuration at all keep deleting journeys.
+    assert.equal(storage.resolutions, 0);
+  });
+
+  it('removes the relation, then the asset, then the journey', async () => {
+    const stored = storedJourney({ image: IMAGE });
+
+    await deleteWithStorage(SLUG, recordingStorage().provider);
+
+    const deletes = stored.calls
+      .filter((call) => /^\s*DELETE FROM/i.test(call.text))
+      .map((call) => call.text.trim().split(/\s+/).slice(0, 3).join(' '));
+
+    assert.deepEqual(
+      deletes,
+      ['DELETE FROM package_media', 'DELETE FROM media_assets', 'DELETE FROM packages'],
+      'the relation first, then what it pointed at, then the journey',
+    );
+
+    assert.equal(stored.mediaRelations, 0);
+    assert.equal(stored.mediaAssets, 0);
+    assert.equal(stored.packageExists, false);
+  });
+
+  it('names the asset by the id read under the lock, and the journey by its own', async () => {
+    const stored = storedJourney({ image: IMAGE });
+
+    await deleteWithStorage(SLUG, recordingStorage().provider);
+
+    const lookup = stored.calls.find((call) => call.text.includes('FROM package_media pm'))!;
+    assert.deepEqual(lookup.values, [PACKAGE_ID]);
+    assert.match(lookup.text, /JOIN media_assets ma ON ma\.id = pm\.media_asset_id/);
+
+    const relation = stored.calls.find((call) => call.text.includes('DELETE FROM package_media'))!;
+    assert.deepEqual(relation.values, [PACKAGE_ID]);
+
+    const asset = stored.calls.find((call) => call.text.includes('DELETE FROM media_assets'))!;
+    assert.deepEqual(asset.values, [IMAGE.mediaAssetId]);
+  });
+
+  it('removes the object only after COMMIT, and with the captured key', async () => {
+    const stored = storedJourney({ image: IMAGE });
+    const storage = recordingStorage();
+    let deletedBeforeCommit: boolean | null = null;
+
+    // Sampled at the moment COMMIT is issued. If storage had already been
+    // asked, this would be true and the whole ordering rule would be broken.
+    const recorded = stored.calls;
+    const push = recorded.push.bind(recorded);
+    recorded.push = ((call: Recorded) => {
+      if (call.text.startsWith('COMMIT') && deletedBeforeCommit === null) {
+        deletedBeforeCommit = storage.deleted.length > 0;
+      }
+      return push(call);
+    }) as typeof recorded.push;
+
+    const captured = await deleteWithStorage(SLUG, storage.provider);
+
+    assert.equal(captured.status, 204);
+    assert.equal(deletedBeforeCommit, false, 'storage is untouched while the transaction is open');
+    assert.deepEqual(storage.deleted, [IMAGE.storageKey], 'exactly the key the row carried');
+  });
+
+  it('still reports the deletion when the object cannot be removed', async () => {
+    const stored = storedJourney({ image: IMAGE });
+    const storage = recordingStorage({ failDelete: true });
+
+    const captured = await deleteWithStorage(SLUG, storage.provider);
+
+    // An orphaned object is the acceptable side of this seam. The journey
+    // really is gone, and saying otherwise would be false.
+    assert.equal(captured.status, 204);
+    assert.equal(captured.ended, true);
+    assert.equal(stored.packageExists, false, 'the database stays deleted');
+    assert.equal(stored.mediaRelations, 0);
+    assert.equal(stored.mediaAssets, 0);
+    assert.equal(storage.deleted.length, 1, 'exactly one attempt, never retried');
+  });
+
+  it('still reports the deletion when object storage is not configured at all', async () => {
+    const stored = storedJourney({ image: IMAGE });
+    // What the lazy R2 provider does on a deployment with no R2 variables:
+    // it throws MediaConfigurationError before any client exists.
+    const unconfigured = (() => {
+      throw new Error('R2_BUCKET must be set');
+    }) as never;
+
+    const captured = await deleteWithStorage(SLUG, unconfigured);
+
+    assert.equal(captured.status, 204, 'a delivery misconfiguration is not a failed deletion');
+    assert.equal(stored.packageExists, false);
+  });
+
+  it('makes no storage call when a statement fails before COMMIT', async () => {
+    const storage = recordingStorage();
+    const calls: string[] = [];
+
+    __setClientFactoryForTests(async () => ({
+      async query(text: string) {
+        calls.push(text.trim().split(/\s/)[0]!);
+        if (text.includes('DELETE FROM packages')) throw new Error('deadlock detected');
+        if (text.includes('FROM packages WHERE slug')) {
+          return { rows: [{ id: PACKAGE_ID, code: CODE, slug: SLUG, is_active: false }] } as never;
+        }
+        if (text.includes('FROM package_media pm')) {
+          return {
+            rows: [{ media_asset_id: IMAGE.mediaAssetId, storage_key: IMAGE.storageKey }],
+          } as never;
+        }
+        return { rows: [] } as never;
+      },
+      release() {},
+    }) as never);
+
+    const { res } = fakeResponse();
+    await assert.rejects(
+      createDeleteAdminPackageHandler(storage.provider)(request(SLUG), res),
+      /deadlock detected/,
+    );
+
+    // The rows are still there, so the object they point at must be too.
+    assert.ok(calls.includes('ROLLBACK'));
+    assert.deepEqual(storage.deleted, [], 'nothing committed, so nothing is removed');
+    assert.equal(storage.resolutions, 0);
+  });
+
+  it('makes no storage call when COMMIT itself does not answer', async () => {
+    const storage = recordingStorage();
+    let discarded: boolean | undefined;
+
+    __setClientFactoryForTests(async () => ({
+      async query(text: string) {
+        if (text.startsWith('COMMIT')) throw new Error('commit failed');
+        if (text.includes('FROM packages WHERE slug')) {
+          return { rows: [{ id: PACKAGE_ID, code: CODE, slug: SLUG, is_active: false }] } as never;
+        }
+        if (text.includes('FROM package_media pm')) {
+          return {
+            rows: [{ media_asset_id: IMAGE.mediaAssetId, storage_key: IMAGE.storageKey }],
+          } as never;
+        }
+        return { rows: [] } as never;
+      },
+      release(discard?: boolean) {
+        discarded = discard;
+      },
+    }) as never);
+
+    const { res } = fakeResponse();
+    await assert.rejects(
+      createDeleteAdminPackageHandler(storage.provider)(request(SLUG), res),
+      /commit failed/,
+    );
+
+    // Nobody knows whether the transaction applied. If it did, the object is
+    // an orphan, which is survivable; if it did not, the journey still points
+    // at the object, and removing it would be the one failure this
+    // architecture refuses. So it stays, and nothing is retried.
+    assert.deepEqual(storage.deleted, [], 'an unanswered COMMIT removes nothing');
+    assert.equal(storage.resolutions, 0);
+    assert.equal(discarded, true, 'and the existing poisoned-connection behaviour is kept');
+  });
+
+  it('removes nothing at all when the journey is refused', async () => {
+    const cases = [
+      { label: 'live journey', options: { isActive: true, image: IMAGE }, slug: SLUG },
+      { label: 'brochure code', options: { code: brochureCode, image: IMAGE }, slug: SLUG },
+      { label: 'brochure slug', options: { slug: brochureSlug, image: IMAGE }, slug: brochureSlug },
+      { label: 'ever booked', options: { reserved: true, image: IMAGE }, slug: SLUG },
+    ];
+
+    for (const { label, options, slug } of cases) {
+      const stored = storedJourney(options);
+      const storage = recordingStorage();
+
+      const captured = await deleteWithStorage(slug, storage.provider);
+
+      assert.equal(captured.status, 409, `${label}: refused`);
+      assert.deepEqual(storage.deleted, [], `${label}: no object is removed`);
+      assert.equal(storage.resolutions, 0, `${label}: storage is never even resolved`);
+      assert.equal(stored.mediaRelations, 1, `${label}: the relation survives`);
+      assert.equal(stored.mediaAssets, 1, `${label}: the asset survives`);
+      assert.equal(stored.packageExists, true, `${label}: the journey survives`);
+      assert.ok(
+        !stored.calls.some((call) => /DELETE FROM/i.test(call.text)),
+        `${label}: nothing is deleted at all`,
+      );
+    }
+  });
+
+  it('reads the image only after the package row is locked', async () => {
+    const stored = storedJourney({ image: IMAGE });
+
+    await deleteWithStorage(SLUG, recordingStorage().provider);
+
+    const lock = stored.calls.findIndex((call) => call.text.includes('FROM packages WHERE slug'));
+    const image = stored.calls.findIndex((call) => call.text.includes('FROM package_media pm'));
+
+    assert.ok(lock >= 0 && image > lock, 'the package row is locked first, always');
+    assert.match(stored.calls[lock]!.text, /FOR UPDATE/);
+    // And it is the only lock: the media rows are reached through a package
+    // row no concurrent writer can move, so they need none of their own.
+    assert.equal(stored.calls.filter((call) => /FOR UPDATE|FOR SHARE/.test(call.text)).length, 1);
+  });
+
+  it('puts no storage key, asset id or media field in the response', async () => {
+    const stored = storedJourney({ image: IMAGE });
+    const captured = await deleteWithStorage(SLUG, recordingStorage().provider);
+
+    assert.equal(captured.status, 204);
+    assert.equal(captured.body, undefined, '204 carries no body at all');
+    assert.equal(stored.mediaAssets, 0);
+
+    const serialised = JSON.stringify(captured);
+    for (const internal of [IMAGE.storageKey, IMAGE.mediaAssetId, 'storage_key', 'mediaStorageKey']) {
+      assert.ok(!serialised.includes(internal), `${internal} must not reach the caller`);
+    }
   });
 });

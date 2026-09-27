@@ -28,11 +28,12 @@ import {
   type AdminPackageVariantCreateResult,
   type AdminPackageVariantEditResult,
 } from './admin-packages.repository';
+import type { MediaStorageProvider } from '../media/media.storage';
 import type {
   AdminPackageContentReplacementInput,
   AdminPackageItinerarySection,
   AdminPackageCreateInput,
-  AdminPackageDetail,
+  AdminPackageDetailRecord,
   AdminPackageList,
   AdminPackageUpdateInput,
   AdminPackageRateTierInput,
@@ -69,7 +70,7 @@ export async function listAdminPackages(): Promise<AdminPackageList> {
  * be trusted raises from the repository instead, so a data fault never
  * reaches a caller disguised as a missing package.
  */
-export async function getAdminPackage(slug: string): Promise<AdminPackageDetail | null> {
+export async function getAdminPackage(slug: string): Promise<AdminPackageDetailRecord | null> {
   return findAdminPackageBySlug(slug);
 }
 
@@ -87,7 +88,7 @@ export async function getAdminPackage(slug: string): Promise<AdminPackageDetail 
 export async function setAdminPackageActiveState(
   slug: string,
   isActive: boolean,
-): Promise<AdminPackageDetail | null> {
+): Promise<AdminPackageDetailRecord | null> {
   return updateAdminPackageActiveState(slug, isActive);
 }
 
@@ -138,7 +139,7 @@ export async function createAdminPackage(
 export async function editAdminPackage(
   slug: string,
   input: AdminPackageUpdateInput,
-): Promise<AdminPackageDetail | null> {
+): Promise<AdminPackageDetailRecord | null> {
   return updateAdminPackageFields(slug, input);
 }
 
@@ -223,22 +224,86 @@ export async function setAdminPackageContent(
 }
 
 /**
- * Removes one journey and everything it owns.
+ * What a caller of this service is told about a removal.
  *
- * Thin on purpose, and unusually so: every one of the three refusals needs
- * the package row the transaction locks. Whether it is still on sale, what
- * identity it currently carries, and whether it has ever been booked are all
- * questions that can only be answered against state no concurrent writer can
- * move, so the repository owns all three.
+ * The same five outcomes the repository reports, minus the object key its
+ * `deleted` arm carries. That key is an internal handoff between the
+ * transaction and the cleanup below; by the time a result leaves this
+ * module it has been used and dropped, so no storage key can reach an HTTP
+ * response even if a future handler started returning a body.
+ */
+export type AdminPackageRemovalResult =
+  | { outcome: 'deleted' }
+  | { outcome: 'package-not-found' }
+  | { outcome: 'package-active' }
+  | { outcome: 'brochure-managed' }
+  | { outcome: 'has-reservations' };
+
+/**
+ * Removes one journey and everything it owns, then cleans up after it.
+ *
+ * The refusals are all the repository's: every one of them needs the package
+ * row the transaction locks. Whether it is still on sale, what identity it
+ * currently carries, and whether it has ever been booked are questions that
+ * can only be answered against state no concurrent writer can move.
  *
  * That includes the brochure identity check, which sits in the repository
  * rather than here — unlike the one guarding package creation, which can be
  * answered from the request alone. This one is about the code and slug the
  * row currently has, and reading those before the lock would be judging a
  * journey that could already have been renamed.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT THIS LAYER ADDS: the one thing a transaction cannot do
+ *
+ * A journey may hold one image, and removing the journey removes the rows
+ * that described it. The object those rows pointed at lives in R2, which does
+ * not commit with PostgreSQL, so it is removed here — after the transaction
+ * has answered, never inside it.
+ *
+ * The direction of failure is the same one the room-type media service
+ * chose, and for the same reason:
+ *
+ *     storage may hold an object the database has never heard of;
+ *     the database must never hold a row pointing at an object that is gone.
+ *
+ * So the delete is best-effort and strictly post-commit. Exactly one attempt,
+ * never retried. A failure leaves an orphaned object, which is invisible,
+ * costs a fraction of a cent, and can be swept later — and it does not change
+ * the answer, because the journey really is gone.
+ *
+ * `getStorage()` is called only when there is actually a key to remove, so
+ * deleting a journey that never had an image still works with every R2
+ * variable unset. When it is called and the deployment is unconfigured it
+ * throws `MediaConfigurationError`, which is caught here with everything
+ * else: a deployment that cannot reach object storage must not turn a
+ * completed deletion into a 500.
  */
-export async function removeAdminPackage(slug: string): Promise<AdminPackageDeleteResult> {
-  return deleteAdminPackage(slug);
+export async function removeAdminPackage(
+  slug: string,
+  getStorage: MediaStorageProvider,
+): Promise<AdminPackageRemovalResult> {
+  const result: AdminPackageDeleteResult = await deleteAdminPackage(slug);
+
+  if (result.outcome !== 'deleted') {
+    // Nothing was committed, so nothing is removed from storage. This covers
+    // every refusal, and — because `deleteAdminPackage` throws rather than
+    // returning on an uncertain COMMIT — it is also why that case never
+    // reaches a storage call: the throw propagates past this line untouched.
+    return result;
+  }
+
+  if (result.mediaStorageKey !== null) {
+    try {
+      await getStorage().deleteObject(result.mediaStorageKey);
+    } catch {
+      // Swallowed on purpose, and not retried. The rows are gone and the
+      // journey is gone; an object nobody can reach is the acceptable side of
+      // this seam, and reporting a failed deletion for it would be false.
+    }
+  }
+
+  return { outcome: 'deleted' };
 }
 
 /**

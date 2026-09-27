@@ -2,7 +2,11 @@ import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { adminAuthRouter } from './modules/admin-auth/admin-auth.routes';
 import { adminPackageReservationsRouter } from './modules/admin-package-reservations/admin-package-reservations.routes';
-import { adminPackagesRouter } from './modules/admin-packages/admin-packages.routes';
+import {
+  createAdminPackageMediaRouter,
+  createAdminPackageMediaUploadRouter,
+} from './modules/admin-package-media/admin-package-media.routes';
+import { createAdminPackagesRouter } from './modules/admin-packages/admin-packages.routes';
 import { adminReservationsRouter } from './modules/admin-reservations/admin-reservations.routes';
 import {
   createAdminRoomTypeMediaRouter,
@@ -16,7 +20,7 @@ import { createLazyPublicMediaBaseUrlProvider, type PublicMediaBaseUrlProvider }
 import { createLazyR2MediaStorageProvider, type MediaStorageProvider } from './modules/media/media.storage';
 import { reservationsRouter } from './modules/reservations/reservations.routes';
 import { createRoomsRouter } from './modules/rooms/rooms.routes';
-import { packagesRouter } from './modules/packages/packages.routes';
+import { createPackagesRouter } from './modules/packages/packages.routes';
 import { packageReservationsRouter } from './modules/package-reservations/package-reservations.routes';
 
 /**
@@ -87,6 +91,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
     createAdminRoomTypeMediaUploadRouter(mediaStorageProvider, publicMediaBaseUrlProvider),
   );
 
+  // The journey binary routes, here for exactly the same reason: POST and
+  // PUT /:slug/image carry raw image bytes, and the global JSON parser below
+  // would read — and on malformed JSON reject — their bodies before this
+  // router's own requireAdminSession ever ran. This router holds those two
+  // routes and nothing else, so no other admin-packages path is affected by
+  // where it sits.
+  app.use('/api/v1/admin/packages', createAdminPackageMediaUploadRouter(mediaStorageProvider));
+
   app.use(express.json());
 
   app.use('/health', healthRouter);
@@ -94,7 +106,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // room's images carry real URLs. Resolving that base is still lazy: a room
   // type with no images never reads it.
   app.use('/api/v1/rooms', createRoomsRouter(publicMediaBaseUrlProvider));
-  app.use('/api/v1/packages', packagesRouter);
+  // Public journeys, built with the same shared public-media provider the
+  // rooms router above uses, so a journey's image carries a real URL.
+  // Resolving that base is still lazy: a catalogue with no images never
+  // reads it.
+  app.use('/api/v1/packages', createPackagesRouter(publicMediaBaseUrlProvider));
   app.use('/api/v1/package-reservations', packageReservationsRouter);
   app.use('/api/v1/availability', availabilityRouter);
   app.use('/api/v1/reservations', reservationsRouter);
@@ -108,7 +124,24 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // The package catalogue an administrator manages. A different namespace
   // from the public /api/v1/packages above, which serves only active
   // offerings to guests and exposes neither ownership nor running order.
-  app.use('/api/v1/admin/packages', adminPackagesRouter);
+  // Built with the shared storage provider above, not with a provider of its
+  // own: deleting a journey that holds an image removes the object after the
+  // commit, and that must use the same lazily-memoized client the room-type
+  // media routers use rather than building a second one.
+  // Two providers: storage, because deleting a journey removes its image's
+  // object after the commit; and the public media base, because twelve of
+  // these endpoints answer with a journey whose image carries a URL. Both
+  // are the instances shared with the media routers and the public
+  // catalogue, so a process resolves each once.
+  app.use(
+    '/api/v1/admin/packages',
+    createAdminPackagesRouter(mediaStorageProvider, publicMediaBaseUrlProvider),
+  );
+
+  // DELETE /:slug/image. No body to parse, so it belongs after the JSON
+  // parser with every other admin route; it shares the same storage provider
+  // as the two binary routes above.
+  app.use('/api/v1/admin/packages', createAdminPackageMediaRouter(mediaStorageProvider));
   app.use('/api/v1/admin/room-types', adminRoomTypesRouter);
   // A third router at the identical prefix, not a new top-level namespace:
   // the JSON-bodied and no-body room-type media routes, mounted after

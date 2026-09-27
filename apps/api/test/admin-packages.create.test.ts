@@ -75,6 +75,9 @@ function insertedRow(overrides: Record<string, unknown> = {}) {
     operating_days: ['monday', 'wednesday'],
     variant_count: 0,
     default_variant_label: null,
+    // Selected by PACKAGE_DETAIL_COLUMNS now; a row without it is one
+    // this repository would never produce. null is no image.
+    image: null,
     itinerary: [],
     content: [],
     variants: [],
@@ -468,6 +471,10 @@ describe('admin package create: leakage', () => {
       'defaultVariantLabel',
       'description',
       'durationLabel',
+      // The journey's one image, or null. Exact, not a subset: this list is
+      // what keeps a storage key, an asset id or a checksum from reaching an
+      // admin response by simply appearing.
+      'image',
       'isActive',
       'itinerary',
       'managementSource',

@@ -11,6 +11,27 @@ export type PublicPackagePricing = {
   from: PublicPackageFromPrice | null;
 };
 
+/**
+ * The one image a journey may have, exactly as the API publishes it.
+ *
+ * Four fields, and the API sends no more: the media reference, the object
+ * key, the checksum, the content type, the byte size and both database ids
+ * are all internal and never cross this boundary. `exactKeys` below refuses
+ * a response that tries to add one, so this website cannot start depending
+ * on a field it should not know about.
+ *
+ * `url` arrives already composed and is used unchanged — nothing here reads
+ * a media base, and no URL is ever built in a component or a browser.
+ * `width` and `height` are the stored object's own dimensions. `altText` is
+ * nullable because a decorative image is a real case, not a mistake.
+ */
+export type PublicPackageImage = {
+  url: string;
+  altText: string | null;
+  width: number;
+  height: number;
+};
+
 export type PublicPackageCard = {
   code: string;
   slug: string;
@@ -22,6 +43,14 @@ export type PublicPackageCard = {
   currency: "USD";
   requiresPriceConfirmation: boolean;
   pricing: PublicPackagePricing;
+  /**
+   * The uploaded image, or `null` when the journey has none.
+   *
+   * `null` means "nothing is stored", never "here is a placeholder": what a
+   * journey without an uploaded picture shows is this website's decision,
+   * made once in `lib/packageImage.ts`.
+   */
+  image: PublicPackageImage | null;
 };
 
 export type PublicPackageRate = {
@@ -187,6 +216,49 @@ function pricing(value: unknown): PublicPackagePricing {
   return { status: row.status, unit: row.unit, from };
 }
 
+/**
+ * An absolute http(s) URL, as the API composed it.
+ *
+ * Checked rather than trusted because it is handed straight to `next/image`,
+ * which needs a real absolute URL matching a configured remote pattern — so
+ * a value that could never load is caught at the boundary instead of at
+ * render. The string is returned exactly as it arrived: it is never
+ * normalised, re-encoded or rebuilt from a media base.
+ */
+function mediaUrl(value: unknown): string {
+  const raw = text(value);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    invalid("invalid image url");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") invalid("invalid image url");
+  return raw;
+}
+
+/**
+ * The journey's image, or nothing.
+ *
+ * Fails closed like every other parser here: only an explicit `null` means
+ * "no image". A malformed image object — a missing field, a negative
+ * dimension, an unusable URL, an extra internal field — makes the whole
+ * response invalid rather than quietly becoming `null`, which would look
+ * exactly like a journey nobody has uploaded a picture for and would hide
+ * the fault behind a placeholder.
+ */
+function packageImage(value: unknown): PublicPackageImage | null {
+  if (value === null) return null;
+  const row = object(value);
+  exactKeys(row, ["url", "altText", "width", "height"]);
+  return {
+    url: mediaUrl(row.url),
+    altText: nullableText(row.altText),
+    width: integer(row.width, 1),
+    height: integer(row.height, 1),
+  };
+}
+
 const CARD_KEYS = [
   "code",
   "slug",
@@ -198,6 +270,7 @@ const CARD_KEYS = [
   "currency",
   "requiresPriceConfirmation",
   "pricing",
+  "image",
 ] as const;
 
 function packageCard(value: unknown): PublicPackageCard {
@@ -215,6 +288,7 @@ function packageCard(value: unknown): PublicPackageCard {
     currency: "USD",
     requiresPriceConfirmation: boolean(row.requiresPriceConfirmation),
     pricing: pricing(row.pricing),
+    image: packageImage(row.image),
   };
 }
 

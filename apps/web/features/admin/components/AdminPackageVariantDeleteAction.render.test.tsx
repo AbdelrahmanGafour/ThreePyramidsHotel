@@ -56,7 +56,10 @@ describe("delete control", () => {
   it("asks the tested helper which of the three states this variant is in", () => {
     assert.ok(source.includes("packageVariantDeleteState(journey, variant)"));
     assert.ok(
-      source.includes('if (state === "hidden") {\n    return null;\n  }'),
+      // Newline-agnostic: checkouts of this repository carry CRLF, so an
+      // assertion hard-coding \n pins the bytes a checkout happened to
+      // write rather than the code it is about.
+      /if \(state === "hidden"\) \{\s*return null;\s*\}/.test(source),
       "a live journey gets no control at all",
     );
     assert.ok(source.includes('if (state === "blocked-default") {'));

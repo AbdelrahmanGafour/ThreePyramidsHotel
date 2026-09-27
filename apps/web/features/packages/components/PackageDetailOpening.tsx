@@ -1,17 +1,22 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { PublicPackageDetail } from "@/features/packages/api/contracts";
-import { getPackageMedia } from "@/features/packages/data/packageMedia";
+import { resolvePackageImage } from "@/features/packages/lib/packageImage";
 import { packagePriceSummary } from "@/features/packages/lib/publicPresentation";
 
+// The one journey image that is not decorative, so this is where the
+// uploaded description is read. `resolvePackageImage` hands back a string
+// either way: the administrator's alt text when there is one, and the empty
+// string that means "decorative" when there is not — the same convention the
+// local placeholder and the public room images already follow.
 export function PackageDetailOpening({ pkg }: { pkg: PublicPackageDetail }) {
-  const media = getPackageMedia(pkg.slug);
+  const media = resolvePackageImage(pkg);
   const price = packagePriceSummary(pkg);
   return (
     <section className="stone-section pb-[clamp(1.75rem,3vw,2.5rem)] pt-[clamp(0.25rem,1vw,0.75rem)] text-ink">
       <div className="page-grid"><div className="col-span-10 col-start-2 max-md:col-span-full lg:grid lg:grid-cols-[3fr_2fr] lg:items-start lg:gap-10">
         <div className="image-frame relative aspect-[4/3] lg:aspect-[16/10] lg:max-h-[540px]">
-          <Image src={media.image} alt={media.imageAlt} fill priority sizes="(max-width: 1024px) 92vw, 58vw" className="object-cover" style={{ objectPosition: media.position }} />
+          <Image src={media.src} alt={media.alt} fill priority sizes="(max-width: 1024px) 92vw, 58vw" className="object-cover" style={{ objectPosition: media.position }} />
         </div>
         <div className="mt-6 lg:mt-0">
           <p className="eyebrow">{pkg.code}</p>

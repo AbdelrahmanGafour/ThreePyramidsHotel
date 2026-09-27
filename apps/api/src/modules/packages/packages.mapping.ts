@@ -1,4 +1,5 @@
-import type { PackageCardRecord, PackageDetailRecord, PackageFromPrice, PackageRate, PackageVariant } from './packages.types';
+import { parseMediaReference } from '../media/media.validation';
+import type { PackageCardRecord, PackageDetailRecord, PackageFromPrice, PackageImageRecord, PackageRate, PackageVariant } from './packages.types';
 
 // Treat driver results as unknown. A malformed row is a server/data failure,
 // never a zero price, coerced boolean, empty catalogue or public 404.
@@ -23,6 +24,27 @@ function key(value: unknown): string {
   return typeof value === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*(?![\s\S])/.test(value) ? value : invalid();
 }
 function currency(value: unknown): 'USD' { return value === 'USD' ? 'USD' : invalid(); }
+// Alt text exactly as the column admits it: any text, or nothing. Deliberately
+// not `nullableText`, which refuses a whitespace-only string — the application
+// never stores one, but the schema permits it and a legal row must not 500.
+function altText(value: unknown): string | null {
+  return value === null ? null : typeof value === 'string' ? value : invalid();
+}
+// The journey's one image, or nothing. Fail-closed like every other mapper
+// here: a malformed media row is this system's own data being wrong, and it
+// surfaces rather than being coerced into `image: null`, which would look
+// exactly like a journey that simply has no picture.
+//
+// The reference is checked by the shared media parser, not by a second copy
+// of that rule — it is the same canonical form the object key is built from,
+// and anything else was never issued by this system.
+function image(value: unknown): PackageImageRecord | null {
+  if (value === null) return null;
+  const row = record(value);
+  const reference = parseMediaReference(row.reference);
+  if (reference === null) invalid();
+  return { reference, altText: altText(row.alt_text), width: integer(row.width), height: integer(row.height) };
+}
 function rate(value: unknown): PackageRate {
   const row = record(value);
   const minPartySize = integer(row.min_party_size);
@@ -48,7 +70,7 @@ export function mapPackageCardRow(value: unknown): PackageCardRecord {
     code: text(row.code), slug: key(row.slug), title: text(row.title), summary: nullableText(row.summary),
     durationLabel: nullableText(row.duration_label), scheduleLabel: nullableText(row.schedule_label),
     operatingDays, currency: 'USD', requiresPriceConfirmation: bool(row.requires_price_confirmation),
-    fromRate: fromRate(row.from_rate),
+    fromRate: fromRate(row.from_rate), image: image(row.image),
   };
 }
 

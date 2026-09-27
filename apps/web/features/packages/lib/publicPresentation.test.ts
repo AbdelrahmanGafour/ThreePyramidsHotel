@@ -18,6 +18,7 @@ function card(adultUnitRate: string | null): PublicPackageCard {
     operatingDays: null,
     currency: "USD",
     requiresPriceConfirmation: false,
+    image: null,
     pricing:
       adultUnitRate === null
         ? { status: "unavailable", unit: "per_person", from: null }

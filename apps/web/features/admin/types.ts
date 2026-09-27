@@ -539,10 +539,29 @@ export type AdminPackageContent = {
  * Defined as the list item plus the rest, so "the detail shows everything the
  * list shows" is true by construction. Still no database id of any kind.
  */
+/**
+ * The journey's one image, as the admin API reports it.
+ *
+ * Five fields, and deliberately no more. There is no storage key, no
+ * checksum, no content type, no byte size and no database id in this type,
+ * so none of them can reach a component even if a future response carried
+ * one. `reference` is the opaque identifier the media endpoints address an
+ * image by; `url` is what an `<Image>` loads.
+ */
+export type AdminPackageImage = {
+  reference: string;
+  url: string;
+  altText: string | null;
+  width: number;
+  height: number;
+};
+
 export type AdminPackageDetail = AdminPackageListItem & {
   description: string | null;
   operatingDays: string[] | null;
   itinerary: AdminPackageItinerarySection[];
   content: AdminPackageContent;
   variants: AdminPackageVariant[];
+  /** The journey's image, or `null` when none has been uploaded. */
+  image: AdminPackageImage | null;
 };

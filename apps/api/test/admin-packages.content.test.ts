@@ -179,6 +179,9 @@ function detailRow(state: {
     operating_days: null,
     variant_count: 0,
     default_variant_label: null,
+    // Selected by PACKAGE_DETAIL_COLUMNS now; a row without it is one
+    // this repository would never produce. null is no image.
+    image: null,
     itinerary: [],
     // The projection's own ordering, so the DTO reflects what is stored.
     content: [...state.items]

@@ -29,6 +29,17 @@ let closeDatabasePool: Pool['closeDatabasePool'];
 
 const MIGRATION_NAME = '1790106929800_create-media-assets-and-room-type-images';
 
+/**
+ * The migration that was later stacked on top of this one.
+ *
+ * `package_media.media_asset_id` references `media_assets(id)` ON DELETE
+ * RESTRICT, so while it is applied the schema is no longer in the state the
+ * migration above was written to roll back from. The suite below rolls this
+ * one down first, inside the same transaction, which is what a real
+ * `node-pg-migrate` rollback would do.
+ */
+const PACKAGE_MEDIA_MIGRATION_NAME = '1790400000000_create-package-media';
+
 const runId = randomUUID().slice(0, 8);
 const slugPrefix = `itest-media-${runId}`;
 
@@ -212,6 +223,65 @@ async function indexShape(name: string): Promise<{
   assert.ok(row, `index ${name} does not exist`);
 
   return row;
+}
+
+/**
+ * Runs one migration's own `down` against this client, inside its transaction.
+ *
+ * The point is that the test does not decide what rolling a migration back
+ * means — the migration module does. A DROP list written out here would be a
+ * second copy of that decision, free to drift from the file that actually
+ * runs in CI and in production.
+ *
+ * `node-pg-migrate` hands `down` a MigrationBuilder that queues operations
+ * rather than executing them, so this stands in for one. It supports exactly
+ * `dropTable`, which is all either of these two paths uses, and throws on
+ * anything else rather than silently skipping an operation and leaving the
+ * assertions below to pass against a half-rolled-back schema.
+ *
+ * No CASCADE, and no `ifExists`: the drops have to succeed on their own, in
+ * the order the migration names them, or this proves nothing.
+ */
+async function runMigrationDown(client: PoolClient, migrationName: string): Promise<void> {
+  // Required rather than imported: the migrations are `.cjs` outside
+  // `rootDir`, and this package is CommonJS, so a plain require reaches them
+  // without pulling untyped JavaScript into the TypeScript program.
+  const migration = require(`../src/db/migrations/${migrationName}.cjs`) as {
+    down?: (pgm: unknown) => void;
+  };
+
+  assert.equal(typeof migration.down, 'function', `${migrationName} has no down path`);
+
+  const dropped: string[] = [];
+  const builder = new Proxy(
+    {},
+    {
+      get(_target, property) {
+        if (property === 'dropTable') {
+          return (name: unknown) => {
+            assert.equal(typeof name, 'string', `${migrationName} dropped a non-plain table name`);
+            dropped.push(name as string);
+          };
+        }
+
+        throw new Error(
+          `${migrationName}.down uses pgm.${String(property)}, which this test cannot replay. ` +
+            'Teach runMigrationDown about it rather than hand-writing the rollback.',
+        );
+      },
+    },
+  );
+
+  migration.down?.(builder);
+
+  assert.ok(dropped.length > 0, `${migrationName}.down dropped nothing`);
+
+  for (const table of dropped) {
+    // The names come from this repository's own migrations, and are checked
+    // anyway because they are interpolated into DDL.
+    assert.match(table, /^[a-z_][a-z0-9_]*$/, `unexpected table name ${table}`);
+    await client.query(`DROP TABLE ${table}`);
+  }
 }
 
 async function tableNames(client: PoolClient): Promise<string[]> {
@@ -832,22 +902,34 @@ describe('the cover invariant', () => {
 });
 
 describe('the down migration', () => {
-  // The migration's own down path is not run here: rolling the schema back
-  // under a suite that shares this database would take it away from everything
-  // else. What is proven instead is the claim that path makes — that dropping
-  // these two tables, in this order, removes these objects and nothing else —
-  // by doing exactly that inside a transaction and rolling it back.
+  // The migration's own down path IS run here, but inside a transaction that
+  // is rolled back: rolling the schema back for real under a suite that
+  // shares this database would take it away from everything else. What is
+  // proven is the claim that path makes — that it removes these objects and
+  // nothing else.
+  //
+  // It cannot be run against the live stack as it stands, though. A later
+  // migration added `package_media`, whose `media_asset_id` references
+  // `media_assets(id)` ON DELETE RESTRICT, so the schema has to be walked
+  // back to the state this migration was written to undo before its own down
+  // is legitimately allowed. That is a fact about rollback ORDER, not a
+  // reason to weaken the RESTRICT or to reach for CASCADE — a real
+  // `node-pg-migrate` rollback unwinds newest-first for exactly this reason.
   it('removes only the two new tables and their own indexes', async () => {
     const client = await dbPool.connect();
 
     try {
       await client.query('BEGIN');
 
+      // Newest first, through its own down path.
+      await runMigrationDown(client, PACKAGE_MEDIA_MIGRATION_NAME);
+
+      // Snapshotted after that rollback and before this one, so the diff
+      // below is this migration's alone and the assertions stay exact.
       const tablesBefore = await tableNames(client);
       const indexesBefore = await indexNames(client);
 
-      await client.query('DROP TABLE room_type_images');
-      await client.query('DROP TABLE media_assets');
+      await runMigrationDown(client, MIGRATION_NAME);
 
       const tablesAfter = await tableNames(client);
       const indexesAfter = await indexNames(client);
@@ -887,6 +969,12 @@ describe('the down migration', () => {
     try {
       await client.query('BEGIN');
 
+      // `package_media` goes first so the refusal below can only be about
+      // `room_type_images`. Left applied, its own RESTRICT foreign key would
+      // raise the same 2BP01 and this test would pass while proving nothing
+      // about the order inside this migration.
+      await runMigrationDown(client, PACKAGE_MEDIA_MIGRATION_NAME);
+
       const error = await violation(() => client.query('DROP TABLE media_assets'));
 
       // 2BP01 is dependent_objects_still_exist: the link table's foreign key
@@ -900,11 +988,14 @@ describe('the down migration', () => {
   });
 
   it('left the schema intact after both rollbacks', async () => {
+    // `package_media` is listed too: the two tests above now roll it back as
+    // well, so "the surrounding database is untouched" has to cover it.
     const { rows } = await dbPool.query<{ tables: number }>(
       `SELECT COUNT(*)::int AS tables FROM pg_tables
-        WHERE schemaname = 'public' AND tablename IN ('media_assets', 'room_type_images')`,
+        WHERE schemaname = 'public'
+          AND tablename IN ('media_assets', 'room_type_images', 'package_media')`,
     );
 
-    assert.equal(rows[0]?.tables, 2);
+    assert.equal(rows[0]?.tables, 3);
   });
 });

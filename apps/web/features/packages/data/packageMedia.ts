@@ -15,6 +15,14 @@ const FALLBACK_MEDIA: PackageMedia = {
 // Presentation data stays local to the website. Backend package slugs that do
 // not have an approved image mapping intentionally fall back instead of
 // becoming catalogue/data errors.
+//
+// This map is now a FALLBACK ONLY. A journey whose image an administrator has
+// uploaded is served from the API, and `lib/packageImage.ts` never reaches
+// this module for it — not for the file, not for the description and not for
+// the crop. What is left here covers the journeys nobody has uploaded a
+// picture for yet, and it keeps their current appearance exactly. The
+// entries and the files stay until every journey has real media; removing
+// either is a later slice.
 const PACKAGE_MEDIA: Record<string, Omit<PackageMedia, "isFallback">> = {
   "dawn-plateau-and-the-museum": {
     image: "/images/placeholders/giza-suite-terrace.webp",

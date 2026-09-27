@@ -7,7 +7,21 @@ const CARD_COLUMNS = `p.code, p.slug, p.title, p.summary, p.duration_label,
   CASE WHEN lowest.variant_key IS NULL THEN NULL ELSE jsonb_build_object(
     'variant_key', lowest.variant_key, 'min_party_size', lowest.min_party_size,
     'max_party_size', lowest.max_party_size, 'adult_unit_rate', lowest.adult_unit_rate::text,
-    'currency', lowest.currency) END AS from_rate`;
+    'currency', lowest.currency) END AS from_rate,
+  CASE WHEN ma.reference IS NULL THEN NULL ELSE jsonb_build_object(
+    'reference', ma.reference, 'alt_text', pm.alt_text,
+    'width', ma.width, 'height', ma.height) END AS image`;
+
+// The journey's one image, joined rather than fetched per row. `package_media`
+// has UNIQUE (package_id), so this is a 0-or-1 join: it can never multiply a
+// package into several rows, and a catalogue of thirty journeys still costs
+// the one statement it cost before. No N+1, and no second query to batch.
+//
+// Only the four fields a guest may see are selected. The two ids and the
+// object key are not read at all — the reference is what a URL is composed
+// from, and it goes no further than the service that composes it.
+const IMAGE_JOIN = `LEFT JOIN package_media pm ON pm.package_id = p.id
+  LEFT JOIN media_assets ma ON ma.id = pm.media_asset_id`;
 
 // Rate ordering is numeric, not lexicographic. Return the qualifying variant/tier,
 // with stable tie-breaking, so cards cannot imply this rate applies to everyone.
@@ -21,7 +35,7 @@ const FROM_RATE_JOIN = `LEFT JOIN LATERAL (
 
 export async function findActivePackages(): Promise<PackageCardRecord[]> {
   const { rows } = await dbPool.query<Record<string, unknown>>(`
-    SELECT ${CARD_COLUMNS} FROM packages p ${FROM_RATE_JOIN}
+    SELECT ${CARD_COLUMNS} FROM packages p ${FROM_RATE_JOIN} ${IMAGE_JOIN}
     WHERE p.is_active = true ORDER BY p.sort_order, p.id`);
   return rows.map(mapPackageCardRow);
 }
@@ -45,6 +59,6 @@ export async function findActivePackageBySlug(slug: string): Promise<PackageDeta
           'adult_unit_rate', r.adult_unit_rate::text, 'currency', r.currency)
           ORDER BY r.min_party_size) FROM package_rate_tiers r WHERE r.variant_id=v.id), '[]'::jsonb))
         ORDER BY v.sort_order, v.key) FROM package_variants v WHERE v.package_id=p.id), '[]'::jsonb) AS variants
-    FROM packages p ${FROM_RATE_JOIN} WHERE p.slug=$1 AND p.is_active=true`, [slug]);
+    FROM packages p ${FROM_RATE_JOIN} ${IMAGE_JOIN} WHERE p.slug=$1 AND p.is_active=true`, [slug]);
   return rows[0] ? mapPackageDetailRow(rows[0]) : null;
 }

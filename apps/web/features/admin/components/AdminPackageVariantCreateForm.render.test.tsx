@@ -128,9 +128,12 @@ describe("admin variant create page", () => {
   });
 
   it("offers no usable form for a live journey, and explains why", () => {
+    // Newline-agnostic: checkouts of this repository carry CRLF, so slicing
+    // on a literal \n run pins the bytes a checkout happened to write
+    // rather than the branch this test is about.
     const blocked = page.slice(
       page.indexOf("if (!packageAllowsVariantCreate(journey)) {"),
-      page.indexOf("return (\n    <>\n      <PageHeader slug={journey.slug} title={journey.title} />\n      <SaveNotice"),
+      page.search(/return \(\s*<>\s*<PageHeader slug=\{journey\.slug\} title=\{journey\.title\} \/>\s*<SaveNotice/),
     );
 
     assert.ok(!blocked.includes("<AdminPackageVariantCreateForm"), "no form is rendered");

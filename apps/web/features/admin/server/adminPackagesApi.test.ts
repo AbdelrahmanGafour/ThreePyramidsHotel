@@ -243,6 +243,10 @@ function detailBody(overrides: Record<string, unknown> = {}) {
     operatingDays: ["monday", "tuesday"],
     itinerary: [{ dayNumber: 1, heading: "Boarding", body: "Meet at the quay." }],
     content: { included: ["Dinner"], excluded: ["Drinks"], notes: ["Smart dress."] },
+    // Sent by every admin detail response now. `null` is a journey with no
+    // picture; a body without the key at all is one this contract does not
+    // describe, which the mapper refuses.
+    image: null,
     variants: [
       {
         key: "standard-service", label: "Standard service", isDefault: true, sortOrder: 1,

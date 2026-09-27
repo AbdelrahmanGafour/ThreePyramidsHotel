@@ -67,6 +67,9 @@ function detailRow(state: { seedManaged: boolean; isActive: boolean; tiers: Tier
     operating_days: null,
     variant_count: 1,
     default_variant_label: 'Standard service',
+    // Selected by PACKAGE_DETAIL_COLUMNS now; a row without it is one
+    // this repository would never produce. null is no image.
+    image: null,
     itinerary: [],
     content: [],
     variants: [{

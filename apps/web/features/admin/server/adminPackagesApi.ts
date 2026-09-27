@@ -13,6 +13,7 @@ import type {
 import type {
   AdminPackageContent,
   AdminPackageDetail,
+  AdminPackageImage,
   AdminPackageItinerarySection,
   AdminPackageList,
   AdminPackageListItem,
@@ -374,6 +375,30 @@ function toContent(value: unknown): AdminPackageContent | null {
  * The API's ordering is preserved exactly: nothing here re-sorts a variant or
  * a tier, because the catalogue and the public site must agree on sequence.
  */
+/**
+ * The journey's image, or nothing.
+ *
+ * Fail-closed like every other mapper here: a body carrying an `image` that
+ * is neither null nor the five-field object is a body this contract does not
+ * describe, and the whole detail is refused rather than silently reported as
+ * a journey with no picture. Nothing else about the object is read, so a
+ * field the API does not send cannot appear by being passed through.
+ */
+function toPackageImage(value: unknown): AdminPackageImage | null | "invalid" {
+  if (value === null) return null;
+  if (!isRecord(value)) return "invalid";
+
+  const { reference, url, altText, width, height } = value;
+
+  if (typeof reference !== "string" || reference.length === 0) return "invalid";
+  if (typeof url !== "string" || url.length === 0) return "invalid";
+  if (!isNullableString(altText)) return "invalid";
+  if (!isCount(width) || width <= 0) return "invalid";
+  if (!isCount(height) || height <= 0) return "invalid";
+
+  return { reference, url, altText, width, height };
+}
+
 function toPackageDetail(payload: unknown): AdminPackageDetail | null {
   if (!isRecord(payload) || !isRecord(payload.data)) return null;
 
@@ -401,7 +426,19 @@ function toPackageDetail(payload: unknown): AdminPackageDetail | null {
     variants.push(variant);
   }
 
-  return { ...listItem, description: data.description, operatingDays, itinerary, content, variants };
+  const image = toPackageImage(data.image);
+
+  if (image === "invalid") return null;
+
+  return {
+    ...listItem,
+    description: data.description,
+    operatingDays,
+    itinerary,
+    content,
+    variants,
+    image,
+  };
 }
 
 /**

@@ -44,6 +44,8 @@ function journey(overrides: Partial<AdminPackageDetail> = {}): AdminPackageDetai
     isActive: true,
     sortOrder: 16,
     managementSource: "brochure",
+    // The admin detail carries the journey's one image, or null.
+    image: null,
     variantCount: 2,
     defaultVariantLabel: "Standard service",
     description: "A longer passage about the cruise.",

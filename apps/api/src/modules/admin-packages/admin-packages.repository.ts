@@ -1,5 +1,6 @@
 import type { QueryResult, QueryResultRow } from 'pg';
 import { dbPool } from '../../db/pool';
+import { parseMediaReference } from '../media/media.validation';
 import {
   isReservedBrochureCode,
   isReservedBrochureSlug,
@@ -13,7 +14,8 @@ import type {
   AdminPackageContent,
   AdminPackageContentReplacementInput,
   AdminPackageCreateInput,
-  AdminPackageDetail,
+  AdminPackageDetailRecord,
+  AdminPackageImageRecord,
   AdminPackageItinerarySection,
   AdminPackageList,
   AdminPackageListItem,
@@ -55,6 +57,8 @@ type AdminPackageDetailRow = AdminPackageListRow & {
   itinerary: unknown;
   content: unknown;
   variants: unknown;
+  /** The journey's one image as a jsonb object, or null. */
+  image: unknown;
 };
 
 /**
@@ -90,6 +94,23 @@ function requireBoolean(field: string, value: unknown): boolean {
 function requireWholeNumber(field: string, value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`Unexpected package ${field} from the database: ${String(value)}`);
+  }
+
+  return value;
+}
+
+/**
+ * A NOT NULL text column, re-proved rather than trusted.
+ *
+ * Used for the one value that leaves this module and is then handed to object
+ * storage. An empty or absent storage key is not something the schema admits
+ * — `media_assets.storage_key` is NOT NULL and UNIQUE — so reaching this is a
+ * data or migration problem, and raising is better than asking R2 to delete
+ * an object named by the empty string.
+ */
+function requireText(field: string, value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Unexpected package ${field} from the database: expected a non-empty value`);
   }
 
   return value;
@@ -290,7 +311,51 @@ function toContent(value: unknown): AdminPackageContent {
   return content;
 }
 
-export function toAdminPackageDetail(row: AdminPackageDetailRow): AdminPackageDetail {
+/**
+ * The journey's image, or nothing.
+ *
+ * Fail-closed like every other mapper here: a malformed media row is this
+ * system's own data being wrong, and it raises rather than being coerced
+ * into `image: null`, which would look exactly like a journey that simply
+ * has no picture.
+ *
+ * The reference is checked by the shared media parser rather than by a
+ * second copy of that rule — it is the same canonical form the object key is
+ * built from, and anything else was never issued by this system. The
+ * dimensions go through the same `asInteger` every other count here uses,
+ * and its `minimum = 1` matches `media_assets_width_check`.
+ *
+ * `alt_text` is accepted as any text or null, exactly as the column admits
+ * it. `asNullableText` would refuse a whitespace-only string: the
+ * application never stores one, but the schema permits it and a legal row
+ * must not raise.
+ *
+ * No URL is composed here and no configuration is read. This module maps
+ * rows; turning a reference into an address needs the deployment's public
+ * media base, and that belongs at the HTTP boundary.
+ */
+function toAdminPackageImageRecord(value: unknown): AdminPackageImageRecord | null {
+  if (value === null || value === undefined) {
+    return value === null ? null : invalidRow();
+  }
+
+  const row = asRecord(value);
+  const reference = parseMediaReference(row.reference);
+
+  if (reference === null) {
+    invalidRow();
+  }
+
+  const altText = row.alt_text;
+
+  if (altText !== null && typeof altText !== 'string') {
+    invalidRow();
+  }
+
+  return { reference, altText, width: asInteger(row.width), height: asInteger(row.height) };
+}
+
+export function toAdminPackageDetail(row: AdminPackageDetailRow): AdminPackageDetailRecord {
   const operatingDays = row.operating_days === null ? null : asArray(row.operating_days).map(asText);
 
   return {
@@ -307,6 +372,7 @@ export function toAdminPackageDetail(row: AdminPackageDetailRow): AdminPackageDe
     }),
     content: toContent(row.content),
     variants: asArray(row.variants).map(toVariant),
+    image: toAdminPackageImageRecord(row.image),
   };
 }
 
@@ -352,7 +418,13 @@ const PACKAGE_DETAIL_COLUMNS = `p.code,
                     ORDER BY r.min_party_size)
                   FROM package_rate_tiers r WHERE r.variant_id = v.id), '[]'::jsonb))
                 ORDER BY v.sort_order, v.key)
-              FROM package_variants v WHERE v.package_id = p.id), '[]'::jsonb) AS variants`;
+              FROM package_variants v WHERE v.package_id = p.id), '[]'::jsonb) AS variants,
+            (SELECT jsonb_build_object(
+                'reference', ma.reference, 'alt_text', pm.alt_text,
+                'width', ma.width, 'height', ma.height)
+              FROM package_media pm
+              JOIN media_assets ma ON ma.id = pm.media_asset_id
+              WHERE pm.package_id = p.id) AS image`;
 
 /**
  * Reads one package by slug, active or not, with everything it owns.
@@ -382,7 +454,7 @@ const PACKAGE_DETAIL_COLUMNS = `p.code,
  * itinerary, no content or no variants comes back with empty arrays rather
  * than nulls the caller would have to defend against.
  */
-export async function findAdminPackageBySlug(slug: string): Promise<AdminPackageDetail | null> {
+export async function findAdminPackageBySlug(slug: string): Promise<AdminPackageDetailRecord | null> {
   const { rows } = await queryable.query<AdminPackageDetailRow>(
     `SELECT ${PACKAGE_DETAIL_COLUMNS}
        FROM packages p
@@ -401,7 +473,7 @@ export async function findAdminPackageBySlug(slug: string): Promise<AdminPackage
 
 /** Which identity a uniqueness conflict was about, or a created package. */
 export type AdminPackageCreateResult =
-  | { outcome: 'created'; package: AdminPackageDetail }
+  | { outcome: 'created'; package: AdminPackageDetailRecord }
   | { outcome: 'code-in-use' }
   | { outcome: 'slug-in-use' };
 
@@ -528,7 +600,7 @@ export async function insertAdminPackage(
 export async function updateAdminPackageFields(
   slug: string,
   input: AdminPackageUpdateInput,
-): Promise<AdminPackageDetail | null> {
+): Promise<AdminPackageDetailRecord | null> {
   const { rows } = await queryable.query<AdminPackageDetailRow>(
     `WITH updated AS (
        UPDATE packages
@@ -574,7 +646,7 @@ export async function updateAdminPackageFields(
 
 /** What the edit found, before any HTTP meaning is attached to it. */
 export type AdminPackageVariantEditResult =
-  | { outcome: 'updated'; package: AdminPackageDetail }
+  | { outcome: 'updated'; package: AdminPackageDetailRecord }
   | { outcome: 'package-not-found' }
   | { outcome: 'variant-not-found' };
 
@@ -754,7 +826,7 @@ export async function updateAdminPackageVariant(
 
 /** What the creation found, before any HTTP meaning is attached to it. */
 export type AdminPackageVariantCreateResult =
-  | { outcome: 'created'; package: AdminPackageDetail }
+  | { outcome: 'created'; package: AdminPackageDetailRecord }
   | { outcome: 'package-not-found' }
   | { outcome: 'package-active' }
   | { outcome: 'key-in-use' }
@@ -998,7 +1070,7 @@ export async function insertAdminPackageVariant(
 
 /** What the replacement found, before any HTTP meaning is attached to it. */
 export type AdminPackageRatesReplaceResult =
-  | { outcome: 'replaced'; package: AdminPackageDetail }
+  | { outcome: 'replaced'; package: AdminPackageDetailRecord }
   | { outcome: 'package-not-found' }
   | { outcome: 'variant-not-found' }
   | { outcome: 'overlapping-tiers' }
@@ -1198,8 +1270,8 @@ export async function replaceAdminPackageVariantRates(
  * whether ownership moved.
  */
 export type AdminPackageDefaultVariantResult =
-  | { outcome: 'updated'; package: AdminPackageDetail }
-  | { outcome: 'unchanged'; package: AdminPackageDetail }
+  | { outcome: 'updated'; package: AdminPackageDetailRecord }
+  | { outcome: 'unchanged'; package: AdminPackageDetailRecord }
   | { outcome: 'package-not-found' }
   | { outcome: 'package-active' }
   | { outcome: 'variant-not-found' };
@@ -1370,7 +1442,7 @@ export async function setAdminPackageDefaultVariant(
 async function readPackageDetail(
   client: ClientLike,
   packageId: string,
-): Promise<AdminPackageDetail> {
+): Promise<AdminPackageDetailRecord> {
   const detail = await client.query<AdminPackageDetailRow>(
     `SELECT ${PACKAGE_DETAIL_COLUMNS}
        FROM packages p
@@ -1397,8 +1469,8 @@ async function readPackageDetail(
  * decides whether ownership moved.
  */
 export type AdminPackageItineraryReplaceResult =
-  | { outcome: 'replaced'; package: AdminPackageDetail }
-  | { outcome: 'unchanged'; package: AdminPackageDetail }
+  | { outcome: 'replaced'; package: AdminPackageDetailRecord }
+  | { outcome: 'unchanged'; package: AdminPackageDetailRecord }
   | { outcome: 'package-not-found' };
 
 /**
@@ -1593,8 +1665,8 @@ export async function replaceAdminPackageItinerary(
  * decides whether ownership moved.
  */
 export type AdminPackageContentReplaceResult =
-  | { outcome: 'replaced'; package: AdminPackageDetail }
-  | { outcome: 'unchanged'; package: AdminPackageDetail }
+  | { outcome: 'replaced'; package: AdminPackageDetailRecord }
+  | { outcome: 'unchanged'; package: AdminPackageDetailRecord }
   | { outcome: 'package-not-found' };
 
 /** The stored kind for each list this contract exposes. */
@@ -1798,7 +1870,7 @@ export async function replaceAdminPackageContent(
 
 /** What the removal found, before any HTTP meaning is attached to it. */
 export type AdminPackageVariantDeleteResult =
-  | { outcome: 'deleted'; package: AdminPackageDetail }
+  | { outcome: 'deleted'; package: AdminPackageDetailRecord }
   | { outcome: 'package-not-found' }
   | { outcome: 'package-active' }
   | { outcome: 'variant-not-found' }
@@ -2009,9 +2081,18 @@ export async function deleteAdminPackageVariant(
  * What the removal found. There is no `package` on success: the journey is
  * gone, and returning a representation of something that no longer exists
  * would be the one dishonest answer this module could give.
+ *
+ * `mediaStorageKey` is the one exception to that, and it is not a
+ * representation of the journey: it is the object key the committed
+ * transaction has just orphaned, carried out so the caller can remove it from
+ * storage afterwards. `null` when the journey had no image.
+ *
+ * Deliberately internal. The service consumes it and returns
+ * `AdminPackageRemovalResult`, which has no such field, so an object key
+ * cannot reach an HTTP response even by accident.
  */
 export type AdminPackageDeleteResult =
-  | { outcome: 'deleted' }
+  | { outcome: 'deleted'; mediaStorageKey: string | null }
   | { outcome: 'package-not-found' }
   | { outcome: 'package-active' }
   | { outcome: 'brochure-managed' }
@@ -2121,8 +2202,41 @@ export async function deleteAdminPackage(slug: string): Promise<AdminPackageDele
       return { outcome: 'has-reservations' };
     }
 
-    // One statement. Itinerary sections, content items and variants cascade
-    // from here, and rate tiers cascade from the variants.
+    // The journey's one image, if it has one. Read under the same lock that
+    // every journey-media write takes first, so no upload can slip a row in
+    // between this and the delete below.
+    //
+    // It has to be named explicitly, unlike the four cascading child tables:
+    // `package_media.package_id` is ON DELETE RESTRICT, so the statement
+    // after this would be refused outright while the relation stands. That
+    // RESTRICT is deliberate. CASCADE would have been the quiet alternative
+    // and the wrong one — it would drop the relation and leave the
+    // `media_assets` row behind with no owner and no column naming one, so
+    // nothing could ever find the object it describes.
+    const media = await client.query<{ media_asset_id: string; storage_key: string }>(
+      `SELECT pm.media_asset_id, ma.storage_key
+         FROM package_media pm
+         JOIN media_assets ma ON ma.id = pm.media_asset_id
+        WHERE pm.package_id = $1`,
+      [pkg.id],
+    );
+
+    const image = media.rows[0];
+    // Captured before anything is deleted, because after the COMMIT the row
+    // that named this object no longer exists to be asked.
+    const mediaStorageKey = image ? requireText('storage_key', image.storage_key) : null;
+
+    if (image) {
+      // The relation first, then the asset it pointed at. `media_assets` is
+      // RESTRICT on this side too, so it cannot go while the relation holds
+      // it, and the asset row is shared schema — never deleted by cascade.
+      await client.query('DELETE FROM package_media WHERE package_id = $1', [pkg.id]);
+      await client.query('DELETE FROM media_assets WHERE id = $1', [image.media_asset_id]);
+    }
+
+    // One statement for the journey itself. Itinerary sections, content items
+    // and variants cascade from here, and rate tiers cascade from the
+    // variants.
     await client.query('DELETE FROM packages WHERE id = $1', [pkg.id]);
 
     // Cleared BEFORE the COMMIT is issued, not after. A COMMIT that throws
@@ -2133,7 +2247,11 @@ export async function deleteAdminPackage(slug: string): Promise<AdminPackageDele
     transaction = false;
     await client.query('COMMIT');
 
-    return { outcome: 'deleted' };
+    // Nothing is removed from object storage here, and must not be: this
+    // function's whole contract is that the database is the truth and the
+    // object follows. The key goes back to the service, which removes the
+    // object after — and only after — this commit has answered.
+    return { outcome: 'deleted', mediaStorageKey };
   } catch (error) {
     if (transaction) {
       try {
@@ -2176,8 +2294,8 @@ export async function deleteAdminPackage(slug: string): Promise<AdminPackageDele
  * decides whether ownership moved.
  */
 export type AdminPackageVariantOrderResult =
-  | { outcome: 'reordered'; package: AdminPackageDetail }
-  | { outcome: 'unchanged'; package: AdminPackageDetail }
+  | { outcome: 'reordered'; package: AdminPackageDetailRecord }
+  | { outcome: 'unchanged'; package: AdminPackageDetailRecord }
   | { outcome: 'package-not-found' }
   | { outcome: 'variant-not-found' }
   | { outcome: 'set-mismatch' }
@@ -2401,7 +2519,7 @@ export async function reorderAdminPackageVariants(
 export async function updateAdminPackageActiveState(
   slug: string,
   isActive: boolean,
-): Promise<AdminPackageDetail | null> {
+): Promise<AdminPackageDetailRecord | null> {
   const { rows } = await queryable.query<AdminPackageDetailRow>(
     `WITH updated AS (
        UPDATE packages

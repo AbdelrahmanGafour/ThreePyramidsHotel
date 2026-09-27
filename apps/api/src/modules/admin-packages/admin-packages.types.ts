@@ -123,6 +123,47 @@ export type AdminPackageContent = {
  * Still no database id of any kind — not the package's, not a variant's, not
  * a tier's. A package is addressed by slug, a variant by key.
  */
+/**
+ * The journey's one image, as an administrator is allowed to see it.
+ *
+ * Five fields. The extra one over the public shape is `reference`, and it is
+ * deliberate: the media endpoints already address an image by exactly that
+ * value, so an admin page that has just read the journey can describe or
+ * replace its picture without a second request. It is an opaque identifier
+ * the application itself issued, not an internal key — a guest is given only
+ * the URL, and the public projection has no `reference` field at all.
+ *
+ * Still absent, here as everywhere: `storage_key`, `checksum_sha256`,
+ * `content_type`, `byte_size`, both database ids, and anything naming a
+ * bucket or a provider. None of them helps manage an image, and the object
+ * key and digest are facts about how bytes are stored rather than about the
+ * picture.
+ *
+ * `url` is composed when this is built, never read from a column.
+ */
+export type AdminPackageImage = {
+  reference: string;
+  url: string;
+  altText: string | null;
+  width: number;
+  height: number;
+};
+
+/**
+ * The image as the repository reads it: identity, not address.
+ *
+ * The difference from `AdminPackageImage` is `url`, which is absent.
+ * Composing one needs the deployment's public media base — configuration the
+ * repository has no business reading — so the reference travels this far and
+ * the projection turns it into a URL at the HTTP boundary.
+ */
+export type AdminPackageImageRecord = {
+  reference: string;
+  altText: string | null;
+  width: number;
+  height: number;
+};
+
 export type AdminPackageDetail = AdminPackageListItem & {
   description: string | null;
   /** Lowercase weekday names, or null when the journey has no fixed days. */
@@ -130,6 +171,30 @@ export type AdminPackageDetail = AdminPackageListItem & {
   itinerary: AdminPackageItinerarySection[];
   content: AdminPackageContent;
   variants: AdminPackageVariant[];
+  /**
+   * The journey's image, or `null` when none has been uploaded.
+   *
+   * On the detail, not on the list item: a catalogue row does not show a
+   * picture, and adding one there would make every list read pay for a join
+   * nothing renders. Every endpoint that answers with a whole journey —
+   * the read, the create, the edits, the variant and content operations —
+   * carries it, because they all return this one shape and splitting them
+   * would be an artificial difference nobody could predict.
+   */
+  image: AdminPackageImage | null;
+};
+
+/**
+ * The journey as the repository returns it, before the HTTP boundary has
+ * turned its media reference into a URL.
+ *
+ * Identical to `AdminPackageDetail` but for that one field. It exists so the
+ * repository can stay PostgreSQL and row-mapping only: composing a URL needs
+ * configuration, and a repository that read configuration would be a second
+ * place deployment settings are interpreted.
+ */
+export type AdminPackageDetailRecord = Omit<AdminPackageDetail, 'image'> & {
+  image: AdminPackageImageRecord | null;
 };
 
 export const INVALID_PACKAGE_SLUG_ERROR_CODE = 'INVALID_PACKAGE_SLUG';

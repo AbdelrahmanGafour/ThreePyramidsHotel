@@ -148,54 +148,28 @@ export type RoomTypeMediaDependencies = {
 };
 
 /**
- * What became of an object the database declined to take ownership of, or
- * released ownership of.
+ * The storage/database seam, defined once in the shared media module.
  *
- * Kept because it is operationally real: a failed cleanup leaves an orphan,
- * and the key is the only way anyone would ever find it again. A storage key
- * is a random UUID under a fixed prefix and reveals nothing about the hotel,
- * its guests or its configuration — but it is internal diagnostics, not a
- * public API field, and this step does not put it in a response.
+ * Re-exported here because this module's own result types are built from
+ * them and because every existing caller imports them from this file. The
+ * definitions themselves are not room-type-specific and no longer live here:
+ * journey media runs the same sequence and needs the same three facts.
  */
-export type AttemptedStorageCleanup =
-  | { attempted: true; removed: true }
-  | { attempted: true; removed: false; storageKey: string };
+export {
+  MediaUploadCleanupError,
+  MediaPersistenceOutcomeUncertainError,
+  isMediaUploadCleanupError,
+  isMediaPersistenceOutcomeUncertainError,
+} from '../media/media.outcomes';
+export type {
+  AttemptedStorageCleanup,
+  StorageCleanup,
+  MediaPersistenceOperation,
+} from '../media/media.outcomes';
 
-export type StorageCleanup = { attempted: false } | AttemptedStorageCleanup;
-
-/**
- * An upload failed *and* the object it had already written could not be
- * removed again.
- *
- * Thrown only when both are true. When cleanup succeeds the original failure
- * is re-thrown untouched, because there is nothing extra to say; when it does
- * not, the orphan is the fact that would otherwise be lost, so it is named and
- * the original travels as the cause.
- *
- * Carries the storage key, and nothing else that anything will serialise. No
- * endpoint, no bucket, no credential, no SDK payload, no SQL.
- *
- * The original failure is attached through `Error`'s own `cause` option rather
- * than by assignment, which is the difference between a non-enumerable
- * property and one that `JSON.stringify` would copy out. A database error can
- * carry query detail, and an error that travels is an error that eventually
- * gets logged somewhere it should not be — but it is still the only thing that
- * explains what went wrong, so it stays reachable for a debugger and invisible
- * to a serialiser.
- */
-export class MediaUploadCleanupError extends Error {
-  readonly storageKey: string;
-
-  constructor(storageKey: string, cause: unknown) {
-    super('Media upload failed and its stored object could not be removed', { cause });
-    this.name = 'MediaUploadCleanupError';
-    this.storageKey = storageKey;
-  }
-}
-
-export function isMediaUploadCleanupError(error: unknown): error is MediaUploadCleanupError {
-  return error instanceof MediaUploadCleanupError;
-}
+// Also imported, not only re-exported: the result types below are written in
+// terms of these, and a re-export alone does not bring a name into scope.
+import type { AttemptedStorageCleanup, StorageCleanup } from '../media/media.outcomes';
 
 /**
  * Why a use case could not do what was asked, in the domain's own terms.
@@ -261,54 +235,6 @@ export type RoomTypeImageDeleteResult =
   | { outcome: 'room-type-not-found' }
   | { outcome: 'image-not-found' }
   | { outcome: 'invalid-image-reference' };
-
-/**
- * PostgreSQL was asked to commit and did not say whether it did.
- *
- * This is not a failure. A `COMMIT` that throws means the answer never
- * arrived, and the two possible realities are both live: the transaction may
- * have committed and the acknowledgement been lost, or it may never have
- * committed at all. Nothing available to this process can tell them apart —
- * issuing a `ROLLBACK` afterwards proves nothing, because a rollback of a
- * transaction that already committed is a no-op that still answers "ok".
- *
- * It matters because compensation depends on knowing. Deleting the object
- * after an uncertain upload commit would, in the reality where the row exists,
- * leave a committed row pointing at nothing — the one outcome this
- * architecture refuses. So the object is kept and the uncertainty is reported,
- * which at worst leaves an orphan.
- *
- * Named for what is true: the outcome is uncertain. Never "failed", never
- * "rolled back", never "not created" — none of those is known.
- *
- * Carries the reference and the storage key, because reconciliation will need
- * them and neither is a secret. It carries no connection string, endpoint,
- * bucket, credential, AWS request or query text, and the underlying error is
- * attached non-enumerably so nothing serialises it by accident.
- */
-export class MediaPersistenceOutcomeUncertainError extends Error {
-  readonly operation: 'upload' | 'delete';
-  readonly reference: string | null;
-  readonly storageKey: string | null;
-
-  constructor(
-    operation: 'upload' | 'delete',
-    identity: { reference: string | null; storageKey: string | null },
-    cause: unknown,
-  ) {
-    super(`Media ${operation} persistence outcome uncertain`, { cause });
-    this.name = 'MediaPersistenceOutcomeUncertainError';
-    this.operation = operation;
-    this.reference = identity.reference;
-    this.storageKey = identity.storageKey;
-  }
-}
-
-export function isMediaPersistenceOutcomeUncertainError(
-  error: unknown,
-): error is MediaPersistenceOutcomeUncertainError {
-  return error instanceof MediaPersistenceOutcomeUncertainError;
-}
 
 // ---------------------------------------------------------------------------
 // The HTTP contract
@@ -393,45 +319,37 @@ export const INVALID_ROOM_TYPE_IMAGE_UPDATE_RESPONSE = Object.freeze({
   }),
 });
 
-export const IMAGE_TOO_LARGE_ERROR_CODE = 'IMAGE_TOO_LARGE';
-export const IMAGE_TOO_LARGE_ERROR_MESSAGE = 'Image exceeds the maximum upload size';
-
-/** The raw body's byte ceiling was exceeded, whether the parser caught it or the domain rule did. */
-export const IMAGE_TOO_LARGE_RESPONSE = Object.freeze({
-  error: Object.freeze({
-    code: IMAGE_TOO_LARGE_ERROR_CODE,
-    message: IMAGE_TOO_LARGE_ERROR_MESSAGE,
-  }),
-});
-
-export const UNSUPPORTED_IMAGE_TYPE_ERROR_CODE = 'UNSUPPORTED_IMAGE_TYPE';
-export const UNSUPPORTED_IMAGE_TYPE_ERROR_MESSAGE = 'Unsupported image type';
-
-/** No `Content-Type` was declared, or it is not one of the three this API accepts. */
-export const UNSUPPORTED_IMAGE_TYPE_RESPONSE = Object.freeze({
-  error: Object.freeze({
-    code: UNSUPPORTED_IMAGE_TYPE_ERROR_CODE,
-    message: UNSUPPORTED_IMAGE_TYPE_ERROR_MESSAGE,
-  }),
-});
-
-export const INVALID_IMAGE_UPLOAD_ERROR_CODE = 'INVALID_IMAGE_UPLOAD';
-export const INVALID_IMAGE_UPLOAD_ERROR_MESSAGE = 'Invalid image upload';
-
 /**
- * An accepted content type was declared, but the bytes are not a usable image
- * under it: empty, unreadable, disagreeing with what was declared, undecodable,
- * animated, multi-page, or a decoded format that does not match the
- * declaration. One body for all of it — which of those it was is not
- * something worth handing back, and several of the reasons this covers exist
- * precisely because a caller's claim about their own upload was not true.
+ * The media-wide answers, defined once in the shared media module.
+ *
+ * Re-exported here because every existing caller imports them from this
+ * file. They are not room-type-specific: the size ceiling, the accepted
+ * types, the storage seam and the uncertain-commit wording are one contract
+ * for every admin media endpoint, and journey media sends the same ones.
  */
-export const INVALID_IMAGE_UPLOAD_RESPONSE = Object.freeze({
-  error: Object.freeze({
-    code: INVALID_IMAGE_UPLOAD_ERROR_CODE,
-    message: INVALID_IMAGE_UPLOAD_ERROR_MESSAGE,
-  }),
-});
+export {
+  IMAGE_TOO_LARGE_ERROR_CODE,
+  IMAGE_TOO_LARGE_ERROR_MESSAGE,
+  IMAGE_TOO_LARGE_RESPONSE,
+  UNSUPPORTED_IMAGE_TYPE_ERROR_CODE,
+  UNSUPPORTED_IMAGE_TYPE_ERROR_MESSAGE,
+  UNSUPPORTED_IMAGE_TYPE_RESPONSE,
+  INVALID_IMAGE_UPLOAD_ERROR_CODE,
+  INVALID_IMAGE_UPLOAD_ERROR_MESSAGE,
+  INVALID_IMAGE_UPLOAD_RESPONSE,
+  MEDIA_STORAGE_UNAVAILABLE_ERROR_CODE,
+  MEDIA_STORAGE_UNAVAILABLE_ERROR_MESSAGE,
+  MEDIA_STORAGE_UNAVAILABLE_RESPONSE,
+  MEDIA_DELIVERY_UNAVAILABLE_ERROR_CODE,
+  MEDIA_DELIVERY_UNAVAILABLE_ERROR_MESSAGE,
+  MEDIA_DELIVERY_UNAVAILABLE_RESPONSE,
+  MEDIA_PERSISTENCE_OUTCOME_UNCERTAIN_ERROR_CODE,
+  MEDIA_PERSISTENCE_OUTCOME_UNCERTAIN_ERROR_MESSAGE,
+  MEDIA_PERSISTENCE_OUTCOME_UNCERTAIN_RESPONSE,
+  MEDIA_OPERATION_FAILED_ERROR_CODE,
+  MEDIA_OPERATION_FAILED_ERROR_MESSAGE,
+  MEDIA_OPERATION_FAILED_RESPONSE,
+} from '../media/media.http';
 
 export const ROOM_TYPE_IMAGE_LIMIT_REACHED_ERROR_CODE = 'ROOM_TYPE_IMAGE_LIMIT_REACHED';
 export const ROOM_TYPE_IMAGE_LIMIT_REACHED_ERROR_MESSAGE = 'Room type has reached its image limit';
@@ -441,80 +359,5 @@ export const ROOM_TYPE_IMAGE_LIMIT_REACHED_RESPONSE = Object.freeze({
   error: Object.freeze({
     code: ROOM_TYPE_IMAGE_LIMIT_REACHED_ERROR_CODE,
     message: ROOM_TYPE_IMAGE_LIMIT_REACHED_ERROR_MESSAGE,
-  }),
-});
-
-export const MEDIA_STORAGE_UNAVAILABLE_ERROR_CODE = 'MEDIA_STORAGE_UNAVAILABLE';
-export const MEDIA_STORAGE_UNAVAILABLE_ERROR_MESSAGE = 'Media storage is temporarily unavailable';
-
-/**
- * Object storage could not be reached or is not configured. The same answer
- * either way: a caller cannot act differently on "the network is down" versus
- * "the deployment is missing a credential", and neither reason — nor any
- * endpoint, bucket, key or secret — belongs in a response.
- */
-export const MEDIA_STORAGE_UNAVAILABLE_RESPONSE = Object.freeze({
-  error: Object.freeze({
-    code: MEDIA_STORAGE_UNAVAILABLE_ERROR_CODE,
-    message: MEDIA_STORAGE_UNAVAILABLE_ERROR_MESSAGE,
-  }),
-});
-
-export const MEDIA_DELIVERY_UNAVAILABLE_ERROR_CODE = 'MEDIA_DELIVERY_UNAVAILABLE';
-export const MEDIA_DELIVERY_UNAVAILABLE_ERROR_MESSAGE = 'Media delivery is temporarily unavailable.';
-
-/**
- * `R2_PUBLIC_BASE_URL` is missing or invalid. Deliberately a different code
- * from `MEDIA_STORAGE_UNAVAILABLE`: object storage can be entirely healthy —
- * every upload and every delete may still work — while the separate, later
- * decision of where to serve images from has simply not been configured yet.
- * Conflating the two would tell an operator to go look at the wrong system.
- *
- * Never mentions R2, Cloudflare, a bucket, a domain, a configured URL or a
- * credential. The configuration error this responds to already names which
- * variable was the problem internally; none of that reaches the browser.
- */
-export const MEDIA_DELIVERY_UNAVAILABLE_RESPONSE = Object.freeze({
-  error: Object.freeze({
-    code: MEDIA_DELIVERY_UNAVAILABLE_ERROR_CODE,
-    message: MEDIA_DELIVERY_UNAVAILABLE_ERROR_MESSAGE,
-  }),
-});
-
-export const MEDIA_PERSISTENCE_OUTCOME_UNCERTAIN_ERROR_CODE = 'MEDIA_PERSISTENCE_OUTCOME_UNCERTAIN';
-
-/**
- * Locked wording. This is the one response in this module that must never
- * drift, because it is the HTTP face of the uncertain-commit doctrine: the
- * database may or may not have committed, and nothing here may claim it did,
- * that it did not, or that it was rolled back. It does not say "upload
- * failed", "delete failed", "not created" or "deleted" — none of those is
- * known — and it does not promise a retry will be safe on its own; it tells
- * the caller to look again before acting further.
- */
-export const MEDIA_PERSISTENCE_OUTCOME_UNCERTAIN_ERROR_MESSAGE =
-  'The operation outcome could not be confirmed. Refresh the current state before retrying.';
-
-export const MEDIA_PERSISTENCE_OUTCOME_UNCERTAIN_RESPONSE = Object.freeze({
-  error: Object.freeze({
-    code: MEDIA_PERSISTENCE_OUTCOME_UNCERTAIN_ERROR_CODE,
-    message: MEDIA_PERSISTENCE_OUTCOME_UNCERTAIN_ERROR_MESSAGE,
-  }),
-});
-
-export const MEDIA_OPERATION_FAILED_ERROR_CODE = 'MEDIA_OPERATION_FAILED';
-export const MEDIA_OPERATION_FAILED_ERROR_MESSAGE = 'The operation could not be completed';
-
-/**
- * An upload whose object could not be cleaned up after a definite database
- * failure (`MediaUploadCleanupError`). Generic and safe on purpose: the
- * orphaned storage key is real operational information, but it identifies
- * nothing about the hotel and is not something a browser needs or should
- * carry — it stays server-side, for whoever reconciles storage later.
- */
-export const MEDIA_OPERATION_FAILED_RESPONSE = Object.freeze({
-  error: Object.freeze({
-    code: MEDIA_OPERATION_FAILED_ERROR_CODE,
-    message: MEDIA_OPERATION_FAILED_ERROR_MESSAGE,
   }),
 });
