@@ -10,6 +10,7 @@ import {
   listAdminRoomTypesHandler,
   updateAdminRoomTypeCapacityHandler,
   updateAdminRoomTypeHandler,
+  updateAdminRoomTypeStatusHandler,
 } from './admin-room-types.controller';
 
 export const adminRoomTypesRouter = Router();
@@ -19,9 +20,9 @@ export const adminRoomTypesRouter = Router();
 // by accident. It comes first in each chain, so authentication is settled
 // before the slug, the body or the room type's existence is ever considered.
 //
-// Read, create and edit only: deleting a room type is not a V1 operation, and
-// archiving one is deferred until the public site can cope with a room-type
-// slug it has no presentation content for.
+// Read, create, edit and publish/archive. Deleting a room type is still not a
+// V1 operation: a room type with rooms cannot be removed while any reservation
+// refers to it, and archiving is the reversible answer to the same need.
 //
 // Registration order is most-specific first. Express matches on segment count,
 // so `/:slug` cannot swallow `/:slug/capacity` or `/:slug/rooms` — the two-
@@ -41,6 +42,13 @@ adminRoomTypesRouter.post('/:slug/rooms', requireAdminSession, createAdminPhysic
 // it is the one value that can be refused, and an operation that can be
 // refused does not belong in a body that never can.
 adminRoomTypesRouter.patch('/:slug/capacity', requireAdminSession, updateAdminRoomTypeCapacityHandler);
+
+// Publishing and archiving, for the same reason capacity is its own
+// sub-resource: it can be refused. A room type may not go live without a
+// physical room actually in service, because availability requires both
+// `room_types.is_active` and `rooms.is_active` — so this is the operation that
+// carries creation's draft rule forward rather than letting it stop there.
+adminRoomTypesRouter.patch('/:slug/status', requireAdminSession, updateAdminRoomTypeStatusHandler);
 
 adminRoomTypesRouter.get('/:slug', requireAdminSession, getAdminRoomTypeHandler);
 adminRoomTypesRouter.patch('/:slug', requireAdminSession, updateAdminRoomTypeHandler);

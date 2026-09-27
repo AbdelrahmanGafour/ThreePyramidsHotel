@@ -68,6 +68,37 @@ export const ROOM_TYPE_NOTICES = {
     message:
       "The capacity was not changed. It cannot be lowered to that value while a current or upcoming reservation is booked for more guests than the proposed capacity. Those bookings must be cancelled or honoured first.",
   },
+  published: {
+    tone: "done",
+    message: "Published. This room type is now offered to guests and can be booked.",
+  },
+  unpublished: {
+    tone: "done",
+    message:
+      "Unpublished. It is hidden from the website, from availability searches and from new bookings. Reservations already taken for it are unaffected, and it can be published again at any time.",
+  },
+  "status-refused": {
+    tone: "warn",
+    message:
+      "That change was not applied because the request could not be accepted. Reload the page and try again.",
+  },
+  "status-no-active-rooms": {
+    // The one refusal an administrator can actually act on, so it says what
+    // to do rather than only what went wrong. No count and no room number:
+    // the API returns none, and the rooms panel below is where they are.
+    tone: "warn",
+    message:
+      "This room type was not published. At least one of its physical rooms must be in service first — a published room type with no rooms available would appear on the website and be unbookable in every search. Add a room or return one to service below, then publish.",
+  },
+  "status-uncertain": {
+    // Worded to hold for every cause of `unavailable` — a transport failure,
+    // a 5xx and an unusable body alike — so it claims nothing about whether
+    // the API answered, and does not promise a refreshed status below,
+    // because the read that follows the redirect can fail too.
+    tone: "warn",
+    message:
+      "The result of that change could not be confirmed. The room type may or may not have been published or unpublished. Check the status shown before trying again; if the room type is not shown below, reload it later and check first.",
+  },
   "capacity-uncertain": {
     // Worded to hold for every cause of `unavailable` — a transport failure, a
     // 5xx, and an unusable body alike — so it claims nothing about whether the
@@ -156,4 +187,56 @@ export function parseNoticeToken<T extends string>(
   }
 
   return value as T;
+}
+
+/** Which control the status panel offers, and what it says while it runs. */
+export type RoomTypeStatusAction = {
+  /** What the room type becomes, not what it is. */
+  target: boolean;
+  tone: "confirm" | "cancel";
+  label: string;
+  pendingLabel: string;
+};
+
+/**
+ * Which control to offer for a room type in this state.
+ *
+ * Exactly one, always: a room type is published or it is not, so the only
+ * useful action is the opposite of where it stands. Offering both would ask
+ * an administrator to work out which one is the no-op.
+ *
+ * Pure, so it can be tested without a Server Action in the module graph. The
+ * API decides what is allowed; this only decides what to show, and the state
+ * it was rendered from may already be out of date.
+ */
+export function roomTypeStatusAction(isActive: boolean): RoomTypeStatusAction {
+  if (isActive) {
+    return {
+      target: false,
+      tone: "cancel",
+      label: "Unpublish room type",
+      pendingLabel: "Unpublishing…",
+    };
+  }
+
+  return {
+    target: true,
+    tone: "confirm",
+    label: "Publish room type",
+    pendingLabel: "Publishing…",
+  };
+}
+
+/**
+ * What publishing or unpublishing actually does, in one line.
+ *
+ * The unpublish side deliberately promises nothing about being refused.
+ * Unpublishing is always allowed — reservations already taken are unaffected
+ * and are not this control's to cancel — so a warning here would describe a
+ * door that is not locked.
+ */
+export function roomTypeStatusNote(isActive: boolean): string {
+  return isActive
+    ? "This room type is offered to guests. Unpublishing hides it from the website, from availability searches and from new bookings; it stays in the catalogue, and reservations already taken for it are unaffected."
+    : "This room type is hidden from the website, from availability searches and from new bookings. Publishing offers it to guests, and needs at least one of its physical rooms to be in service.";
 }

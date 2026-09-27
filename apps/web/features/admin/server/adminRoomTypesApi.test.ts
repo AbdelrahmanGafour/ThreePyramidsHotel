@@ -14,6 +14,7 @@ type ApiModule = typeof import("./adminRoomTypesApi.js");
 
 let createAdminRoomType: ApiModule["createAdminRoomType"];
 let updateAdminRoomTypeCapacity: ApiModule["updateAdminRoomTypeCapacity"];
+let updateAdminRoomTypeStatus: ApiModule["updateAdminRoomTypeStatus"];
 
 const BASE = "http://127.0.0.1:4000";
 const SLUG = "garden-suite";
@@ -82,7 +83,9 @@ function respondWithTransportFailure(): void {
 before(async () => {
   process.env.API_BASE_URL = BASE;
 
-  ({ createAdminRoomType, updateAdminRoomTypeCapacity } = await import("./adminRoomTypesApi.js"));
+  ({ createAdminRoomType, updateAdminRoomTypeCapacity, updateAdminRoomTypeStatus } = await import(
+    "./adminRoomTypesApi.js"
+  ));
 
   realFetch = globalThis.fetch;
 });
@@ -323,5 +326,130 @@ describe("updateAdminRoomTypeCapacity", () => {
     await updateAdminRoomTypeCapacity("garden/suite", 2, COOKIE);
 
     assert.equal(calls[0]!.url, `${BASE}/api/v1/admin/room-types/garden%2Fsuite/capacity`);
+  });
+});
+
+describe("updateAdminRoomTypeStatus", () => {
+  it("maps a well-formed 200 in both directions", async () => {
+    respondWith(200, { data: detailBody({ isActive: true, roomCount: 2 }) });
+    const published = await updateAdminRoomTypeStatus(SLUG, true, COOKIE);
+
+    assert.equal(published.state, "ok");
+    assert.equal(published.state === "ok" && published.data.isActive, true);
+
+    respondWith(200, { data: detailBody({ isActive: false, roomCount: 2 }) });
+    const unpublished = await updateAdminRoomTypeStatus(SLUG, false, COOKIE);
+
+    assert.equal(unpublished.state === "ok" && unpublished.data.isActive, false);
+  });
+
+  it("patches the status sub-resource with exactly { isActive } in the body", async () => {
+    respondWith(200, { data: detailBody({ isActive: true }) });
+
+    await updateAdminRoomTypeStatus(SLUG, true, COOKIE);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.url, `${BASE}/api/v1/admin/room-types/garden-suite/status`);
+    assert.equal(calls[0]!.init.method, "PATCH");
+    assert.equal(calls[0]!.init.cache, "no-store");
+    assert.deepEqual(calls[0]!.init.headers, { "Content-Type": "application/json", Cookie: COOKIE });
+    assert.equal(calls[0]!.init.body, JSON.stringify({ isActive: true }));
+  });
+
+  it("sends a real boolean, never a string, and nothing alongside it", async () => {
+    respondWith(200, { data: detailBody({ isActive: false }) });
+
+    await updateAdminRoomTypeStatus(SLUG, false, COOKIE);
+
+    const body = JSON.parse(String(calls[0]!.init.body));
+    assert.deepEqual(body, { isActive: false });
+    assert.equal(typeof body.isActive, "boolean");
+    assert.deepEqual(Object.keys(body), ["isActive"], "a status change carries no other edit");
+  });
+
+  it("reports a room type with nothing in service as its own outcome", async () => {
+    respondWith(
+      409,
+      apiError(
+        "ROOM_TYPE_NO_ACTIVE_ROOMS",
+        "Room type cannot be published without at least one active physical room",
+      ),
+    );
+
+    assert.deepEqual(await updateAdminRoomTypeStatus(SLUG, true, COOKIE), {
+      state: "no-active-rooms",
+    });
+  });
+
+  describe("keeps each refusal distinct", () => {
+    for (const [label, status, body, expected] of [
+      [
+        "a malformed slug",
+        400,
+        apiError("INVALID_ROOM_TYPE_SLUG", "Invalid room type slug"),
+        "invalid-reference",
+      ],
+      [
+        "a malformed body",
+        400,
+        apiError("INVALID_ROOM_TYPE_STATUS", "Invalid room type status"),
+        "invalid-status",
+      ],
+      [
+        "a missing room type",
+        404,
+        apiError("ROOM_TYPE_NOT_FOUND", "Room type not found"),
+        "not-found",
+      ],
+    ] as const) {
+      it(label, async () => {
+        respondWith(status, body);
+
+        assert.deepEqual(await updateAdminRoomTypeStatus(SLUG, true, COOKIE), { state: expected });
+      });
+    }
+  });
+
+  it("does not read a 409 it was not contracted for as the publish refusal", async () => {
+    respondWith(409, apiError("SOMETHING_ELSE", "Something else"));
+
+    assert.equal((await updateAdminRoomTypeStatus(SLUG, true, COOKIE)).state, "unavailable");
+  });
+
+  it("treats a malformed 200 as unavailable rather than as a status", async () => {
+    respondWith(200, { data: detailBody({ isActive: "true" }) });
+
+    assert.equal((await updateAdminRoomTypeStatus(SLUG, true, COOKIE)).state, "unavailable");
+  });
+
+  it("refuses a 200 describing a different room type", async () => {
+    respondWith(200, { data: detailBody({ slug: "somewhere-else" }) });
+
+    assert.equal((await updateAdminRoomTypeStatus(SLUG, true, COOKIE)).state, "unavailable");
+  });
+
+  it("reports an unanswered PATCH as unknown, and never retries it", async () => {
+    respondWithTransportFailure();
+
+    const result = await updateAdminRoomTypeStatus(SLUG, true, COOKIE);
+
+    assert.equal(result.state, "unavailable", "the outcome is unknown, never 'failed'");
+    assert.equal(calls.length, 1, "a dropped PATCH may already have committed");
+  });
+
+  it("reports an ended session", async () => {
+    respondWith(401, apiError("NOT_AUTHENTICATED", "Authentication required"));
+
+    assert.deepEqual(await updateAdminRoomTypeStatus(SLUG, true, COOKIE), {
+      state: "unauthenticated",
+    });
+  });
+
+  it("encodes the slug as one path segment", async () => {
+    respondWith(404, apiError("ROOM_TYPE_NOT_FOUND", "Room type not found"));
+
+    await updateAdminRoomTypeStatus("garden/suite", true, COOKIE);
+
+    assert.equal(calls[0]!.url, `${BASE}/api/v1/admin/room-types/garden%2Fsuite/status`);
   });
 });

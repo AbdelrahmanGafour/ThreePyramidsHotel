@@ -188,6 +188,99 @@ describe("the detail page renders every capacity notice", () => {
   });
 });
 
+describe("the detail page accepts the four status tokens", () => {
+  for (const token of [
+    "published",
+    "unpublished",
+    "status-refused",
+    "status-no-active-rooms",
+    "status-uncertain",
+  ] as const) {
+    it(`accepts ${token}`, () => {
+      assert.equal(parseRoomTypeNotice({ action: token }), token);
+      assert.ok(Object.hasOwn(ROOM_TYPE_NOTICES, token));
+    });
+  }
+
+  it("marks only the two confirmations as done", () => {
+    for (const token of ["published", "unpublished"] as const) {
+      assert.equal(ROOM_TYPE_NOTICES[token].tone, "done", token);
+    }
+
+    for (const token of ["status-refused", "status-no-active-rooms", "status-uncertain"] as const) {
+      assert.equal(ROOM_TYPE_NOTICES[token].tone, "warn", token);
+    }
+  });
+
+  it("keeps the status tokens off the create page", () => {
+    for (const token of ["published", "status-no-active-rooms"] as const) {
+      assert.equal(parseNoticeToken({ action: token }, ROOM_TYPE_CREATE_NOTICES), null);
+    }
+  });
+});
+
+describe("the unpublished confirmation wording", () => {
+  const message = ROOM_TYPE_NOTICES.unpublished.message;
+
+  it("says what unpublishing does, and that bookings survive it", () => {
+    assert.match(message, /hidden from the website/i);
+    assert.match(message, /reservations already taken for it are unaffected/i);
+    assert.match(message, /published again/i);
+  });
+
+  it("never suggests unpublishing was blocked or that bookings were touched", () => {
+    for (const forbidden of [/cancelled/i, /could not/i, /blocked/i, /refused/i]) {
+      assert.doesNotMatch(message, forbidden);
+    }
+  });
+});
+
+describe("the no-active-rooms wording", () => {
+  const message = ROOM_TYPE_NOTICES["status-no-active-rooms"].message;
+
+  it("says plainly that nothing was published", () => {
+    assert.match(message, /was not published/i);
+  });
+
+  it("names the requirement an administrator can act on", () => {
+    assert.match(message, /at least one/i);
+    assert.match(message, /in service/i);
+  });
+
+  it("says where to fix it", () => {
+    assert.match(message, /add a room or return one to service/i);
+  });
+
+  it("explains why the rule exists, rather than only refusing", () => {
+    assert.match(message, /unbookable/i);
+  });
+
+  it("names no count, no room number and no reference", () => {
+    // The API returns none, and inventing one would be worse than saying none.
+    assert.doesNotMatch(message, /\d/);
+  });
+});
+
+describe("the status-uncertain wording", () => {
+  const message = ROOM_TYPE_NOTICES["status-uncertain"].message;
+
+  it("reports an unknown outcome as unknown, in both directions", () => {
+    assert.match(message, /could not be confirmed/i);
+    assert.match(message, /may or may not/i);
+    assert.match(message, /published or unpublished/i);
+  });
+
+  it("promises no refreshed status, because that read can fail too", () => {
+    assert.match(message, /if the room type is not shown below/i);
+  });
+
+  it("never tells an administrator to simply try again", () => {
+    // A PATCH that was never answered may already have committed.
+    assert.doesNotMatch(message, /^try again/i);
+    assert.match(message, /check the status shown before trying again/i);
+  });
+});
+
 describe("the capacity-conflict wording", () => {
   const message = ROOM_TYPE_NOTICES["capacity-conflict"].message;
 

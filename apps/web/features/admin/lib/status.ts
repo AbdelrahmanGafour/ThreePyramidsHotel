@@ -64,7 +64,7 @@ export const adminPackagePricingStatus: Record<AdminPackageReservationPricingSta
 /**
  * Whether guests can see a journey.
  *
- * Its own map rather than a reuse of `roomTypeStatus`: "archived" is the
+ * Its own map rather than a reuse of `roomTypeStatus`: "published" is the
  * wrong word for a journey that is simply not being sold this season, and a
  * shared object would mean a later change to room types silently restyling
  * the catalogue.
@@ -87,20 +87,29 @@ export const adminPackageManagementSource: Record<AdminPackageManagementSource, 
 };
 
 /**
- * A room type is either offered or it is not. Archived types stay visible to
- * an administrator but are hidden from the public site, availability and new
- * bookings.
+ * A room type is either published or it is not.
+ *
+ * One boolean, two words. "Unpublished" covers both a room type that has
+ * never been offered and one that has been withdrawn, because the database
+ * does not distinguish them and neither should this: inventing a
+ * draft-versus-archived split in the labels would describe a state that has
+ * nowhere to live. An unpublished room type stays visible to an
+ * administrator and is hidden from the public site, from availability and
+ * from new bookings.
+ *
+ * "Published" rather than "Active", so the badge and the control that changes
+ * it use the same verb.
  */
 export const roomTypeStatus = {
-  active: { label: "Active", tone: "moss", shape: "filled" },
-  archived: { label: "Archived", tone: "muted", shape: "ring" },
+  active: { label: "Published", tone: "moss", shape: "filled" },
+  inactive: { label: "Unpublished", tone: "muted", shape: "ring" },
 } satisfies Record<string, StatusMeta>;
 
 /**
  * A physical room is in service or it is not.
  *
  * Deliberately separate from `roomTypeStatus`, and deliberately not labelled
- * "Archived": a room type is published or archived, a room is available to
+ * "Unpublished": a room type is published or not, a room is available to
  * allocate or taken out of service. The two are different facts about
  * different rows, and one label for both would suggest otherwise.
  */

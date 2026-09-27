@@ -147,6 +147,65 @@ export type AdminRoomTypeCapacityUpdate = {
   capacity: number;
 };
 
+/**
+ * Publishing or archiving one room type.
+ *
+ * Its own contract for the same reason capacity has one: it can be refused.
+ * `isActive` is the value availability and the public catalogue both filter
+ * on, so publishing puts a room type in front of guests and archiving takes
+ * it away — neither belongs in a general text edit that never fails.
+ *
+ * One field, and it is a real boolean. There is no third state: a room type
+ * that has never been published and one that was withdrawn are the same row
+ * to the database, and the difference between them is a story for a screen to
+ * tell, not a column.
+ */
+export type AdminRoomTypeStatusUpdate = {
+  isActive: boolean;
+};
+
+export const INVALID_ROOM_TYPE_STATUS_ERROR_CODE = 'INVALID_ROOM_TYPE_STATUS';
+export const INVALID_ROOM_TYPE_STATUS_ERROR_MESSAGE = 'Invalid room type status';
+
+/** The status body is not one this endpoint accepts. */
+export class InvalidRoomTypeStatusError extends Error {
+  readonly code = INVALID_ROOM_TYPE_STATUS_ERROR_CODE;
+
+  constructor() {
+    super(INVALID_ROOM_TYPE_STATUS_ERROR_MESSAGE);
+    this.name = 'InvalidRoomTypeStatusError';
+  }
+}
+
+export function isInvalidRoomTypeStatusError(
+  error: unknown,
+): error is InvalidRoomTypeStatusError {
+  return error instanceof InvalidRoomTypeStatusError;
+}
+
+export const ROOM_TYPE_NO_ACTIVE_ROOMS_ERROR_CODE = 'ROOM_TYPE_NO_ACTIVE_ROOMS';
+export const ROOM_TYPE_NO_ACTIVE_ROOMS_ERROR_MESSAGE =
+  'Room type cannot be published without at least one active physical room';
+
+/**
+ * Publishing a room type that nothing could be allocated from.
+ *
+ * Availability requires `room_types.is_active AND rooms.is_active`, so a room
+ * type published with no active room of its own is visible on the website and
+ * unbookable in every search — the exact outcome creation avoids by starting
+ * every room type as a draft, and the reason that rule cannot stop at
+ * creation.
+ *
+ * The body carries no count and no room number. How many rooms a type has and
+ * which of them are in service is a read, not something a refusal hands back.
+ */
+export const ROOM_TYPE_NO_ACTIVE_ROOMS_RESPONSE = Object.freeze({
+  error: Object.freeze({
+    code: ROOM_TYPE_NO_ACTIVE_ROOMS_ERROR_CODE,
+    message: ROOM_TYPE_NO_ACTIVE_ROOMS_ERROR_MESSAGE,
+  }),
+});
+
 export const INVALID_ROOM_TYPE_SLUG_ERROR_CODE = 'INVALID_ROOM_TYPE_SLUG';
 export const INVALID_ROOM_TYPE_SLUG_ERROR_MESSAGE = 'Invalid room type slug';
 

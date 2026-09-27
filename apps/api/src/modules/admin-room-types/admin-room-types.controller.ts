@@ -2,6 +2,7 @@ import type { Request, Response } from 'express';
 import {
   changeAdminRoomType,
   changeAdminRoomTypeCapacity,
+  changeAdminRoomTypeStatus,
   createAdminRoomType,
   getAdminRoomType,
   getAdminRoomTypes,
@@ -9,18 +10,22 @@ import {
 import {
   ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_RESPONSE,
   ROOM_TYPE_NOT_FOUND_RESPONSE,
+  ROOM_TYPE_NO_ACTIVE_ROOMS_RESPONSE,
   ROOM_TYPE_SLUG_TAKEN_RESPONSE,
   isInvalidRoomTypeCapacityError,
   isInvalidRoomTypeCreateError,
   isInvalidRoomTypeSlugError,
+  isInvalidRoomTypeStatusError,
   isInvalidRoomTypeUpdateError,
   type AdminRoomTypeCapacityUpdate,
   type AdminRoomTypeCreate,
+  type AdminRoomTypeStatusUpdate,
   type AdminRoomTypeUpdate,
 } from './admin-room-types.types';
 import {
   parseAdminRoomTypeCapacity,
   parseAdminRoomTypeCreate,
+  parseAdminRoomTypeStatus,
   parseAdminRoomTypeUpdate,
   parseRoomTypeSlugParam,
 } from './admin-room-types.validation';
@@ -195,6 +200,62 @@ export async function updateAdminRoomTypeCapacityHandler(
       // The locked body, and nothing else. How many stays conflict, and whose
       // they are, is not something a refusal hands back.
       res.status(409).json(ROOM_TYPE_CAPACITY_BELOW_BOOKED_GUESTS_RESPONSE);
+      return;
+  }
+}
+
+/**
+ * Publishes or archives one room type.
+ *
+ * Its own endpoint rather than a field of the general update, and separate
+ * from capacity beside it: publishing a room type and rewriting its wording
+ * are different operations with different consequences, and only the first
+ * can be refused.
+ *
+ * Order is deliberate and fixed: the slug says which room type is being
+ * changed, so a request naming nothing valid is refused before its body
+ * matters. With both malformed, the slug wins, and the answer is the same
+ * every time.
+ */
+export async function updateAdminRoomTypeStatusHandler(
+  req: Request<{ slug: string }>,
+  res: Response,
+): Promise<void> {
+  let slug: string;
+  let update: AdminRoomTypeStatusUpdate;
+
+  try {
+    slug = parseRoomTypeSlugParam(req.params.slug);
+    update = parseAdminRoomTypeStatus(req.body);
+  } catch (error) {
+    if (isInvalidRoomTypeSlugError(error) || isInvalidRoomTypeStatusError(error)) {
+      res.status(400).json({ error: { code: error.code, message: error.message } });
+      return;
+    }
+
+    throw error;
+  }
+
+  // Deliberately outside the catch above: Express 5 turns a rejected async
+  // handler into a 500, which is what a database failure is.
+  const result = await changeAdminRoomTypeStatus(slug, update.isActive);
+
+  switch (result.outcome) {
+    case 'updated':
+      // The same detail contract every other room-type endpoint answers with,
+      // including an idempotent request that changed nothing.
+      res.status(200).json({ data: result.roomType });
+      return;
+
+    case 'not-found':
+      res.status(404).json(ROOM_TYPE_NOT_FOUND_RESPONSE);
+      return;
+
+    case 'no-active-rooms':
+      // The locked body, and nothing else. How many rooms the type has, and
+      // which of them are out of service, is a read rather than something a
+      // refusal hands back.
+      res.status(409).json(ROOM_TYPE_NO_ACTIVE_ROOMS_RESPONSE);
       return;
   }
 }

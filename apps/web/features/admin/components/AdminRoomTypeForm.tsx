@@ -36,9 +36,9 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
     <>
       {roomType.isActive ? null : (
         <DetailSection
-          id="room-type-archived"
-          title="Archived"
-          note="It is hidden from the website, from availability searches and from new bookings, so no guest can book it. Reservations already taken for it are unaffected. You can still edit the details below and they will be ready if it is offered again — bringing a room type back is not something this page can do yet."
+          id="room-type-unpublished"
+          title="Unpublished"
+          note="It is hidden from the website, from availability searches and from new bookings, so no guest can book it. Reservations already taken for it are unaffected. You can still edit the details below, and Availability further down publishes it once at least one of its rooms is in service."
         >
           {null}
         </DetailSection>
@@ -59,7 +59,7 @@ export function AdminRoomTypeForm({ roomType }: { roomType: AdminRoomTypeDetail 
             {
               label: "Status",
               value: (
-                <StatusBadge meta={roomTypeStatus[roomType.isActive ? "active" : "archived"]} />
+                <StatusBadge meta={roomTypeStatus[roomType.isActive ? "active" : "inactive"]} />
               ),
             },
             // Inventory, not availability: how many rooms belong to this type.

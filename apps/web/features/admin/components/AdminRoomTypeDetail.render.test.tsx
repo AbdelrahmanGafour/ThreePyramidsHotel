@@ -35,7 +35,7 @@ describe("admin room type detail: the shared detail-page shape", () => {
   it("carries the status, the capacity and the rate as masthead badges", () => {
     const masthead = page.slice(page.indexOf("<DetailMasthead"), page.indexOf("<AdminRoomTypeForm"));
 
-    assert.match(masthead, /roomTypeStatus\[data\.isActive \? "active" : "archived"\]/);
+    assert.match(masthead, /roomTypeStatus\[data\.isActive \? "active" : "inactive"\]/);
     assert.match(masthead, /Sleeps \{data\.capacity\}/);
     assert.match(masthead, /formatEgp\(data\.baseNightlyRate\)/);
   });
@@ -125,10 +125,16 @@ describe("admin room type detail: the information still shown", () => {
     }
   });
 
-  it("keeps the archived state as its own section, said in full", () => {
-    assert.match(form, /id="room-type-archived"/);
+  it("keeps the unpublished state as its own section, said in full", () => {
+    assert.match(form, /id="room-type-unpublished"/);
     assert.match(form, /hidden from the website, from availability searches and from new bookings/);
     assert.match(form, /roomType\.isActive \? null :/, "shown only when it applies");
+  });
+
+  it("no longer claims that publishing cannot be done here", () => {
+    // It can now, from the Availability panel. The old copy said otherwise.
+    assert.ok(!form.includes("not something this page can do yet"));
+    assert.match(form, /Availability further down publishes it/);
   });
 
   it("keeps the inventory and gallery operations", () => {

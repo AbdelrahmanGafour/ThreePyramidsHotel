@@ -6,6 +6,7 @@ import {
   planPhysicalRoomStatus,
   planRoomTypeCapacity,
   planRoomTypeCreate,
+  planRoomTypeStatus,
   type InventoryOutcome,
 } from "./inventoryOutcomes.js";
 import { PHYSICAL_ROOM_NOTICES } from "./physicalRooms.js";
@@ -165,6 +166,75 @@ describe("planPhysicalRoomRename", () => {
       kind: "stale",
       revalidate: "detail",
     });
+  });
+});
+
+describe("planRoomTypeStatus", () => {
+  it("reports the direction that was asked for, re-reading both paths", () => {
+    // Both: a room type appearing on or leaving the public site is a change
+    // the catalogue row shows too.
+    assertNotice(planRoomTypeStatus("ok", true), "published", "detail", "list-and-detail");
+    assertNotice(planRoomTypeStatus("ok", false), "unpublished", "detail", "list-and-detail");
+  });
+
+  it("re-reads the detail when publishing is refused for want of a room in service", () => {
+    // The rooms panel beside the notice is where the fix is, so it must show
+    // what is actually in service rather than a copy taken before.
+    assertNotice(
+      planRoomTypeStatus("no-active-rooms", true),
+      "status-no-active-rooms",
+      "detail",
+      "detail",
+    );
+  });
+
+  it("re-reads nothing when the API refused the body", () => {
+    assertNotice(planRoomTypeStatus("invalid-status", true), "status-refused", "detail", "none");
+  });
+
+  it("sends an ended session to the login page", () => {
+    assert.deepEqual(planRoomTypeStatus("unauthenticated", true), { kind: "login" });
+    assert.deepEqual(planRoomTypeStatus("unauthenticated", false), { kind: "login" });
+  });
+
+  it("treats a missing or unusable room type as stale, with no notice of its own", () => {
+    for (const state of ["invalid-reference", "not-found"] as const) {
+      const outcome = planRoomTypeStatus(state, true);
+
+      assert.equal(outcome.kind, "stale");
+      assert.equal(outcome.kind === "stale" && outcome.revalidate, "list");
+    }
+  });
+
+  it("reports an unconfirmed outcome as unknown, in both directions", () => {
+    for (const target of [true, false]) {
+      assertNotice(
+        planRoomTypeStatus("unavailable", target),
+        "status-uncertain",
+        "detail",
+        "list-and-detail",
+      );
+    }
+  });
+
+  it("never reports success for anything but ok", () => {
+    for (const state of [
+      "unauthenticated",
+      "invalid-reference",
+      "invalid-status",
+      "not-found",
+      "no-active-rooms",
+      "unavailable",
+    ] as const) {
+      const outcome = planRoomTypeStatus(state, true);
+
+      if (outcome.kind === "notice") {
+        assert.ok(
+          outcome.token !== "published" && outcome.token !== "unpublished",
+          `${state} must not claim the change happened`,
+        );
+      }
+    }
   });
 });
 

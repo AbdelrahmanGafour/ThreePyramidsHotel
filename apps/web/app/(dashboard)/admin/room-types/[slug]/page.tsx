@@ -11,6 +11,7 @@ import { AdminPhysicalRoomsPanel } from "@/features/admin/components/AdminPhysic
 import { AdminRoomTypeCapacityPanel } from "@/features/admin/components/AdminRoomTypeCapacityPanel";
 import { AdminRoomTypeForm } from "@/features/admin/components/AdminRoomTypeForm";
 import { AdminRoomTypeImagesPanel } from "@/features/admin/components/AdminRoomTypeImagesPanel";
+import { AdminRoomTypeStatusPanel } from "@/features/admin/components/AdminRoomTypeStatusPanel";
 import { ROOM_TYPE_IMAGE_NOTICES, parseRoomTypeImageNotice } from "@/features/admin/lib/imageOutcomes";
 import { PHYSICAL_ROOM_NOTICES } from "@/features/admin/lib/physicalRooms";
 import {
@@ -139,9 +140,13 @@ export default async function AdminRoomTypePage({ params, searchParams }: PagePr
         </p>
       ) : null}
       {/* One stack, so the capacity panel sits beside the T01 panels with the
-          same spacing. Order: masthead, archived note, fixed details, general
-          edit, then capacity — the operation that can be refused comes last
-          and stands on its own. */}
+          same spacing. Order: masthead, unpublished note, fixed details,
+          general edit, then the two operations that can be refused —
+          publishing and capacity — each standing on its own.
+
+          The status panel comes before the rooms panel below it on purpose:
+          publishing needs a room in service, so a refusal is read with the
+          rooms it is about still further down the page. */}
       <DetailPage>
         {/* The same masthead the other detail pages open with: what this
             record is called, how it is identified, and the state it is in. */}
@@ -150,13 +155,14 @@ export default async function AdminRoomTypePage({ params, searchParams }: PagePr
           meta={[<span className="adm-ref" key="slug">{data.slug}</span>]}
           badges={
             <>
-              <StatusBadge meta={roomTypeStatus[data.isActive ? "active" : "archived"]} />
+              <StatusBadge meta={roomTypeStatus[data.isActive ? "active" : "inactive"]} />
               <DetailChip>Sleeps {data.capacity}</DetailChip>
               <DetailChip>{formatEgp(data.baseNightlyRate)} per night</DetailChip>
             </>
           }
         />
         <AdminRoomTypeForm roomType={data} />
+        <AdminRoomTypeStatusPanel slug={data.slug} isActive={data.isActive} />
         <AdminRoomTypeCapacityPanel slug={data.slug} capacity={data.capacity} />
         {/* `null` when the inventory read failed, which the panel reports as
             unavailable rather than as an empty room type. */}
