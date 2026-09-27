@@ -242,17 +242,27 @@ export function Header() {
           </Link>
         </div>
 
+        {/* Three hairlines rather than the word, in the same `h-px bg-current`
+            weight the rest of the header rules use. The button, its ref, its
+            ARIA and its handler are unchanged; only the label became an icon.
+            The single decorative rule that used to sit under the word is gone
+            — it was that word's underline, and there is no word now.
+
+            The lines stay right-aligned, so the icon's outer edge lands where
+            the old rule's did and nothing in the bar shifts. `min-w-11` makes
+            the tap target square at the 44px the old one was tall. */}
         <button
           ref={menuButtonRef}
-          className="grid min-h-11 min-w-16 content-center justify-items-end gap-2 justify-self-end text-[0.58rem] font-black uppercase tracking-[0.18em] min-[1180px]:hidden"
+          className="grid min-h-11 min-w-11 content-center justify-items-end gap-[5px] justify-self-end min-[1180px]:hidden"
           type="button"
           aria-expanded={menuOpen}
           aria-controls="mobile-menu"
           aria-label="Open menu"
           onClick={() => setMenuOpen(true)}
         >
-          <span>Menu</span>
-          <span className="block h-px w-8 bg-current" />
+          <span className="block h-px w-6 bg-current" />
+          <span className="block h-px w-6 bg-current" />
+          <span className="block h-px w-6 bg-current" />
         </button>
       </nav>
 
