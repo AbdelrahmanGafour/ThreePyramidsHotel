@@ -82,6 +82,18 @@ export const adminNavigation: AdminNavItem[] = [
     description: "Hotel details, policies and contact information.",
     available: false,
   },
+  {
+    // Deliberately NOT the `settings` entry above. That one is about the
+    // hotel — its details, policies and contact information. This one is
+    // about the person signed in, and the two would be a confusing single
+    // destination: one is shared configuration, the other is a credential
+    // only its owner may change.
+    key: "account",
+    label: "My account",
+    href: "/admin/account",
+    description: "The email address and password you sign in with.",
+    available: true,
+  },
 ];
 
 /**
@@ -118,6 +130,8 @@ const SIDEBAR_KEYS = [
   "reservations",
   "journeys",
   "packageReservations",
+  // Last: it is the one entry that is about the person rather than the hotel.
+  "account",
 ] as const satisfies readonly AdminNavKey[];
 
 export const sidebarNavigation: AdminNavItem[] = SIDEBAR_KEYS.map((key) => {

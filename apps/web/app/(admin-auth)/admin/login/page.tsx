@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { BrandMark } from "@/shared/components/ui/BrandMark";
 import { AdminLoginForm } from "@/features/admin/components/AdminLoginForm";
+import {
+  ADMIN_LOGIN_NOTICES,
+  parseAdminAccountNoticeToken,
+} from "@/features/admin/lib/adminAccount";
 import { getCurrentAdminSession } from "@/features/admin/server/currentAdminSession";
 import "@/features/admin/admin-login.css";
 
@@ -33,7 +37,18 @@ function LoginCard({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default async function AdminLoginPage() {
+type PageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function AdminLoginPage({ searchParams }: PageProps) {
+  // A fixed token from a closed set, used only to pick one prepared message.
+  // Exactly one thing lands here: a password that was just changed, which
+  // signed every device out. Nothing from the URL is rendered as text, so no
+  // address and no password can reach this page through a query parameter.
+  const noticeToken = parseAdminAccountNoticeToken(await searchParams, ADMIN_LOGIN_NOTICES);
+  const notice = noticeToken ? ADMIN_LOGIN_NOTICES[noticeToken] : null;
+
   const session = await getCurrentAdminSession();
 
   // Only an explicit, confirmed session skips the form. Deliberately outside
@@ -88,6 +103,12 @@ export default async function AdminLoginPage() {
           This area is for hotel staff. Use the account issued to you by the hotel.
         </p>
       </header>
+
+      {notice ? (
+        <p className="adml-alert" data-tone={notice.tone} data-standalone="true" role="status">
+          <span>{notice.message}</span>
+        </p>
+      ) : null}
 
       <AdminLoginForm />
 
