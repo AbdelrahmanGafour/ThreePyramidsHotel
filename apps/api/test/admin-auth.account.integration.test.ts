@@ -212,10 +212,28 @@ describe('PATCH /account/email', () => {
     const stored = await accountRow(moved);
     assert.ok(stored, 'the row should now carry the new address');
 
-    // The internal id and the hash must not appear anywhere in the body.
-    assert.ok(!response.text.includes(stored.id));
-    assert.ok(!response.text.includes(stored.password_hash));
-    assert.ok(!response.text.includes('password'));
+    // Structural, not a substring scan. `stored.id` is a one- or two-digit
+    // bigint while this body legitimately contains digits — the fixture runId
+    // is hex — so `text.includes(stored.id)` matched by coincidence and failed
+    // in CI. Exact keys are what actually proves nothing internal leaked, and
+    // they are stricter: any extra field is refused, not just the id.
+    assert.deepEqual(
+      Object.keys(response.json.data.administrator).sort(),
+      ['displayName', 'email'],
+      'the administrator body must carry the two public fields and nothing else',
+    );
+
+    // These two stay a substring scan, and safely: a scrypt hash is over a
+    // hundred characters and cannot occur by accident, and the word itself
+    // appears in no legitimate part of this response.
+    assert.ok(
+      !response.text.includes(stored.password_hash),
+      'the stored password hash must never appear in a response body',
+    );
+    assert.ok(
+      !response.text.includes('password'),
+      'no password-related field may appear in a response body',
+    );
   });
 
   it('normalises the submitted address before storing it', async () => {
