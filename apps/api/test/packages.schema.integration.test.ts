@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { Pool, type PoolClient } from 'pg';
@@ -31,11 +32,65 @@ const allPackageTables = [...tables, ...laterPackageTables].sort();
 const migrationName = '1790200000000_create-packages-and-package-reservations';
 const ownershipMigrationName = '1790300000000_add-packages-seed-managed';
 const mediaMigrationName = '1790400000000_create-package-media';
-/** Everything this suite applies, in apply order, on top of main's baseline. */
+/** Everything this suite applies, in apply order. Its subject, and only it. */
 const packageMigrations = [migrationName, ownershipMigrationName, mediaMigrationName];
+
+const migrationsDir = path.resolve(__dirname, '../src/db/migrations');
+
+/**
+ * Every migration on disk, in the order node-pg-migrate applies them, named as
+ * `pgmigrations` records them.
+ *
+ * Read from disk rather than listed here, because what this suite needs to
+ * know is not which migrations exist but WHERE ITS OWN sit in the sequence.
+ * The package migrations were once the newest, and the assertions below were
+ * written as though they always would be; `create-notification-outbox` landing
+ * on top of them broke every one of those assumptions at once. Deriving the
+ * position means the next migration to land — wherever it lands — is absorbed
+ * instead of breaking this file again.
+ */
+const allMigrations = readdirSync(migrationsDir)
+  .filter(name => name.endsWith('.cjs'))
+  .sort()
+  .map(name => name.replace(/\.cjs$/, ''));
+
+const firstPackageIndex = allMigrations.indexOf(migrationName);
+const lastPackageIndex = allMigrations.indexOf(mediaMigrationName);
+assert.ok(firstPackageIndex >= 0 && lastPackageIndex >= 0, 'the package migrations must exist on disk');
+assert.deepEqual(allMigrations.slice(firstPackageIndex, lastPackageIndex + 1), packageMigrations,
+  'the package migrations must be contiguous and in this order');
+
 /** Migrations that exist before any package migration. */
-const BASELINE = 6;
+const baselineMigrations = allMigrations.slice(0, firstPackageIndex);
+/**
+ * Migrations that land AFTER the package ones — today, the notification
+ * outbox. They are not this suite's subject and it asserts nothing about what
+ * they contain, but it cannot ignore them either: node-pg-migrate unwinds
+ * strictly newest-first, so anything above the package migrations has to come
+ * off before them and go back on afterwards.
+ */
+const trailingMigrations = allMigrations.slice(lastPackageIndex + 1);
+/** The full expected history above the baseline, in apply order. */
+const aboveBaseline = [...packageMigrations, ...trailingMigrations];
+const BASELINE = baselineMigrations.length;
+// Pinned, not merely derived. The hotel snapshot this suite compares against
+// is the schema those six migrations produce, so a NEW migration inserted
+// before the package ones changes this suite's baseline and needs a look
+// rather than a silently shifted number. A migration added at the END is
+// absorbed by `trailingMigrations` and needs nothing.
+assert.equal(BASELINE, 6, 'a migration was added before the package ones; re-check the baseline here');
+
+/**
+ * How many DOWN steps remove `name` and everything applied after it.
+ *
+ * Only meaningful from a fully-migrated history, which is the state each
+ * caller below is in. This is what replaces the hard-coded step counts: they
+ * silently meant "and nothing is above this", which stopped being true.
+ */
+const stepsDownThrough = (name: string) => allMigrations.length - allMigrations.indexOf(name);
 let baseline: unknown;
+/** The history as this run found it, so `after` can prove it was restored. */
+let initialHistory: string[] = [];
 let connected = false;
 let ready = false;
 let packageId: string;
@@ -95,17 +150,22 @@ before(async () => {
   const historyExists = (await client.query("SELECT to_regclass('public.pgmigrations') AS name")).rows[0].name;
   if (historyExists) {
     const history = (await client.query('SELECT name FROM pgmigrations ORDER BY id')).rows;
-    // Current main's baseline is 6 migrations. Anything above that is this
-    // suite's own subject — the package migration and the ownership column
-    // that follows it — already applied, and this run starts by taking
-    // exactly those back down, newest first.
-    assert.ok(history.length >= BASELINE && history.length <= BASELINE + packageMigrations.length,
+    const applied = history.map((row: { name: string }) => row.name);
+    initialHistory = applied;
+    // The history must be the baseline, then an unbroken prefix of what
+    // follows it: the package migrations, then anything applied after them.
+    // Checked by NAME and in order rather than by count, so a history that
+    // merely happens to be the right length is still rejected.
+    assert.ok(applied.length >= BASELINE && applied.length <= allMigrations.length,
       'Unexpected migration history');
-    if (history.length > BASELINE) {
-      assert.deepEqual(history.slice(BASELINE).map((row: { name: string }) => row.name),
-        packageMigrations.slice(0, history.length - BASELINE));
+    assert.deepEqual(applied.slice(0, BASELINE), baselineMigrations, 'Unexpected migration history');
+    assert.deepEqual(applied.slice(BASELINE), aboveBaseline.slice(0, applied.length - BASELINE),
+      'Unexpected migration history');
+    if (applied.length > BASELINE) {
       await assertNoFixtures();
-      await migrate('down', history.length - BASELINE);
+      // Newest-first, so any trailing migration comes off before the package
+      // ones it sits above. The first test puts all of it back.
+      await migrate('down', applied.length - BASELINE);
     }
   } else {
     assert.equal((await client.query("SELECT count(*)::int AS n FROM pg_tables WHERE schemaname='public'")).rows[0].n, 0,
@@ -123,6 +183,16 @@ after(async () => {
     if (ready) {
       await assertNoFixtures();
       assert.deepEqual(await hotelSnapshot(), baseline, 'Hotel schema/data/sequence state changed');
+      // The history this suite unwound has to be put back exactly. Every
+      // migration ends applied, in order — including the trailing ones this
+      // suite took down only to reach its own subject, whose absence would
+      // leave the database short of a table the rest of the run needs.
+      const finalHistory = (await client.query('SELECT name FROM pgmigrations ORDER BY id')).rows
+        .map((row: { name: string }) => row.name);
+      assert.deepEqual(finalHistory, allMigrations, 'the migration history was not fully restored');
+      if (initialHistory.length === allMigrations.length) {
+        assert.deepEqual(finalHistory, initialHistory, 'the history differs from the one this run found');
+      }
     }
   } finally { client.release(); await pool.end(); }
 });
@@ -142,11 +212,14 @@ it('migrates UP / DOWN / UP, removes owned objects, and makes repeated UP a no-o
   assert.deepEqual(await packageTables(), tables);
   // The ownership column follows the package tables and is applied here, so
   // the rest of this suite runs against the schema a deployment actually has.
-  assert.equal((await migrate('up')).length, packageMigrations.length - 1);
+  // Everything still pending: the remaining package migrations AND whatever
+  // now sits above them. This is the step that restores the trailing
+  // migrations this suite unwound in `before`.
+  assert.equal((await migrate('up')).length, packageMigrations.length - 1 + trailingMigrations.length);
   assert.equal((await migrate('up')).length, 0);
   assert.deepEqual(await packageTables(), allPackageTables, 'later package migrations have applied too');
   assert.equal((await client.query('SELECT count(*)::int AS n FROM pgmigrations')).rows[0].n,
-    BASELINE + packageMigrations.length);
+    allMigrations.length, 'the whole history is applied again');
   t.diagnostic('UP/DOWN/UP/no-op UP passed; existing hotel schema, rows and sequences unchanged');
 });
 
@@ -158,10 +231,13 @@ it('backfills seed_managed as true and reverses cleanly on its own', async t => 
     FROM information_schema.columns
     WHERE table_schema='public' AND table_name='packages' AND column_name='seed_managed'`)).rows[0].n;
 
-  // Down two steps. The ownership column is the subject, but node-pg-migrate
-  // unwinds newest-first and the package-media table now sits above it, so
-  // that comes off first and goes back on at the end.
-  assert.equal((await migrate('down', 2)).length, 2);
+  // The ownership column is the subject, but node-pg-migrate unwinds
+  // newest-first and everything above it — package-media, and now the
+  // notification outbox — has to come off first. The step count is derived so
+  // that stays true as migrations are added, and the same count goes back up
+  // at the end.
+  const ownershipSteps = stepsDownThrough(ownershipMigrationName);
+  assert.equal((await migrate('down', ownershipSteps)).length, ownershipSteps);
   assert.equal(await columnCount(), 0, 'DOWN removes the column');
   assert.deepEqual(await packageTables(), tables, 'and leaves the tables it did not create');
   assert.deepEqual(await hotelSnapshot(), baseline, 'and touches nothing outside packages');
@@ -175,7 +251,7 @@ it('backfills seed_managed as true and reverses cleanly on its own', async t => 
   );
 
   try {
-    assert.equal((await migrate('up', 2)).length, 2);
+    assert.equal((await migrate('up', ownershipSteps)).length, ownershipSteps);
     assert.equal(await columnCount(), 1, 'UP restores the column');
 
     const column = (await client.query(`SELECT data_type, is_nullable, column_default
