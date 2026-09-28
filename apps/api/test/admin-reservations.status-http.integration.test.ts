@@ -49,6 +49,22 @@ const fixture = {
 let roomTypeId: string;
 let roomIds: string[] = [];
 
+/**
+ * Every booking reference this suite creates.
+ *
+ * Confirming a reservation over HTTP also queues a guest notification, and an
+ * outbox row holds no foreign key to anything this suite deletes — so nothing
+ * would obstruct the cleanup below and nothing would remove the row either. It
+ * would sit there permanently due, and the dispatcher suite that runs later
+ * would claim it as an ordinary piece of work, because claiming any due row is
+ * exactly what a dispatcher is supposed to do.
+ *
+ * Collected at the single point reservations are created rather than queried
+ * back in `after`, so a reference cannot be missed by a reservation that was
+ * removed earlier, and the list is authoritative rather than reconstructed.
+ */
+const createdReferences: string[] = [];
+
 const DAY_MS = 86_400_000;
 /** 2099-05-01, far beyond anything real and fixed so runs are identical. */
 const STAY_BASE_UTC = Date.UTC(2099, 4, 1);
@@ -138,6 +154,8 @@ async function insertReservation(status: 'pending' | 'confirmed' | 'cancelled', 
     ],
   );
 
+  createdReferences.push(bookingReference);
+
   return bookingReference;
 }
 
@@ -208,6 +226,13 @@ before(async () => {
 
 after(async () => {
   try {
+    // Scoped to exactly the references this run created. Never an unscoped
+    // DELETE: this database is shared with every other integration suite, and
+    // a sweep of the whole table would destroy rows another suite is asserting
+    // on.
+    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [
+      createdReferences,
+    ]);
     await dbPool.query('DELETE FROM reservations WHERE room_type_id = $1', [roomTypeId]);
     await dbPool.query('DELETE FROM rooms WHERE room_type_id = $1', [roomTypeId]);
     await dbPool.query('DELETE FROM room_types WHERE id = $1', [roomTypeId]);
@@ -218,14 +243,25 @@ after(async () => {
     );
     await dbPool.query('DELETE FROM admin_users WHERE email = $1', [admin.email]);
 
-    const { rows } = await dbPool.query<{ reservations: number; rooms: number; admins: number }>(
+    const { rows } = await dbPool.query<{
+      reservations: number;
+      rooms: number;
+      admins: number;
+      notifications: number;
+    }>(
       `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1)::int AS reservations,
               (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1)::int AS rooms,
-              (SELECT COUNT(*) FROM admin_users WHERE email = $2)::int AS admins`,
-      [roomTypeId, admin.email],
+              (SELECT COUNT(*) FROM admin_users WHERE email = $2)::int AS admins,
+              (SELECT COUNT(*) FROM notification_outbox
+                WHERE booking_reference = ANY($3::text[]))::int AS notifications`,
+      [roomTypeId, admin.email, createdReferences],
     );
 
-    assert.deepEqual(rows[0], { reservations: 0, rooms: 0, admins: 0 }, 'fixtures were not fully removed');
+    assert.deepEqual(
+      rows[0],
+      { reservations: 0, rooms: 0, admins: 0, notifications: 0 },
+      'fixtures were not fully removed',
+    );
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
