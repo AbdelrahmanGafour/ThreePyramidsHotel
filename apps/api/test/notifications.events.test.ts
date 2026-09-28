@@ -141,10 +141,17 @@ const packageConfirmedInput: PackageReservationConfirmedInput = withSurroundingS
   specialRequests: null,
 });
 
-/** Every event, beside the input it was built from, for the shared checks. */
+/**
+ * Every RESERVATION event, beside the input it was built from.
+ *
+ * Narrowed to exclude the contact event deliberately. This suite is about the
+ * four events that describe a booking, and they share a payload shape — a
+ * `bookingReference` in both the column and the payload — that a contact
+ * inquiry does not have. The contact event has its own suite.
+ */
 const ALL_EVENTS: ReadonlyArray<{
   readonly label: string;
-  readonly event: NotificationEvent;
+  readonly event: Exclude<NotificationEvent, { eventType: 'contact_inquiry_received' }>;
   readonly input: unknown;
 }> = [
   {
