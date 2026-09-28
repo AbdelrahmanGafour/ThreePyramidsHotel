@@ -18,6 +18,7 @@ import { availabilityRouter } from './modules/availability/availability.routes';
 import { healthRouter } from './modules/health/health.routes';
 import { createLazyPublicMediaBaseUrlProvider, type PublicMediaBaseUrlProvider } from './modules/media/media.delivery';
 import { createLazyR2MediaStorageProvider, type MediaStorageProvider } from './modules/media/media.storage';
+import { contactRouter } from './modules/contact/contact.routes';
 import { reservationsRouter } from './modules/reservations/reservations.routes';
 import { createRoomsRouter } from './modules/rooms/rooms.routes';
 import { createPackagesRouter } from './modules/packages/packages.routes';
@@ -114,6 +115,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use('/api/v1/package-reservations', packageReservationsRouter);
   app.use('/api/v1/availability', availabilityRouter);
   app.use('/api/v1/reservations', reservationsRouter);
+  // The public contact form. Unauthenticated like the two reservation routes
+  // above it, and mounted after express.json() for the same reason they are.
+  // Accepting an inquiry writes one outbox row and sends nothing: delivery is
+  // the dispatcher's, so a slow provider cannot make this request hang.
+  app.use('/api/v1/contact', contactRouter);
   app.use('/api/v1/admin/auth', adminAuthRouter);
   // Administration reads, guarded inside the router itself.
   app.use('/api/v1/admin/reservations', adminReservationsRouter);
