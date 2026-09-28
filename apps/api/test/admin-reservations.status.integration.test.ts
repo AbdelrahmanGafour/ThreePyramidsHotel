@@ -151,18 +151,42 @@ before(async () => {
 
 after(async () => {
   try {
+    // Confirming a reservation now also queues a guest notification. Those
+    // rows hold no foreign key, so nothing would obstruct the deletes below
+    // and nothing would ever clean them up either — they have to be collected
+    // while the reservations that name them still exist.
+    const { rows: booked } = await dbPool.query<{ booking_reference: string }>(
+      'SELECT booking_reference FROM reservations WHERE room_type_id = $1',
+      [roomTypeId],
+    );
+    const references = booked.map((row) => row.booking_reference);
+
+    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [
+      references,
+    ]);
     await dbPool.query('DELETE FROM reservations WHERE room_type_id = $1', [roomTypeId]);
     await dbPool.query('DELETE FROM rooms WHERE room_type_id = $1', [roomTypeId]);
     await dbPool.query('DELETE FROM room_types WHERE id = $1', [roomTypeId]);
 
-    const { rows } = await dbPool.query<{ reservations: number; rooms: number; room_types: number }>(
+    const { rows } = await dbPool.query<{
+      reservations: number;
+      rooms: number;
+      room_types: number;
+      notifications: number;
+    }>(
       `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1)::int AS reservations,
               (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1)::int AS rooms,
-              (SELECT COUNT(*) FROM room_types WHERE id = $1)::int AS room_types`,
-      [roomTypeId],
+              (SELECT COUNT(*) FROM room_types WHERE id = $1)::int AS room_types,
+              (SELECT COUNT(*) FROM notification_outbox
+                WHERE booking_reference = ANY($2::text[]))::int AS notifications`,
+      [roomTypeId, references],
     );
 
-    assert.deepEqual(rows[0], { reservations: 0, rooms: 0, room_types: 0 }, 'fixtures were not fully removed');
+    assert.deepEqual(
+      rows[0],
+      { reservations: 0, rooms: 0, room_types: 0, notifications: 0 },
+      'fixtures were not fully removed',
+    );
   } finally {
     await closeDatabasePool();
   }
@@ -338,6 +362,136 @@ describe('changeAdminReservationStatus against PostgreSQL', () => {
 
       assert.equal(updated.length, 1, 'exactly one attempt may change the row');
       assert.equal((await readReservation(reference)).status, 'cancelled');
+    });
+  });
+
+  // The three claims about the guest confirmation that only a real database
+  // can settle. Ordering and the "confirm only" rule are proved against a
+  // double in `admin-reservations.notification.test.ts` and not repeated here.
+  describe('the guest confirmation notification', () => {
+    it('commits the confirmed status and the event together', async () => {
+      const reference = await insertReservation('pending');
+
+      const result = await changeAdminReservationStatus(reference, 'confirmed');
+      assert.equal(result.outcome, 'updated');
+
+      // Read back after COMMIT, so both of these are durable facts.
+      assert.equal((await readReservation(reference)).status, 'confirmed');
+
+      const { rows } = await dbPool.query<{
+        event_type: string;
+        recipient_kind: string;
+        recipient_email: string | null;
+        template_key: string;
+        attempts: number;
+        payload: Record<string, unknown>;
+      }>(
+        `SELECT event_type, recipient_kind, recipient_email, template_key, attempts, payload
+           FROM notification_outbox
+          WHERE booking_reference = $1`,
+        [reference],
+      );
+
+      assert.equal(rows.length, 1, 'exactly one event for the confirmed booking');
+
+      const event = rows[0];
+      assert.ok(event, 'the event row is readable after COMMIT');
+      assert.equal(event.event_type, 'room_reservation_confirmed');
+      assert.equal(event.recipient_kind, 'guest');
+      assert.equal(event.recipient_email, `guest-${runId}@example.com`);
+      assert.equal(event.template_key, 'room_confirmed_guest.v1');
+      assert.equal(event.attempts, 0, 'queued, not attempted');
+
+      // The payload agrees with the row that was locked, not with a re-read.
+      assert.equal(event.payload.bookingReference, reference);
+      assert.equal(event.payload.roomTypeName, fixture.name);
+      assert.equal(event.payload.nightlyRate, fixture.nightlyRate);
+      assert.equal(event.payload.totalAmount, fixture.totalAmount);
+      assert.equal(event.payload.nights, 1, 'the stay is one night, counted by the database');
+      assert.ok(!('guestEmail' in event.payload), 'the address is the envelope, not the content');
+    });
+
+    it('queues nothing for a cancellation', async () => {
+      const reference = await insertReservation('pending');
+
+      const result = await changeAdminReservationStatus(reference, 'cancelled');
+      assert.equal(result.outcome, 'updated');
+      assert.equal((await readReservation(reference)).status, 'cancelled');
+
+      const { rows } = await dbPool.query<{ total: number }>(
+        'SELECT COUNT(*)::int AS total FROM notification_outbox WHERE booking_reference = $1',
+        [reference],
+      );
+
+      assert.equal(rows[0]?.total, 0, 'a cancellation owes the guest no message from this slice');
+    });
+
+    it('leaves the reservation pending when the event cannot be written', async () => {
+      // A real connection, real SQL and a real transaction — only the one
+      // notification INSERT is made to fail, which is the one thing a healthy
+      // PostgreSQL will not do on request. A double cannot prove this: the
+      // question is whether the ROLLBACK actually discarded an UPDATE the
+      // database had already applied, and only the database can answer it.
+      const reference = await insertReservation('pending');
+      const failure = Object.assign(new Error('simulated outbox failure'), { code: '23505' });
+
+      const originalConnect = dbPool.connect.bind(dbPool);
+      let attempts = 0;
+      // Held on an object rather than in a plain `let`: the assignment happens
+      // inside the factory closure below, which TypeScript's control flow
+      // cannot see, so a narrowed local would still read as `null` here.
+      const patch: { client: { query?: unknown } | null } = { client: null };
+
+      (dbPool as unknown as { connect: unknown }).connect = async () => {
+        const client = await originalConnect();
+        const realQuery = client.query.bind(client);
+
+        patch.client = client as unknown as { query?: unknown };
+        Object.assign(client, {
+          query(text: unknown, ...rest: unknown[]) {
+            if (typeof text === 'string' && text.includes('INSERT INTO notification_outbox')) {
+              attempts += 1;
+              // Undone as it fires, so this connection is clean before the
+              // service releases it back into the pool. Leaving an own `query`
+              // that rejects every outbox insert would sabotage whichever
+              // later test was handed this connection.
+              delete (client as unknown as { query?: unknown }).query;
+              return Promise.reject(failure);
+            }
+            return (realQuery as (...args: unknown[]) => unknown)(text, ...rest);
+          },
+        });
+
+        return client;
+      };
+
+      try {
+        // Not released here: the service owns and releases the client it
+        // acquires, and a second release would return it to the pool twice.
+        const thrown = await changeAdminReservationStatus(reference, 'confirmed').then(
+          () => null,
+          (error: unknown) => error,
+        );
+
+        assert.equal(thrown, failure, 'the original error reached the caller');
+        assert.equal(attempts, 1, 'no retry');
+      } finally {
+        (dbPool as unknown as { connect: unknown }).connect = originalConnect;
+        if (patch.client) {
+          delete patch.client.query;
+        }
+      }
+
+      // Asked on an ordinary pooled connection, so it can only see committed
+      // data: the UPDATE was rolled back with the event it could not queue.
+      assert.equal((await readReservation(reference)).status, 'pending');
+
+      const { rows } = await dbPool.query<{ total: number }>(
+        'SELECT COUNT(*)::int AS total FROM notification_outbox WHERE booking_reference = $1',
+        [reference],
+      );
+
+      assert.equal(rows[0]?.total, 0, 'no event survived either');
     });
   });
 });

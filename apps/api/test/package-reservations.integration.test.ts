@@ -88,9 +88,13 @@ before(async () => {
 after(async () => {
   try {
     if (server) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
+    // Every booking also queues a hotel notification. Those rows hold no
+    // foreign key, so nothing obstructs the deletes below and nothing would
+    // remove them either.
+    await pool.dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [createdReferences]);
     await pool.dbPool.query('DELETE FROM package_reservations WHERE package_id=$1', [packageId]);
     await pool.dbPool.query('DELETE FROM packages WHERE id=$1', [packageId]);
-    for (const table of ['packages','package_variants','package_rate_tiers','package_content_items','package_itinerary_sections','package_reservations']) {
+    for (const table of ['packages','package_variants','package_rate_tiers','package_content_items','package_itinerary_sections','package_reservations','notification_outbox']) {
       assert.equal((await pool.dbPool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 0, `${table} residue`);
     }
     assert.deepEqual(await hotelRows(), hotelBefore);
@@ -124,6 +128,27 @@ it('creates one pending reservation with authoritative tier and historical snaps
     child_unit_rate_snapshot: '40.00', total_amount_snapshot: '200.00', guest_email: 'integration.guest@example.com',
     special_requests: 'Quiet pickup', child_ages: [10],
   });
+
+  // The reservation and its hotel notification committed together. Read back
+  // after the request returned 201, so both are durable facts — the claim a
+  // scripted client cannot settle, because it never commits anything.
+  const queued = (await pool.dbPool.query(`SELECT event_type, recipient_kind, recipient_email, template_key,
+    attempts, payload FROM notification_outbox WHERE booking_reference=$1`, [payload.bookingReference])).rows;
+  assert.equal(queued.length, 1, 'exactly one event for the created booking');
+  assert.equal(queued[0].event_type, 'package_reservation_created');
+  assert.equal(queued[0].recipient_kind, 'hotel');
+  assert.equal(queued[0].recipient_email, null, 'the hotel address is resolved at send time');
+  assert.equal(queued[0].template_key, 'package_created_hotel.v1');
+  assert.equal(queued[0].attempts, 0, 'queued, not attempted');
+  // The payload agrees with what the guest was quoted, and carries the
+  // normalised email the row stored rather than the address as typed.
+  assert.equal(queued[0].payload.bookingReference, payload.bookingReference);
+  assert.equal(queued[0].payload.packageCode, code);
+  assert.equal(queued[0].payload.totalAmount, '200.00');
+  assert.equal(queued[0].payload.adultUnitRate, '80.00');
+  assert.equal(queued[0].payload.childUnitRate, '40.00');
+  assert.deepEqual(queued[0].payload.childAges, [10]);
+  assert.equal(queued[0].payload.guestEmail, 'integration.guest@example.com');
 });
 
 it('uses the single default variant when variantKey is omitted', async () => {

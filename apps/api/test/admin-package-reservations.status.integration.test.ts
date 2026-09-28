@@ -140,6 +140,12 @@ before(async () => {
 });
 
 after(async () => {
+  // Every confirmation in this suite also queues a guest notification. Those
+  // rows hold no foreign key, so nothing obstructs the deletes below and
+  // nothing would remove them either.
+  await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [
+    createdReferences,
+  ]);
   // Reservations first: they hold the RESTRICT foreign key to the variant.
   await dbPool.query('DELETE FROM package_reservations WHERE booking_reference = ANY($1::text[])', [
     createdReferences,
@@ -318,5 +324,116 @@ describe('package reservation status transitions against PostgreSQL', () => {
     for (const leaked of ['"id"', '"packageId"', '"variantId"', 'package_id', 'variant_id']) {
       assert.ok(!serialized.includes(leaked), `${leaked} must not leave the repository`);
     }
+  });
+  // What only real PostgreSQL can settle about the confirmation event: that
+  // the data-modifying CTE actually writes a row, that a cancellation writes
+  // none, and that a conflict takes the status change down with it. The SQL's
+  // shape and its payload contract are pinned against the shared builder in
+  // `admin-package-reservations.notification.test.ts`.
+  describe('the guest confirmation event', () => {
+    const eventsFor = async (reference: string) =>
+      (await dbPool.query(
+        `SELECT event_type, recipient_kind, recipient_email, template_key, attempts, payload
+           FROM notification_outbox WHERE booking_reference = $1`,
+        [reference],
+      )).rows;
+
+    const statusOf = async (reference: string) =>
+      (await dbPool.query<{ status: string }>(
+        'SELECT status FROM package_reservations WHERE booking_reference = $1',
+        [reference],
+      )).rows[0]?.status;
+
+    it('commits the confirmed status and exactly one event together', async () => {
+      const result = await updateAdminPackageReservationStatus(bookingReference, 'confirmed');
+      assert.equal(result.outcome, 'updated');
+
+      assert.equal(await statusOf(bookingReference), 'confirmed');
+
+      const events = await eventsFor(bookingReference);
+      assert.equal(events.length, 1, 'one statement, one event');
+
+      const event = events[0];
+      assert.ok(event, 'the event row is readable after the statement committed');
+      assert.equal(event.event_type, 'package_reservation_confirmed');
+      assert.equal(event.recipient_kind, 'guest');
+      assert.equal(event.recipient_email, 'amira@example.test');
+      assert.equal(event.template_key, 'package_confirmed_guest.v1');
+      assert.equal(event.attempts, 0, 'queued, not attempted');
+
+      // The payload the CTE built, as jsonb, matching the builder contract.
+      assert.deepEqual(event.payload, {
+        bookingReference,
+        guestFirstName: 'Amira',
+        guestLastName: 'Hassan',
+        packageTitle: 'Fixture package',
+        variantLabel: 'Fixture variant',
+        tourDate: '2026-10-01',
+        adults: 2,
+        children: 0,
+        pricingStatus: 'quoted',
+        adultUnitRate: '100.00',
+        childUnitRate: null,
+        totalAmount: '200.00',
+        currency: 'USD',
+        specialRequests: null,
+      });
+      assert.ok(!('guestEmail' in event.payload), 'the address is the envelope, not the content');
+    });
+
+    it('commits a cancellation with no event at all', async () => {
+      const result = await updateAdminPackageReservationStatus(bookingReference, 'cancelled');
+      assert.equal(result.outcome, 'updated');
+
+      assert.equal(await statusOf(bookingReference), 'cancelled');
+      assert.deepEqual(await eventsFor(bookingReference), []);
+    });
+
+    it('writes no event for a refused transition or a reference nobody booked', async () => {
+      await updateAdminPackageReservationStatus(bookingReference, 'cancelled');
+      // cancelled -> confirmed is refused, so `updated` is empty and the CTE
+      // selects nothing to insert.
+      const refused = await updateAdminPackageReservationStatus(bookingReference, 'confirmed');
+      assert.equal(refused.outcome, 'invalid-transition');
+      assert.deepEqual(await eventsFor(bookingReference), []);
+
+      const missing = generatePackageBookingReference();
+      const notFound = await updateAdminPackageReservationStatus(missing, 'confirmed');
+      assert.equal(notFound.outcome, 'not-found');
+      assert.deepEqual(await eventsFor(missing), []);
+    });
+
+    it('leaves the reservation pending when the event conflicts', async () => {
+      // The strict rule, end to end. An event for this booking already exists,
+      // so the CTE trips `notification_outbox_event_booking_key`. Because it
+      // is one statement, that aborts the UPDATE with it.
+      await dbPool.query(
+        `INSERT INTO notification_outbox
+           (event_type, booking_reference, recipient_kind, recipient_email, template_key, payload)
+         VALUES ('package_reservation_confirmed', $1, 'guest', 'squatter@example.test',
+                 'package_confirmed_guest.v1', '{}'::jsonb)`,
+        [bookingReference],
+      );
+
+      const thrown = await updateAdminPackageReservationStatus(bookingReference, 'confirmed').then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      assert.ok(thrown, 'the conflict was not swallowed');
+      assert.equal((thrown as { code?: string }).code, '23505');
+      assert.equal(
+        (thrown as { constraint?: string }).constraint,
+        'notification_outbox_event_booking_key',
+      );
+
+      // The whole statement rolled back: the status never moved.
+      assert.equal(await statusOf(bookingReference), 'pending', 'the UPDATE went down with the INSERT');
+
+      // And no second event was created beside the one already there.
+      const events = await eventsFor(bookingReference);
+      assert.equal(events.length, 1, 'still exactly one event');
+      assert.equal(events[0]?.recipient_email, 'squatter@example.test', 'the original, untouched');
+    });
   });
 });

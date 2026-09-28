@@ -1,4 +1,7 @@
+import type { PoolClient } from 'pg';
 import { dbPool } from '../../db/pool';
+import { buildRoomReservationCreatedEvent } from '../notifications/notifications.events';
+import { insertNotificationEvent } from '../notifications/notifications.repository';
 import { generateBookingReference } from './booking-reference';
 import {
   findActiveRoomTypeBySlug,
@@ -227,6 +230,28 @@ function multiplyMoney(amount: string, factor: number): string {
 }
 
 const MAX_BOOKING_REFERENCE_ATTEMPTS = 5;
+/**
+ * How this service gets its client.
+ *
+ * A seam, not a framework. It exists so a test can drive the whole transaction
+ * against a double — the ordering of the outbox insert against the COMMIT, and
+ * what happens when that insert fails, cannot be observed from outside and
+ * cannot be provoked against a healthy PostgreSQL. Production never replaces
+ * it, so runtime behaviour is unchanged.
+ *
+ * Mirrors the same seam in `package-reservations.service.ts`.
+ */
+type ClientFactory = () => Promise<PoolClient>;
+
+const defaultClientFactory: ClientFactory = () => dbPool.connect();
+
+let acquireClient: ClientFactory = defaultClientFactory;
+
+/** Test seam. Passing `null` restores the pool. */
+export function __setClientFactoryForTests(factory: ClientFactory | null): void {
+  acquireClient = factory ?? defaultClientFactory;
+}
+
 // PostgreSQL exclusion_violation.
 const EXCLUSION_VIOLATION_SQLSTATE = '23P01';
 
@@ -251,7 +276,7 @@ export async function createReservation(body: unknown): Promise<CreatedReservati
   const input = parseReservationInput(body);
   const totalGuests = input.adults + input.children;
 
-  const client = await dbPool.connect();
+  const client = await acquireClient();
   let inTransaction = false;
 
   try {
@@ -330,6 +355,50 @@ export async function createReservation(body: unknown): Promise<CreatedReservati
         `Could not generate a unique booking reference after ${MAX_BOOKING_REFERENCE_ATTEMPTS} attempts`,
       );
     }
+
+    // The hotel's copy of this booking, queued in the same transaction.
+    //
+    // Here and nowhere else. After the retry loop, so the reference is final —
+    // a rejected candidate never insisted on a row, and an event built inside
+    // the loop would either be written for a reference that lost or have to be
+    // undone. Before the COMMIT, so the booking and the obligation to announce
+    // it become durable together: there is no instant at which this room is
+    // reserved and nobody is going to be told.
+    //
+    // Strict, and allowed to be fatal. `insertNotificationEvent` carries no
+    // `ON CONFLICT` and translates nothing, so a duplicate or a constraint
+    // failure raises straight past here into the catch below, which rolls the
+    // whole reservation back. That is the intended trade: a guest who sees an
+    // error and rebooks costs less than a confirmed stay the hotel never hears
+    // about. `(event_type, booking_reference)` is unique forever and the
+    // reference was just proved free in this very transaction, so the only way
+    // to reach that conflict is corruption — which is exactly when stopping is
+    // right.
+    //
+    // Every field comes from what this transaction already holds. No re-read,
+    // no `process.env`: the hotel's own address is the dispatcher's to resolve
+    // at send time, which is why this event carries none and an unset mail
+    // setting cannot refuse a booking.
+    await insertNotificationEvent(
+      client,
+      buildRoomReservationCreatedEvent({
+        bookingReference,
+        guestFirstName: input.guestFirstName,
+        guestLastName: input.guestLastName,
+        guestEmail: input.guestEmail,
+        guestPhone: input.guestPhone,
+        guestCountry: input.guestCountry,
+        roomTypeName: roomType.name,
+        checkIn: input.checkIn,
+        checkOut: input.checkOut,
+        nights: input.nights,
+        adults: input.adults,
+        children: input.children,
+        nightlyRate: nightlyRateSnapshot,
+        totalAmount,
+        specialRequests: input.specialRequests,
+      }),
+    );
 
     await client.query('COMMIT');
     inTransaction = false;

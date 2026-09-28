@@ -362,8 +362,52 @@ export type AdminPackageReservationStatusChange =
  * explicit projection below — that projection, and the mapper it feeds, are
  * what decide which columns can ever leave this module.
  *
- * Only `status` and `updated_at` are written. Every snapshot column is
- * untouched, and no price is recomputed.
+ * Only `status` and `updated_at` are written on the reservation. Every
+ * snapshot column is untouched, and no price is recomputed.
+ *
+ * ---------------------------------------------------------------------------
+ * THE GUEST'S CONFIRMATION RIDES IN THE SAME STATEMENT
+ *
+ * `notification_event` is a data-modifying CTE, not a second query, because
+ * this path has no transaction to put a second query in. One statement is
+ * already atomic, so the status change and the message the guest is owed
+ * commit together or not at all — the same guarantee the room and journey
+ * creation paths get from a transaction, obtained here without opening one.
+ *
+ * It selects `FROM updated`, so it is strictly dependent on the UPDATE:
+ *
+ *   * the UPDATE matched nothing (not found, or a refused transition) —
+ *     `updated` is empty, the INSERT inserts no rows, and no event exists for
+ *     a change that never happened;
+ *   * the UPDATE matched but this is a cancellation — `WHERE u.status =
+ *     'confirmed'` excludes it. A cancellation is a different conversation and
+ *     a different event, and this slice owes the guest nothing when a booking
+ *     is called off;
+ *   * the UPDATE confirmed the booking — exactly one row is selected, so
+ *     exactly one event is written.
+ *
+ * Nothing references `notification_event` in the outer SELECT and nothing
+ * needs to: PostgreSQL executes a data-modifying WITH clause exactly once and
+ * always to completion, whether or not the primary query reads its output. It
+ * cannot be optimised away, and adding a reference would only distort the
+ * result set.
+ *
+ * Strict, and allowed to be fatal. No `ON CONFLICT`: a conflict on
+ * `UNIQUE (event_type, booking_reference)` means a second confirmation event
+ * for a booking reference that is unique forever, which has no benign reading.
+ * Because it is one statement, that error aborts the whole thing — the status
+ * change included — and propagates untranslated. An administrator who sees an
+ * error and retries costs less than a guest who is never told their journey
+ * was confirmed.
+ *
+ * The payload is built by `jsonb_build_object` here rather than by
+ * `buildPackageReservationConfirmedEvent` in the service, because the event
+ * cannot be assembled in TypeScript without first reading the row back —
+ * which would be the second statement this design exists to avoid. It must
+ * therefore match that builder's contract field for field, and a test pins the
+ * two together. Money keeps its exact stored decimals via `::text`, the tour
+ * date stays a calendar day, and the guest's address goes to `recipient_email`
+ * only — a confirmation does not read a person their own address back.
  */
 export async function updateAdminPackageReservationStatus(
   bookingReference: string,
@@ -377,6 +421,33 @@ export async function updateAdminPackageReservationStatus(
         WHERE booking_reference = $1
           AND status = ANY($3::text[])
        RETURNING *
+     ),
+     notification_event AS (
+       INSERT INTO notification_outbox
+         (event_type, booking_reference, recipient_kind, recipient_email, template_key, payload)
+       SELECT 'package_reservation_confirmed',
+              u.booking_reference,
+              'guest',
+              u.guest_email,
+              'package_confirmed_guest.v1',
+              jsonb_build_object(
+                'bookingReference', u.booking_reference,
+                'guestFirstName', u.guest_first_name,
+                'guestLastName', u.guest_last_name,
+                'packageTitle', u.package_title_snapshot,
+                'variantLabel', u.variant_label_snapshot,
+                'tourDate', u.tour_date::text,
+                'adults', u.adults,
+                'children', u.children,
+                'pricingStatus', u.pricing_status,
+                'adultUnitRate', u.adult_unit_rate_snapshot::text,
+                'childUnitRate', u.child_unit_rate_snapshot::text,
+                'totalAmount', u.total_amount_snapshot::text,
+                'currency', 'USD'::text,
+                'specialRequests', u.special_requests
+              )
+         FROM updated u
+        WHERE u.status = 'confirmed'
      )
      SELECT u.booking_reference,
             u.package_code_snapshot,

@@ -19,6 +19,7 @@ type Pool = typeof import('../src/db/pool.js');
 
 let getAvailability: AvailabilityService['getAvailability'];
 let createReservation: ReservationsService['createReservation'];
+let __setClientFactoryForTests: ReservationsService['__setClientFactoryForTests'];
 let isNoAvailabilityError: ReservationsTypes['isNoAvailabilityError'];
 let dbPool: Pool['dbPool'];
 let closeDatabasePool: Pool['closeDatabasePool'];
@@ -35,6 +36,12 @@ const fixture = {
 
 let roomTypeId: string;
 let roomIds: string[] = [];
+
+/**
+ * References whose reservation is deleted mid-suite, so the outbox row they
+ * left behind can still be found at cleanup time.
+ */
+const outboxReferences: string[] = [];
 
 const guest = (email: string) => ({
   guestFirstName: 'Integration',
@@ -91,7 +98,9 @@ async function availableRoomCountFor(checkIn: string, checkOut: string, adults =
 
 before(async () => {
   ({ getAvailability } = await import('../src/modules/availability/availability.service.js'));
-  ({ createReservation } = await import('../src/modules/reservations/reservations.service.js'));
+  ({ createReservation, __setClientFactoryForTests } = await import(
+    '../src/modules/reservations/reservations.service.js'
+  ));
   ({ isNoAvailabilityError } = await import('../src/modules/reservations/reservations.types.js'));
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 
@@ -119,23 +128,44 @@ before(async () => {
 
 after(async () => {
   try {
+    // Every booking this suite makes now also queues a hotel notification.
+    // Those rows hold no foreign key, so nothing would obstruct the deletes
+    // below and nothing would ever clean them up either — they have to be
+    // collected while the reservations that name them still exist.
+    const { rows: booked } = await dbPool.query<{ booking_reference: string }>(
+      'SELECT booking_reference FROM reservations WHERE room_type_id = $1',
+      [roomTypeId],
+    );
+    const references = [...new Set([...booked.map((row) => row.booking_reference), ...outboxReferences])];
+
+    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [
+      references,
+    ]);
+
     // FK-safe order, scoped to this fixture only.
     await dbPool.query('DELETE FROM reservations WHERE room_type_id = $1', [roomTypeId]);
     await dbPool.query('DELETE FROM rooms WHERE room_type_id = $1', [roomTypeId]);
     await dbPool.query('DELETE FROM room_types WHERE id = $1', [roomTypeId]);
 
-    const { rows } = await dbPool.query<{ reservations: number; rooms: number; room_types: number }>(
+    const { rows } = await dbPool.query<{
+      reservations: number;
+      rooms: number;
+      room_types: number;
+      notifications: number;
+    }>(
       `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1)::int AS reservations,
               (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1)::int AS rooms,
-              (SELECT COUNT(*) FROM room_types WHERE id = $1)::int AS room_types`,
-      [roomTypeId],
+              (SELECT COUNT(*) FROM room_types WHERE id = $1)::int AS room_types,
+              (SELECT COUNT(*) FROM notification_outbox
+                WHERE booking_reference = ANY($2::text[]))::int AS notifications`,
+      [roomTypeId, references],
     );
 
     const remaining = rows[0];
     assert.ok(remaining, 'cleanup verification query returned no row');
     assert.deepEqual(
       remaining,
-      { reservations: 0, rooms: 0, room_types: 0 },
+      { reservations: 0, rooms: 0, room_types: 0, notifications: 0 },
       `fixture ${fixture.slug} was not fully removed: ${JSON.stringify(remaining)}`,
     );
   } finally {
@@ -285,7 +315,10 @@ describe('reservations integration', () => {
       special_requests: 'Integration verification',
     });
 
-    // Leave the fixture clear for the concurrency scenario below.
+    // Leave the fixture clear for the concurrency scenario below. The
+    // notification this booking queued outlives its reservation, so its
+    // reference is remembered for cleanup.
+    outboxReferences.push(created.bookingReference);
     await dbPool.query('DELETE FROM reservations WHERE booking_reference = $1', [created.bookingReference]);
   });
 
@@ -351,5 +384,142 @@ describe('reservations integration', () => {
 
     // Both rooms are now taken for this stay.
     assert.equal(await availableRoomCountFor(checkIn, checkOut), 0);
+  });
+
+  // The two claims about the hotel notification that only a real database can
+  // settle: that the booking and its event become durable together, and that
+  // when the event cannot be written the booking does not survive either.
+  // Everything about ordering and error handling is proved against a double in
+  // `reservations.notification.test.ts` and is not repeated here.
+
+  it('commits the booking and its hotel notification together', async () => {
+    const checkIn = '2030-05-02';
+    const checkOut = '2030-05-04';
+
+    const created = await createReservation({
+      roomTypeSlug: fixture.slug,
+      checkIn,
+      checkOut,
+      adults: 2,
+      children: 0,
+      specialRequests: 'Integration outbox check',
+      ...guest('integration.outbox@example.com'),
+    });
+
+    const { rows } = await dbPool.query<{
+      event_type: string;
+      recipient_kind: string;
+      recipient_email: string | null;
+      template_key: string;
+      attempts: number;
+      payload: Record<string, unknown>;
+    }>(
+      `SELECT event_type, recipient_kind, recipient_email, template_key, attempts, payload
+         FROM notification_outbox
+        WHERE booking_reference = $1`,
+      [created.bookingReference],
+    );
+
+    assert.equal(rows.length, 1, 'exactly one event for the committed booking');
+
+    const event = rows[0];
+    assert.ok(event, 'the event row is readable after COMMIT');
+    assert.equal(event.event_type, 'room_reservation_created');
+    assert.equal(event.recipient_kind, 'hotel');
+    assert.equal(event.recipient_email, null);
+    assert.equal(event.template_key, 'room_created_hotel.v1');
+    assert.equal(event.attempts, 0, 'queued, not attempted');
+
+    // The stored payload agrees with what the guest was told.
+    assert.equal(event.payload.bookingReference, created.bookingReference);
+    assert.equal(event.payload.roomTypeName, fixture.name);
+    assert.equal(event.payload.totalAmount, created.totalAmount);
+    assert.equal(event.payload.nightlyRate, created.nightlyRate);
+    assert.equal(event.payload.guestEmail, 'integration.outbox@example.com');
+
+    outboxReferences.push(created.bookingReference);
+    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = $1', [
+      created.bookingReference,
+    ]);
+    await dbPool.query('DELETE FROM reservations WHERE booking_reference = $1', [
+      created.bookingReference,
+    ]);
+  });
+
+  it('leaves no reservation behind when the outbox insert fails', async () => {
+    // A real connection, real SQL and a real transaction — only the one
+    // notification INSERT is made to fail, which is the one thing a healthy
+    // PostgreSQL will not do on request. A double cannot prove this: the
+    // question is whether the ROLLBACK actually discarded a row the database
+    // had already written, and that can only be asked of the database.
+    const checkIn = '2030-05-10';
+    const checkOut = '2030-05-12';
+    const failure = Object.assign(new Error('simulated outbox failure'), { code: '23505' });
+
+    const client = await dbPool.connect();
+    const realQuery = client.query.bind(client);
+    let outboxAttempts = 0;
+
+    Object.assign(client, {
+      query(text: unknown, ...rest: unknown[]) {
+        if (typeof text === 'string' && text.includes('INSERT INTO notification_outbox')) {
+          outboxAttempts += 1;
+          return Promise.reject(failure);
+        }
+        return (realQuery as (...args: unknown[]) => unknown)(text, ...rest);
+      },
+    });
+
+    __setClientFactoryForTests(async () => client);
+
+    try {
+      const thrown = await createReservation({
+        roomTypeSlug: fixture.slug,
+        checkIn,
+        checkOut,
+        adults: 2,
+        children: 0,
+        ...guest('integration.outbox-failure@example.com'),
+      }).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      assert.equal(thrown, failure, 'the original error reached the caller');
+      assert.equal(outboxAttempts, 1, 'no retry');
+    } finally {
+      __setClientFactoryForTests(null);
+
+      // Not released here. Handing this client to the service through the
+      // factory handed over ownership with it: `createReservation` releases the
+      // client it acquires, in its own `finally`, and by the time this block
+      // runs it already has. A second release would return the same connection
+      // to the pool twice.
+      //
+      // The interception does have to be undone. The object is back in the pool
+      // now and will be handed to somebody else, so leaving an own `query` that
+      // rejects every outbox insert would sabotage whichever later test
+      // happened to be given this connection. Deleting the property restores
+      // the prototype's real method rather than layering another wrapper.
+      delete (client as unknown as { query?: unknown }).query;
+    }
+
+    // Asked on a different connection, so it can only see committed data.
+    const { rows } = await dbPool.query<{ reservations: number; notifications: number }>(
+      `SELECT (SELECT COUNT(*) FROM reservations
+                WHERE room_type_id = $1 AND check_in::text = $2)::int AS reservations,
+              (SELECT COUNT(*) FROM notification_outbox
+                WHERE payload ->> 'guestEmail' = $3)::int AS notifications`,
+      [roomTypeId, checkIn, 'integration.outbox-failure@example.com'],
+    );
+
+    assert.deepEqual(
+      rows[0],
+      { reservations: 0, notifications: 0 },
+      'the reservation rolled back with the notification it could not queue',
+    );
+
+    // And the rooms are free again, which is the guest-visible consequence.
+    assert.equal(await availableRoomCountFor(checkIn, checkOut), 2);
   });
 });

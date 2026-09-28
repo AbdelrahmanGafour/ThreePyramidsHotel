@@ -49,11 +49,19 @@ type Script = {
   failOn?: string;
   /** Make the INSERT throw, standing in for any pre-commit write failure. */
   failInsert?: boolean;
+  /**
+   * Make the outbox insert throw this exact object.
+   * Separate from `failOn` so the error can carry a SQLSTATE and be compared
+   * by identity — the point is that it arrives untranslated.
+   */
+  outboxError?: unknown;
 };
 
 type Recording = {
   statements: string[];
   inserts: number;
+  /** Outbox insert attempts, counted separately from the reservation's. */
+  outboxInserts: number;
   released: boolean;
   releasedWith: unknown;
 };
@@ -63,7 +71,7 @@ type Recording = {
  * every statement, and fails exactly where the script says.
  */
 function scriptedClient(script: Script = {}): { client: PoolClient; log: Recording } {
-  const log: Recording = { statements: [], inserts: 0, released: false, releasedWith: undefined };
+  const log: Recording = { statements: [], inserts: 0, outboxInserts: 0, released: false, releasedWith: undefined };
 
   const client = {
     async query(text: string, _values?: unknown[]): Promise<unknown> {
@@ -94,6 +102,12 @@ function scriptedClient(script: Script = {}): { client: PoolClient; log: Recordi
 
       if (text.includes('FROM package_rate_tiers')) {
         return { rows: [{ adult_unit_rate: '92.00', currency: 'USD' }] };
+      }
+
+      if (text.includes('INSERT INTO notification_outbox')) {
+        log.outboxInserts += 1;
+        if (script.outboxError) throw script.outboxError;
+        return { rows: [], rowCount: 1 };
       }
 
       if (text.includes('INSERT INTO package_reservations')) {
@@ -160,6 +174,33 @@ describe('A. COMMIT throws — outcome is uncertain', () => {
       'a rollback here would claim the reservation was undone, which nobody knows');
   });
 
+  it('queued the hotel event exactly once, inside the same uncertain transaction', async () => {
+    // The event shares the transaction, so it shares the uncertainty. That is
+    // the point: committed, not committed or unknown applies to the
+    // reservation and its notification together, and it is never true that
+    // one exists without the other.
+    const log = useClient({ failOn: 'COMMIT' });
+
+    await assert.rejects(() => createPackageReservation(requestBody()));
+
+    assert.equal(log.outboxInserts, 1, 'exactly one outbox attempt');
+    assert.ok(
+      log.statements.indexOf('COMMIT') >
+        log.statements.findIndex((statement) => statement.startsWith('INSERT INTO notification_outbox')),
+      'the event was queued before the commit was attempted',
+    );
+  });
+
+  it('does not retry the outbox insert after an uncertain commit', async () => {
+    // Nothing may be re-attempted once the outcome is unknown. A second event
+    // would be a second message for a booking that may already exist.
+    const log = useClient({ failOn: 'COMMIT' });
+
+    await assert.rejects(() => createPackageReservation(requestBody()));
+
+    assert.equal(log.outboxInserts, 1);
+  });
+
   it('does not retry the commit or the insert', async () => {
     const log = useClient({ failOn: 'COMMIT' });
 
@@ -217,6 +258,61 @@ describe('B. pre-COMMIT INSERT failure stays a definite failure', () => {
 
     assert.equal(log.released, true);
     assert.notEqual(log.releasedWith, true, 'a cleanly rolled-back connection is reusable');
+  });
+});
+
+describe('B2. pre-COMMIT outbox failure stays a definite failure', () => {
+  /** As PostgreSQL raises a unique violation. */
+  const uniqueViolation = () =>
+    Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+      constraint: 'notification_outbox_event_booking_key',
+    });
+
+  it('rolls back, never commits, and takes the reservation with it', async () => {
+    // A strict insert that fails before COMMIT is an ordinary pre-commit
+    // failure: the transaction is still open, so ending it proves neither the
+    // reservation nor the event was written.
+    const log = useClient({ outboxError: uniqueViolation() });
+
+    await assert.rejects(() => createPackageReservation(requestBody()));
+
+    assert.equal(log.inserts, 1, 'the reservation was attempted');
+    assert.equal(log.outboxInserts, 1, 'the event was attempted once');
+    assert.equal(count(log, 'ROLLBACK'), 1, 'the transaction was definitively ended');
+    assert.equal(count(log, 'COMMIT'), 0, 'nothing may commit after a failed outbox insert');
+  });
+
+  it('propagates the original database error, object identity included', async () => {
+    // Not wrapped in PackageReservationOutcomeUncertainError: this failure is
+    // definite, and dressing it as uncertainty would tell the caller nobody
+    // knows what happened when the rollback proved exactly what happened.
+    const raised = uniqueViolation();
+    useClient({ outboxError: raised });
+
+    const thrown = await createPackageReservation(requestBody()).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    assert.equal(thrown, raised, 'the very same error object');
+    assert.equal((thrown as { code: string }).code, '23505');
+    assert.ok(
+      !(thrown instanceof PackageReservationOutcomeUncertainError),
+      'a definite failure must not be reported as an uncertain one',
+    );
+    assert.ok(!(thrown instanceof PackageReservationError), 'nor as a domain refusal');
+  });
+
+  it('releases the connection normally, since the rollback succeeded', async () => {
+    // The session is describable again, so the connection is reusable. Only
+    // an unanswered COMMIT or a failed ROLLBACK poisons it.
+    const log = useClient({ outboxError: uniqueViolation() });
+
+    await assert.rejects(() => createPackageReservation(requestBody()));
+
+    assert.equal(log.released, true);
+    assert.notEqual(log.releasedWith, true, 'this client is not poisoned');
   });
 });
 

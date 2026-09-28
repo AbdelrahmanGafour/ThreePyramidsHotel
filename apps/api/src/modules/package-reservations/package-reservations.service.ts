@@ -1,5 +1,7 @@
 import type { PoolClient } from 'pg';
 import { dbPool } from '../../db/pool';
+import { buildPackageReservationCreatedEvent } from '../notifications/notifications.events';
+import { insertNotificationEvent } from '../notifications/notifications.repository';
 import { generatePackageBookingReference } from './booking-reference';
 import { calculatePackagePrice, selectVariant, validateOperatingDay } from './package-reservations.pricing';
 import { findReservationPackage, findReservationRate, findReservationVariants, insertPackageReservation } from './package-reservations.repository';
@@ -48,6 +50,49 @@ export async function createPackageReservation(body: unknown): Promise<CreatedPa
     const price = calculatePackagePrice(input, pkg, variant, rate.adultUnitRate);
     const bookingReference = generatePackageBookingReference();
     await insertPackageReservation(client, input, pkg, variant, price, bookingReference);
+    // The hotel's copy of this booking, queued in the same transaction.
+    //
+    // After the insert, so the reference is real; before the COMMIT, so the
+    // booking and the obligation to announce it become durable together. That
+    // placement also settles this path's hardest case: because the event
+    // shares the transaction, the uncertainty of a COMMIT that never answers
+    // applies to both of them equally. Committed, not committed, or unknown —
+    // it is never true that one exists without the other, and the dispatcher
+    // only ever sees rows that committed.
+    //
+    // Strict, and allowed to be fatal. `insertNotificationEvent` carries no
+    // `ON CONFLICT` and translates nothing, so a failure raises into the outer
+    // catch below with `transaction` still true, which rolls the reservation
+    // back and fails definitively. Nothing about the COMMIT handling changes:
+    // this is a pre-commit statement like any other.
+    //
+    // Every field comes from what this transaction already holds — the input,
+    // the locked catalogue snapshot and the price just computed. No re-read,
+    // and no `process.env`: the hotel's own address is the dispatcher's to
+    // resolve at send time, so an unset mail setting cannot refuse a booking.
+    await insertNotificationEvent(
+      client,
+      buildPackageReservationCreatedEvent({
+        bookingReference,
+        guestFirstName: input.guestFirstName,
+        guestLastName: input.guestLastName,
+        guestEmail: input.guestEmail,
+        guestPhone: input.guestPhone,
+        guestCountry: input.guestCountry,
+        packageCode: pkg.code,
+        packageTitle: pkg.title,
+        variantLabel: variant.label,
+        tourDate: input.tourDate,
+        adults: input.adults,
+        children: input.children,
+        childAges: input.childAges,
+        pricingStatus: price.pricingStatus,
+        adultUnitRate: price.adultUnitRate,
+        childUnitRate: price.childUnitRate,
+        totalAmount: price.totalAmount,
+        specialRequests: input.specialRequests,
+      }),
+    );
     const confirmation: CreatedPackageReservation = {
       bookingReference, status: 'pending', package: { code: pkg.code, slug: pkg.slug, title: pkg.title },
       variant: { key: variant.key, label: variant.label }, tourDate: input.tourDate,
