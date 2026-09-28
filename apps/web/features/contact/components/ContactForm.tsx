@@ -3,21 +3,34 @@
 import { useEffect, useRef, useState } from "react";
 import { FormErrorSummary, FormField, FormGroup, RequiredNote, fieldControlClass } from "@/shared/components/ui/form";
 import { contactInfo } from "@/features/contact/data/contactData";
+import {
+  CONTACT_SUBMISSION_ERROR_MESSAGE,
+  submitContactInquiry,
+} from "@/features/contact/lib/contactApi";
 import { hasContactInquiryErrors, validateContactInquiry, type ContactInquiryErrors } from "@/features/contact/lib/validation";
 import { emptyContactInquiryDetails, inquiryTypes, type ContactInquiryDetails } from "@/features/contact/types";
 
-// PRESENTATION/DEMO BEHAVIOR ONLY — there is no backend endpoint yet. This
-// form validates locally and, on a valid submit, only flips local UI state
-// to the confirmation panel below; no request is sent and no inquiry is
-// persisted anywhere. Before production launch, wire the marked line in
-// `handleSubmit` to a real inquiry endpoint — the confirmation copy below
-// describes an outcome ("our team will be in touch") that does not actually
-// happen until that integration exists.
+// Submits to the same-origin bridge at /api/v1/contact, which forwards to
+// Express. The confirmation panel below is shown only after the backend has
+// actually accepted the inquiry — never on a local validation pass alone.
+//
+// Accepting an inquiry queues it; the hotel is emailed asynchronously. Nothing
+// is sent to the visitor, so the copy promises a reply from a person and never
+// claims a confirmation email is on its way.
 export function ContactForm() {
   const [values, setValues] = useState<ContactInquiryDetails>(emptyContactInquiryDetails);
   const [errors, setErrors] = useState<ContactInquiryErrors>({});
   const [submitted, setSubmitted] = useState(false);
   const [sent, setSent] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  /**
+   * The honeypot: a field a real visitor never sees and never fills in.
+   *
+   * Kept in state like any other so it is always sent, blank or not — the
+   * server is what decides. Never mentioned in any visible copy.
+   */
+  const [website, setWebsite] = useState("");
   const confirmationHeadingRef = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
@@ -32,8 +45,13 @@ export function ContactForm() {
     if (submitted) setErrors(validateContactInquiry(next));
   };
 
-  const handleSubmit = (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+
+    // A second submit while one is in flight would send the same inquiry
+    // twice, and the hotel would get two emails about one message.
+    if (pending) return;
+
     setSubmitted(true);
     const nextErrors = validateContactInquiry(values);
     setErrors(nextErrors);
@@ -45,8 +63,22 @@ export function ContactForm() {
       return;
     }
 
-    // DEMO — no network request happens here. See file header comment.
-    setSent(true);
+    setPending(true);
+    setSubmitError(null);
+
+    const result = await submitContactInquiry({ ...values, website });
+
+    setPending(false);
+
+    // The confirmation panel appears for one reason only: the backend said it
+    // accepted the inquiry. A refusal and a fault both leave the visitor here
+    // with everything they typed still in the form, free to try again.
+    if (result.outcome === "success") {
+      setSent(true);
+      return;
+    }
+
+    setSubmitError(CONTACT_SUBMISSION_ERROR_MESSAGE);
   };
 
   const sendAnother = () => {
@@ -54,6 +86,8 @@ export function ContactForm() {
     setErrors({});
     setSubmitted(false);
     setSent(false);
+    setSubmitError(null);
+    setWebsite("");
   };
 
   if (sent) {
@@ -96,6 +130,29 @@ export function ContactForm() {
       </p>
 
       <form onSubmit={handleSubmit} noValidate className="form-panel mt-5">
+        {/*
+          Not a field anybody is meant to fill in. It is removed from the
+          accessibility tree and skipped by keyboard and autofill, so a person
+          using a screen reader or tabbing through never meets it — while an
+          automated submitter that fills every input it finds will.
+
+          `hidden` is deliberately not used: some submitters skip hidden inputs
+          outright, which would defeat the point. It is positioned off-screen
+          instead.
+        */}
+        <div aria-hidden="true" className="absolute left-[-9999px] top-auto h-px w-px overflow-hidden">
+          <label htmlFor="inquiry-website">Do not fill this in</label>
+          <input
+            id="inquiry-website"
+            name="website"
+            type="text"
+            tabIndex={-1}
+            autoComplete="off"
+            value={website}
+            onChange={(event) => setWebsite(event.target.value)}
+          />
+        </div>
+
         <RequiredNote />
 
         <FormGroup title="Your details">
@@ -189,11 +246,20 @@ export function ContactForm() {
         </FormGroup>
 
         <FormErrorSummary
-          message={errorCount ? `Please fix ${errorCount} field${errorCount === 1 ? "" : "s"} above, then send your inquiry.` : null}
+          message={
+            errorCount
+              ? `Please fix ${errorCount} field${errorCount === 1 ? "" : "s"} above, then send your inquiry.`
+              : submitError
+          }
         />
 
-        <button type="submit" className="btn btn-primary mt-6 w-full sm:w-auto sm:min-w-[14rem]">
-          Send inquiry
+        <button
+          type="submit"
+          disabled={pending}
+          aria-busy={pending}
+          className="btn btn-primary mt-6 w-full disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:min-w-[14rem]"
+        >
+          {pending ? "Sending…" : "Send inquiry"}
         </button>
       </form>
     </div>
