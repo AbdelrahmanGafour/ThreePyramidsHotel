@@ -49,7 +49,11 @@ export type NotificationEventType =
   | 'room_reservation_created'
   | 'room_reservation_confirmed'
   | 'package_reservation_created'
-  | 'package_reservation_confirmed';
+  | 'package_reservation_confirmed'
+  // The one event that is not about a reservation. For the four above, the
+  // outbox is a queue in front of durable data; for this one the row IS the
+  // message, because a contact inquiry is stored nowhere else.
+  | 'contact_inquiry_received';
 
 /** Who a message is for, as a role. The address is a separate question. */
 export type NotificationRecipientKind = 'hotel' | 'guest';
@@ -72,7 +76,8 @@ export type NotificationTemplateKey =
   | 'room_created_hotel.v1'
   | 'room_confirmed_guest.v1'
   | 'package_created_hotel.v1'
-  | 'package_confirmed_guest.v1';
+  | 'package_confirmed_guest.v1'
+  | 'contact_received_hotel.v1';
 
 // ---------------------------------------------------------------------------
 // Payloads
@@ -209,12 +214,36 @@ export type PackageReservationConfirmedPayload = {
   readonly specialRequests: string | null;
 };
 
-/** Any of the four payloads. */
+/**
+ * A contact-form inquiry, as the hotel needs to read it.
+ *
+ * Carries the visitor's contact details because the entire point of the
+ * message is that somebody should reply to them — there is no autoresponder
+ * and the visitor gets nothing back automatically.
+ *
+ * `reference` is the inquiry's generated identity, echoed here so the hotel
+ * can quote it. No database id, and emphatically no honeypot: the trap is a
+ * request field that never becomes a fact about the inquiry.
+ */
+export type ContactInquiryReceivedPayload = {
+  readonly reference: string;
+  readonly firstName: string;
+  readonly lastName: string;
+  readonly email: string;
+  /** Null when the visitor did not leave one — the form does not require it. */
+  readonly phone: string | null;
+  readonly inquiryType: string;
+  /** Free text, exactly as typed, newlines and all. */
+  readonly message: string;
+};
+
+/** Any of the payloads. */
 export type NotificationPayload =
   | RoomReservationCreatedPayload
   | RoomReservationConfirmedPayload
   | PackageReservationCreatedPayload
-  | PackageReservationConfirmedPayload;
+  | PackageReservationConfirmedPayload
+  | ContactInquiryReceivedPayload;
 
 // ---------------------------------------------------------------------------
 // The event
@@ -265,6 +294,15 @@ export type NotificationEvent =
       readonly recipientEmail: string;
       readonly templateKey: 'package_confirmed_guest.v1';
       readonly payload: PackageReservationConfirmedPayload;
+    }
+  | {
+      readonly eventType: 'contact_inquiry_received';
+      /** The inquiry's generated reference, in the column named for bookings. */
+      readonly bookingReference: string;
+      readonly recipientKind: 'hotel';
+      readonly recipientEmail: null;
+      readonly templateKey: 'contact_received_hotel.v1';
+      readonly payload: ContactInquiryReceivedPayload;
     };
 
 /**
@@ -349,6 +387,24 @@ export type PackageReservationCreatedInput = {
   readonly childUnitRate: string | null;
   readonly totalAmount: string | null;
   readonly specialRequests: string | null;
+};
+
+/**
+ * What the contact flow holds: a generated reference plus the validated body.
+ *
+ * Deliberately not `ContactInquiryInput` from the contact module. Keeping this
+ * module dependent on nothing is what lets five different flows call it, and a
+ * change to the contact request contract should not silently change what an
+ * email contains.
+ */
+export type ContactInquiryReceivedInput = {
+  readonly reference: string;
+  readonly firstName: string;
+  readonly lastName: string;
+  readonly email: string;
+  readonly phone: string | null;
+  readonly inquiryType: string;
+  readonly message: string;
 };
 
 /** What the package status change returns from its own conditional UPDATE. */

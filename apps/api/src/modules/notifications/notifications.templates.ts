@@ -1,4 +1,5 @@
 import type {
+  ContactInquiryReceivedPayload,
   NotificationTemplateKey,
   PackageReservationConfirmedPayload,
   PackageReservationCreatedPayload,
@@ -140,6 +141,8 @@ function money(amount: string, currency: string): string {
 
 /** A missing amount, said plainly rather than invented as 0. */
 const NOT_APPLICABLE = 'Not applicable';
+/** A detail the visitor chose not to give, which is different from one that does not apply. */
+const NOT_PROVIDED = 'Not provided';
 const AWAITING_CONFIRMATION = 'To be confirmed';
 
 const PRICING_STATUS_LABEL = {
@@ -346,6 +349,54 @@ function packageConfirmedGuest(payload: PackageReservationConfirmedPayload): Ema
   };
 }
 
+/**
+ * A contact-form inquiry, for the hotel.
+ *
+ * The one template whose content came from an anonymous stranger rather than
+ * from a booking this system created. Every field below is attacker-influenced
+ * — the name, the address, and above all the free-text message — and every one
+ * of them goes through the same document model as everything else, so `toHtml`
+ * escapes them on the way out and `toText` writes no markup at all.
+ *
+ * The message is a `note` block precisely so its line breaks survive: notes
+ * are the only thing that becomes `<br />`, and only after escaping.
+ */
+function contactReceivedHotel(payload: ContactInquiryReceivedPayload): EmailDocument {
+  return {
+    subject: `New contact inquiry: ${payload.reference}`,
+    title: 'New contact inquiry',
+    intro:
+      `${payload.firstName} ${payload.lastName} sent an inquiry about ` +
+      `${payload.inquiryType.toLowerCase()} through the website.`,
+    blocks: [
+      {
+        kind: 'details',
+        heading: 'Inquiry',
+        rows: [
+          { label: 'Reference', value: payload.reference },
+          { label: 'About', value: payload.inquiryType },
+        ],
+      },
+      {
+        kind: 'details',
+        heading: 'Who to reply to',
+        rows: [
+          { label: 'Name', value: `${payload.firstName} ${payload.lastName}` },
+          { label: 'Email', value: payload.email },
+          // Said explicitly rather than omitted: whoever reads this is deciding
+          // how to reply, and "no phone" is part of that answer.
+          { label: 'Phone', value: payload.phone === null ? NOT_PROVIDED : payload.phone },
+        ],
+      },
+      {
+        kind: 'note',
+        heading: 'Their message',
+        body: payload.message,
+      },
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The two renderers
 // ---------------------------------------------------------------------------
@@ -453,6 +504,7 @@ export type NotificationTemplatePayload = {
   'room_confirmed_guest.v1': RoomReservationConfirmedPayload;
   'package_created_hotel.v1': PackageReservationCreatedPayload;
   'package_confirmed_guest.v1': PackageReservationConfirmedPayload;
+  'contact_received_hotel.v1': ContactInquiryReceivedPayload;
 };
 
 const TEMPLATES: TemplateBuilders = {
@@ -460,6 +512,7 @@ const TEMPLATES: TemplateBuilders = {
   'room_confirmed_guest.v1': roomConfirmedGuest,
   'package_created_hotel.v1': packageCreatedHotel,
   'package_confirmed_guest.v1': packageConfirmedGuest,
+  'contact_received_hotel.v1': contactReceivedHotel,
 };
 
 /**

@@ -1,4 +1,5 @@
 import type {
+  ContactInquiryReceivedInput,
   NotificationEventOf,
   PackageReservationConfirmedInput,
   PackageReservationCreatedInput,
@@ -200,6 +201,46 @@ export function buildPackageReservationConfirmedEvent(
       totalAmount: input.totalAmount,
       currency: 'USD',
       specialRequests: input.specialRequests,
+    },
+  };
+}
+
+/**
+ * A contact-form inquiry, for the hotel.
+ *
+ * The only event here that is not about a reservation, and the only one whose
+ * payload is the sole copy of what it describes — nothing else stores the
+ * visitor's message. It follows the same rules as the rest regardless: pure,
+ * field by field, never spread.
+ *
+ * `recipientEmail` is null because this is a hotel event: the address is
+ * deployment configuration the dispatcher resolves. The VISITOR's address
+ * lives in the payload, as content, because replying to it is the entire
+ * purpose of the message — and because there is no autoresponder, nothing ever
+ * sends anything back to it automatically.
+ *
+ * The honeypot has no route into this function: it is not on the input type,
+ * so it cannot reach a payload even by accident.
+ */
+export function buildContactInquiryReceivedNotification(
+  input: ContactInquiryReceivedInput,
+): NotificationEventOf<'contact_inquiry_received'> {
+  return {
+    eventType: 'contact_inquiry_received',
+    // The inquiry's generated reference, carried in the column named for
+    // bookings. Reuse, not a claim that an inquiry is a booking.
+    bookingReference: input.reference,
+    recipientKind: 'hotel',
+    recipientEmail: null,
+    templateKey: 'contact_received_hotel.v1',
+    payload: {
+      reference: input.reference,
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+      phone: input.phone,
+      inquiryType: input.inquiryType,
+      message: input.message,
     },
   };
 }
