@@ -62,7 +62,7 @@ export function BookingStrip() {
           ))}
           <Link
             href="/booking"
-            className="reservation-action mx-4 min-h-11 min-w-[150px] text-[0.56rem] font-black uppercase tracking-[0.18em] text-brass"
+            className="reservation-action mx-4 min-h-11 min-w-[150px] text-[0.56rem] font-black uppercase tracking-[0.18em] text-ivory"
           >
             Reserve your stay -&gt;
           </Link>
@@ -80,7 +80,7 @@ export function BookingStrip() {
             Reservation Desk / Giza
             <span className="h-px w-3 bg-brass/40" />
           </div>
-          <Link href="/booking" className="reservation-action flex min-h-11 items-center justify-center text-[0.62rem] font-black uppercase tracking-[0.18em] text-brass">
+          <Link href="/booking" className="reservation-action flex min-h-11 items-center justify-center text-[0.62rem] font-black uppercase tracking-[0.18em] text-ivory">
             Reserve your stay -&gt;
           </Link>
         </div>

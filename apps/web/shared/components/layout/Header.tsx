@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { BrandMark } from "@/shared/components/ui/BrandMark";
+import { pickActiveSection } from "@/shared/components/layout/headerScrollspy";
 import { navItems } from "@/features/home/data/homeData";
 
 const leftNavItems = navItems.slice(0, 3);
@@ -89,15 +90,35 @@ export function Header() {
 
     if (!sections.length) return;
 
+    // Visibility accumulated ACROSS callbacks. An observer callback carries
+    // only the entries whose state changed, so deciding from one batch could
+    // not see a section that was already sitting in the detection band.
+    const visibleIds = new Set<string>();
+    const orderedIds = sections.map((section) => section.id);
+
     const observer = new IntersectionObserver(
       (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        for (const entry of entries) {
+          if (entry.isIntersecting) visibleIds.add(entry.target.id);
+          else visibleIds.delete(entry.target.id);
+        }
 
-        if (visible?.target.id) setActiveAnchor(visible.target.id);
+        // Topmost section in the band wins. Deliberately NOT by
+        // `intersectionRatio`: that is normalised to each target's own area, so
+        // against a band this narrow a tall Gallery loses to a shorter
+        // Location. `pickActiveSection` is not given ratios at all.
+        const next = pickActiveSection(orderedIds, visibleIds);
+
+        // `null` is "no opinion", not "clear it". Leaving the previous value
+        // alone is what keeps the last section highlighted once the guest
+        // reaches `#reserve` and the footer, neither of which is observed.
+        if (next) setActiveAnchor(next);
       },
-      { rootMargin: "-38% 0px -52% 0px", threshold: [0.12, 0.28, 0.44] },
+      // `threshold: 0` is honest about what this band can report: shrunk to
+      // ~10% of viewport height, a tall section's ratio never reaches the old
+      // 0.12, so those thresholds never fired for it and the callbacks were
+      // arriving on the `isIntersecting` transition regardless.
+      { rootMargin: "-38% 0px -52% 0px", threshold: 0 },
     );
 
     sections.forEach((section) => observer.observe(section));

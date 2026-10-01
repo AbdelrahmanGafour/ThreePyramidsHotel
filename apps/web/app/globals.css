@@ -408,7 +408,8 @@ img {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--brass);
+  /* Resting state is ivory; the brass accent is the hover/focus reward. */
+  color: var(--ivory);
   transition:
     color 420ms var(--ease-luxury),
     transform 420ms var(--ease-luxury);
@@ -429,7 +430,7 @@ img {
 
 .reservation-action:hover,
 .reservation-action:focus-visible {
-  color: var(--ivory);
+  color: var(--brass);
   transform: translateX(1px);
 }
 

@@ -6,7 +6,7 @@ export function RooftopSection() {
   return (
     <section
       id="rooftop"
-      className="relative overflow-hidden bg-[linear-gradient(112deg,var(--terracotta)_0%,var(--clay)_48%,var(--limestone)_48%,var(--ivory)_100%)] py-[clamp(4.25rem,7vw,7rem)] text-ink max-md:bg-clay max-md:text-ivory"
+      className="relative overflow-hidden bg-[linear-gradient(112deg,var(--terracotta)_0%,var(--clay)_48%,var(--limestone)_48%,var(--ivory)_100%)] py-[clamp(4.25rem,7vw,7rem)] text-ink max-lg:bg-none max-lg:bg-clay max-lg:text-ivory"
     >
       <motion.div
         className="grid gap-7 px-[var(--page-x)] lg:grid-cols-[0.72fr_1.28fr] lg:items-center"

@@ -1,6 +1,28 @@
 import Link from "next/link";
 import { BrandMark } from "@/shared/components/ui/BrandMark";
-import { FooterSand } from "@/shared/components/layout/footer/FooterSand";
+
+/**
+ * The footer's decorative layer.
+ *
+ * A fine vertical hairline rhythm — fluted limestone, a colonnade read
+ * edge-on — with a brass line reinforcing every third interval so the pattern
+ * carries warmth without becoming texture. Two flat gradients, no canvas, no
+ * animation, nothing to schedule or tear down.
+ *
+ * The pitch is in fixed pixels rather than a viewport unit on purpose: the
+ * rhythm is then physically the same on a phone and on a desktop, which a
+ * `vw`-based pitch would not be.
+ *
+ * The mask fades the whole thing out above the navigation columns. The
+ * decoration belongs behind the wordmark; the dense small-caps links and legal
+ * line below sit on the plain gradient, where contrast is highest.
+ */
+const FLUTES = [
+  "repeating-linear-gradient(90deg, rgba(244,238,229,0.08) 0px, rgba(244,238,229,0.08) 1px, transparent 1px, transparent 56px)",
+  "repeating-linear-gradient(90deg, rgba(176,138,81,0.11) 0px, rgba(176,138,81,0.11) 1px, transparent 1px, transparent 168px)",
+].join(", ");
+
+const FLUTE_FADE = "linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 38%, transparent 76%)";
 
 // Every entry here is a real, working destination. `/#id` resolves correctly
 // from any route — including the homepage itself, where Next's Link treats
@@ -40,7 +62,11 @@ export function Footer() {
   return (
     <footer className="relative overflow-hidden bg-[linear-gradient(180deg,var(--espresso),var(--ink))] px-[var(--page-x)] py-[clamp(1.5rem,2.6vw,2.25rem)] text-ivory">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,rgba(176,138,81,0.58),transparent)]" />
-      <FooterSand />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{ backgroundImage: FLUTES, maskImage: FLUTE_FADE, WebkitMaskImage: FLUTE_FADE }}
+      />
       <div className="relative mx-auto max-w-[1240px]">
         <div className="grid justify-items-center text-center">
           <BrandMark className="h-5 w-10 text-brass md:h-6 md:w-12" />

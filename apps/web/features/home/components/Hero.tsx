@@ -223,7 +223,7 @@ export function Hero() {
           {current.note}
         </motion.p>
 
-        <div className="hero-chapter-rail absolute bottom-[clamp(1rem,3vw,2rem)] left-[var(--page-x)] z-20 grid w-[min(42rem,calc(100vw-(var(--page-x)*2)))] grid-cols-3 gap-3 md:gap-5">
+        <div className="hero-chapter-rail absolute bottom-11 left-[var(--page-x)] z-20 grid w-[min(42rem,calc(100vw-(var(--page-x)*2)))] grid-cols-3 gap-3 md:bottom-[clamp(1rem,3vw,2rem)] md:gap-5">
           {slides.map((slide, index) => {
             const selected = active === index;
 
@@ -241,7 +241,7 @@ export function Hero() {
                 <span className={`text-[0.62rem] font-black tracking-[0.2em] ${selected ? "text-brass" : ""}`}>
                   {slide.number}
                 </span>
-                <span className="mt-1 hidden text-[0.58rem] font-extrabold uppercase tracking-[0.19em] sm:block">
+                <span className="mt-1 block text-[0.58rem] font-extrabold uppercase tracking-[0.19em]">
                   {slide.chapter}
                 </span>
                 <span className="mt-2 h-px overflow-hidden bg-ivory/18 md:mt-3">
