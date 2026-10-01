@@ -30,7 +30,7 @@ export function FaqAccordion() {
               <li key={category.name}>
                 <a
                   href={`#${slugify(category.name)}`}
-                  className="inner-focus inline-flex min-h-11 items-center border border-ink/35 px-4 text-[0.9375rem] font-semibold text-ink transition-colors hover:border-ink hover:bg-ink hover:text-ivory"
+                  className="inner-focus inline-flex min-h-11 items-center border border-ink/35 px-4 text-[0.9375rem] font-semibold text-ink transition-colors hover:border-ink hover:bg-ink hover:text-ivory!"
                 >
                   {category.name}
                 </a>
