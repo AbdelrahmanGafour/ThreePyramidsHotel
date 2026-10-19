@@ -1,13 +1,17 @@
-// Turns MEDIA_PUBLIC_BASE_URL into the one thing next.config.ts needs: a
+// Turns MEDIA_PUBLIC_BASE_URL into the one thing next.config.mjs needs: a
 // narrow images.remotePatterns entry, or nothing at all.
 //
 // This is build-time configuration, not browser runtime code, and it is
 // deliberately NOT guarded by `server-only`: that package enforces the
-// server/client boundary *inside* the Next app, and next.config.ts sits
+// server/client boundary *inside* the Next app, and next.config.mjs sits
 // outside that boundary entirely — it is plain Node, evaluated once when the
 // build or dev server starts, never bundled for either side. Importing
-// `server-only` here would be a boundary this file does not need and next.config.ts
+// `server-only` here would be a boundary this file does not need and next.config.mjs
 // cannot honour.
+//
+// Plain JavaScript for the same reason next.config.mjs is: Node imports it
+// directly while Next loads its configuration, with no TypeScript step in
+// between (see next.config.mjs). Its types live in mediaPublicBaseUrl.d.ts.
 //
 // Deliberately independent of anything on the API side. The API's own
 // `parsePublicMediaBaseUrl` (apps/api/src/modules/media/media.config.ts)
@@ -31,28 +35,20 @@ const VARIABLE_NAME = "MEDIA_PUBLIC_BASE_URL";
  * build log or an error report is not this function's decision to make.
  */
 export class MediaConfigurationError extends Error {
-  constructor(problem: string) {
+  /** @param {string} problem */
+  constructor(problem) {
     super(`${VARIABLE_NAME} ${problem}`);
     this.name = "MediaConfigurationError";
   }
 }
 
-export function isMediaConfigurationError(error: unknown): error is MediaConfigurationError {
+/**
+ * @param {unknown} error
+ * @returns {error is MediaConfigurationError}
+ */
+export function isMediaConfigurationError(error) {
   return error instanceof MediaConfigurationError;
 }
-
-/**
- * Shaped to be spread directly into one entry of `images.remotePatterns` —
- * `protocol`, `hostname` and `port` exactly as Next's own `RemotePattern`
- * type wants them, so `next.config.ts` does no further transformation.
- */
-export type MediaRemotePattern = {
-  protocol: "https";
-  hostname: string;
-  /** A literal port, or `""` meaning none — Next's own convention. */
-  port: string;
-  pathname: string;
-};
 
 /**
  * Resolves the one remote pattern this app's images may load from, or `null`
@@ -76,8 +72,11 @@ export type MediaRemotePattern = {
  * `mediaStorageKey()`/`composePublicMediaUrl()` ever produce on the API side
  * (`media/<uuid>.webp`) and nothing else the configured origin might also
  * serve.
+ *
+ * @param {string | undefined} value
+ * @returns {import("./mediaPublicBaseUrl").MediaRemotePattern | null}
  */
-export function resolveMediaRemotePattern(value: string | undefined): MediaRemotePattern | null {
+export function resolveMediaRemotePattern(value) {
   if (value === undefined) {
     return null;
   }
@@ -86,7 +85,8 @@ export function resolveMediaRemotePattern(value: string | undefined): MediaRemot
     throw new MediaConfigurationError("must not have leading or trailing whitespace");
   }
 
-  let url: URL;
+  /** @type {URL} */
+  let url;
 
   try {
     url = new URL(value);
