@@ -1,5 +1,16 @@
-import type { NextConfig } from "next";
-import { resolveMediaRemotePattern } from "./shared/config/mediaPublicBaseUrl";
+// Plain ESM JavaScript, not next.config.ts, and built with `next build
+// --webpack` (see apps/web/package.json), so the production build never
+// depends on Next's native SWC binary. That binary needs glibc 2.29+, and the
+// host's build machine ships an older glibc, so Next falls back to its
+// WebAssembly SWC build there. On that fallback:
+//
+// - a next.config.ts is compiled to an ES module whose import of a `.ts`
+//   helper cannot be resolved, so the configuration fails to load. This file,
+//   and the helper it imports, are therefore JavaScript Node loads directly.
+// - Turbopack refuses to run at all, so the build uses webpack.
+//
+// Keep both: turning either back reintroduces the build failure on that host.
+import { resolveMediaRemotePattern } from "./shared/config/mediaPublicBaseUrl.js";
 
 // `MEDIA_PUBLIC_BASE_URL` is read here, once, at build/dev-start time — the
 // only place this app's Next configuration needs to know where admin-uploaded
@@ -15,7 +26,8 @@ import { resolveMediaRemotePattern } from "./shared/config/mediaPublicBaseUrl";
 // malformed `API_BASE_URL` already behaves in `apiBaseUrl.ts`.
 const mediaRemotePattern = resolveMediaRemotePattern(process.env.MEDIA_PUBLIC_BASE_URL);
 
-const nextConfig: NextConfig = {
+/** @type {import("next").NextConfig} */
+const nextConfig = {
   reactStrictMode: true,
   images: {
     // Only ever this one entry, or none. No `images.domains` (deprecated),
