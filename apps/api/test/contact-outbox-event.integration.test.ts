@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../src/db/pool';
 import { runner } from 'node-pg-migrate';
 
 // The one constraint this migration widens, proved against real PostgreSQL.

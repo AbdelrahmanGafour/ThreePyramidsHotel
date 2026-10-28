@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../src/db/pool';
 import { runner } from 'node-pg-migrate';
 
 // The `notification_outbox` schema, proved against real PostgreSQL.

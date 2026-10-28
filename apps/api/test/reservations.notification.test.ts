@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, before, describe, it } from 'node:test';
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../src/db/pool';
 
 // Room creation's outbox wiring, against a scripted client.
 //

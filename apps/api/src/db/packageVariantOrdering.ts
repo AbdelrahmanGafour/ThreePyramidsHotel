@@ -1,4 +1,4 @@
-import type { QueryResult, QueryResultRow } from 'pg';
+import type { QueryResult, QueryResultRow } from './pool';
 
 /**
  * Moving package variants into new positions without tripping the unique

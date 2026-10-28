@@ -1,4 +1,4 @@
-import type { QueryResult, QueryResultRow } from 'pg';
+import type { QueryResult, QueryResultRow } from '../../db/pool';
 import { dbPool } from '../../db/pool';
 import { allowedSourceStatusesFor } from './admin-package-reservations.status';
 import type {

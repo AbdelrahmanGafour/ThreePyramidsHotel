@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
-import { Pool, type PoolClient } from 'pg';
+import { Pool, type PoolClient } from '../src/db/pool';
 import { runner } from 'node-pg-migrate';
 import { seedBrochurePackageCatalogue, type BrochurePackageSeed } from '../src/db/seeds/packageCatalogueSeed';
 

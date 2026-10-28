@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../pool';
 import {
   isUnreadableVariantSortOrderError,
   isVariantSortOrderExhaustedError,

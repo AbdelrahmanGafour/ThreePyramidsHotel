@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../../db/pool';
 import type { NotificationEvent } from './notifications.types';
 
 /**

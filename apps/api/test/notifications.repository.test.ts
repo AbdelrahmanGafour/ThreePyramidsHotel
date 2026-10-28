@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../src/db/pool';
 import {
   buildPackageReservationCreatedEvent,
   buildRoomReservationConfirmedEvent,
@@ -315,7 +315,7 @@ describe('insertNotificationEvent, what it refuses to do', () => {
     const { readFileSync } = await import('node:fs');
     const code = readFileSync('src/modules/notifications/notifications.repository.ts', 'utf8');
 
-    assert.match(code, /^import type \{ PoolClient \} from 'pg';/);
+    assert.match(code, /^import type \{ PoolClient \} from '../src/db/pool';/);
     assert.deepEqual(
       [...code.matchAll(/^import (?:type )?.*from '([^']+)';$/gm)].map((match) => match[1]),
       ['pg', './notifications.types'],

@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../../db/pool';
 import { dbPool } from '../../db/pool';
 import { deleteMediaAssetById, insertMediaAsset } from '../media/media.repository';
 import { normalizeImage } from '../media/media.processing';

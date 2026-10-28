@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../../db/pool';
 import type { AdminPackageImage } from './admin-package-media.types';
 
 // Persistence for `package_media`, and nothing else.

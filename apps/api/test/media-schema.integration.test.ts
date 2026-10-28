@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../src/db/pool';
 import { createHash, randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 

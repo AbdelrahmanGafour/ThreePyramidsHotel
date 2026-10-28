@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../src/db/pool';
 
 // Proves the room-type lock conflict against real PostgreSQL, with two real
 // connections. Nothing is mocked and nothing is timed: the assertion is the

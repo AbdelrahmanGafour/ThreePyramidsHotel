@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../../db/pool';
 import { STORED_CONTENT_TYPE, type StoredContentType } from './media.types';
 
 /**

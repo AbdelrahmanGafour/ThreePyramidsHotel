@@ -19,7 +19,7 @@
 // below for the actual queries.
 // ═══════════════════════════════════════════════════════════════════════════
 
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../pool';
 import { closeDatabasePool, dbPool } from '../pool';
 import { decideSeedReconciliation } from './seed-reconciliation';
 

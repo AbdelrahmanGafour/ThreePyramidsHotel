@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../../db/pool';
 import { dbPool } from '../../db/pool';
 import { buildRoomReservationCreatedEvent } from '../notifications/notifications.events';
 import { insertNotificationEvent } from '../notifications/notifications.repository';

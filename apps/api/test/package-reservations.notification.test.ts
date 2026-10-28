@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../src/db/pool';
 import { afterEach, before, describe, it } from 'node:test';
 
 // The journey booking's outbox wiring, against a scripted client.

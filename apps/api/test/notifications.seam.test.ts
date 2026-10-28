@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { before, describe, it } from 'node:test';
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../src/db/pool';
 import {
   buildRoomReservationCreatedEvent,
   buildRoomReservationConfirmedEvent,

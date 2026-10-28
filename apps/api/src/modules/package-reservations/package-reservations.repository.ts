@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../../db/pool';
 import { isPackageSlug } from '../packages/packages.validation';
 import { toMinorUnits } from './package-reservations.pricing';
 import type { PackageReservationInput, PackageReservationPrice, ReservationPackage, ReservationRate, ReservationVariant } from './package-reservations.types';

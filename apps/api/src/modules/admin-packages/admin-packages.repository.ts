@@ -1,4 +1,4 @@
-import type { QueryResult, QueryResultRow } from 'pg';
+import type { QueryResult, QueryResultRow } from '../../db/pool';
 import { dbPool } from '../../db/pool';
 import { parseMediaReference } from '../media/media.validation';
 import {

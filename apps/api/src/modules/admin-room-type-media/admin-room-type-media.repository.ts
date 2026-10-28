@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../../db/pool';
 import {
   MEDIA_ASSET_COLUMNS,
   requireMediaChecksum,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
-import type { PoolClient } from 'pg';
+import type { PoolClient } from '../src/db/pool';
 import { after, before, beforeEach, describe, it } from 'node:test';
 
 // Exercises the room-type media repository against real PostgreSQL: the real
