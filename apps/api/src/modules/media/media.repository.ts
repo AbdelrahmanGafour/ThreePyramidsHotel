@@ -24,7 +24,7 @@ import { STORED_CONTENT_TYPE, type StoredContentType } from './media.types';
 
 const INTERNAL_ID_PATTERN = /^[1-9]\d*$/;
 
-/** Digits only, as a bigint rendered `::text` always is. */
+/** Digits only, as a bigint rendered as text always is. */
 const WHOLE_NUMBER_PATTERN = /^\d+$/;
 
 /** As `media_assets_checksum_sha256_*_check` already guarantees. */
@@ -186,7 +186,7 @@ export const MEDIA_ASSET_COLUMNS = `ma.id,
        ma.reference,
        ma.storage_key,
        ma.content_type,
-       ma.byte_size::text AS byte_size,
+       CAST(ma.byte_size AS CHAR) AS byte_size,
        ma.checksum_sha256,
        ma.width,
        ma.height,
@@ -213,19 +213,10 @@ export async function insertMediaAsset(
   client: PoolClient,
   input: MediaAssetInsert,
 ): Promise<MediaAssetRecord> {
-  const { rows } = await client.query<MediaAssetRow>(
+  const inserted = await client.query(
     `INSERT INTO media_assets
        (reference, storage_key, content_type, byte_size, checksum_sha256, width, height)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id,
-               reference,
-               storage_key,
-               content_type,
-               byte_size::text AS byte_size,
-               checksum_sha256,
-               width,
-               height,
-               created_at`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [
       input.reference,
       input.storageKey,
@@ -235,6 +226,15 @@ export async function insertMediaAsset(
       input.width,
       input.height,
     ],
+  );
+
+  if (!inserted.insertId) {
+    throw new Error('Media asset insert returned no row');
+  }
+
+  const { rows } = await client.query<MediaAssetRow>(
+    `SELECT ${MEDIA_ASSET_COLUMNS} FROM media_assets ma WHERE ma.id = $1`,
+    [inserted.insertId],
   );
 
   const row = rows[0];
@@ -250,7 +250,7 @@ export async function insertMediaAsset(
  * Removes one stored object's metadata, by internal id.
  *
  * Only ever called after the relation that referenced it is gone: both foreign
- * keys are `ON DELETE RESTRICT`, so PostgreSQL refuses this while any owner
+ * keys are `ON DELETE RESTRICT`, so MySQL refuses this while any owner
  * row still points at the asset. That refusal is left to propagate rather than
  * caught — an asset that cannot be deleted because something still shows it is
  * exactly the situation a RESTRICT exists to make loud.

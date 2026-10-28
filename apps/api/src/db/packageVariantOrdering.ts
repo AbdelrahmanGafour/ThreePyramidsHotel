@@ -158,15 +158,13 @@ export async function parkPackageVariantSortOrders(
     // above already proved base + e fits. ORDER BY id only makes the
     // assignment reproducible — correctness does not depend on which row
     // receives which temporary position.
-    `WITH parked AS (
-       SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn
-         FROM package_variants
-        WHERE package_id = $1
-     )
-     UPDATE package_variants AS pv
-        SET sort_order = ($2::int + parked.rn)::int
-       FROM parked
-      WHERE pv.id = parked.id`,
+    `UPDATE package_variants AS pv
+       JOIN (
+         SELECT id, ROW_NUMBER() OVER (ORDER BY id) AS rn
+           FROM package_variants
+          WHERE package_id = $1
+       ) AS parked ON pv.id = parked.id
+        SET pv.sort_order = $2 + parked.rn`,
     [packageId, base],
   );
 }

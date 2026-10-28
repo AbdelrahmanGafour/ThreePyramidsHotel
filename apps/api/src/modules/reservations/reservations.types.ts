@@ -23,7 +23,7 @@ export type ReservationInput = {
 
 /**
  * The room type fields reservation creation needs: capacity to validate the
- * party and the rate to snapshot. PostgreSQL bigint and numeric values stay
+ * party and the rate to snapshot. MySQL bigint and numeric values stay
  * strings so no precision is lost.
  */
 export type ReservationRoomType = {

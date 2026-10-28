@@ -109,15 +109,24 @@ function storedPackage(options: { seedManaged?: boolean; isActive?: boolean; exi
     async query(text: string, values?: unknown[]) {
       state.calls.push({ text, values });
 
-      if (!text.includes('UPDATE packages') || !state.exists || values?.[0] !== SLUG) {
-        return { rows: [] } as never;
+      if (text.includes('UPDATE packages')) {
+        if (!state.exists || values?.[0] !== SLUG) {
+          return { rows: [], rowCount: 0 } as never;
+        }
+
+        state.title = values[1] as string;
+        state.sortOrder = values[8] as number;
+        // The statement sets this literally; the fake honours that.
+        state.seedManaged = false;
+        state.writes += 1;
+
+        return { rows: [], rowCount: 1 } as never;
       }
 
-      state.title = values[1] as string;
-      state.sortOrder = values[8] as number;
-      // The statement sets this literally; the fake honours that.
-      state.seedManaged = false;
-      state.writes += 1;
+      // The detail read that follows the write.
+      if (!state.exists || values?.[0] !== SLUG) {
+        return { rows: [] } as never;
+      }
 
       return {
         rows: [storedRow({
@@ -217,13 +226,13 @@ describe('admin package update: ownership', () => {
     const stored = storedPackage({ seedManaged: true });
     await edit(SLUG, body());
 
-    assert.equal(stored.calls.length, 1, 'one atomic write, no read-then-write');
+    assert.equal(stored.calls.length, 2, 'one UPDATE, then the read that answers');
     const setClause = stored.calls[0]!.text.split('SET')[1]!.split('WHERE')[0]!;
 
     assert.match(setClause, /title = \$2/);
     assert.match(setClause, /seed_managed = false/,
       'an edit that did not take ownership would be undone by the next seed run');
-    assert.match(setClause, /updated_at = now\(\)/);
+    assert.match(setClause, /updated_at = UTC_TIMESTAMP\(3\)/);
   });
 
   it('always reports admin ownership after a successful edit', async () => {
@@ -275,7 +284,7 @@ describe('admin package update: write scope', () => {
     const stored = storedPackage();
     await edit(SLUG, body());
 
-    const writeHalf = stored.calls[0]!.text.split('RETURNING')[0]!;
+    const writeHalf = stored.calls[0]!.text;
     for (const table of ['package_variants', 'package_rate_tiers',
       'package_itinerary_sections', 'package_content_items', 'package_reservations']) {
       assert.ok(!writeHalf.includes(table), `${table} must not be written`);
@@ -295,15 +304,14 @@ describe('admin package update: write scope', () => {
     ]);
   });
 
-  it('returns the updated row from the same statement that wrote it', async () => {
+  it('answers with a read of the row it just wrote', async () => {
     const stored = storedPackage();
     await edit(SLUG, body());
 
-    const sql = stored.calls[0]!.text;
-    assert.match(sql, /WITH updated AS \(/);
-    assert.match(sql, /RETURNING \*/);
-    assert.match(sql, /FROM updated p/);
-    assert.match(sql, /WHERE slug = \$1/);
+    assert.match(stored.calls[0]!.text, /WHERE slug = \$1/);
+    const sql = stored.calls[1]!.text;
+    assert.match(sql, /FROM packages p/);
+    assert.match(sql, /WHERE p\.slug = \$1/);
   });
 
   it('applies the submitted values', async () => {

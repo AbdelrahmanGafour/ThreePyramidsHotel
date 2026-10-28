@@ -141,6 +141,28 @@ function storedJourney(
         return { rows: state.packageExists ? [{ id: PACKAGE_ID }] : [] } as never;
       }
 
+      // The read-back of the asset row just inserted (MySQL has no RETURNING).
+      if (text.includes('FROM media_assets ma WHERE ma.id')) {
+        const id = String((values as string[])[0]);
+        const asset = state.assets.get(id)!;
+
+        return {
+          rows: [
+            {
+              id,
+              reference: asset.reference,
+              storage_key: asset.storageKey,
+              content_type: 'image/webp',
+              byte_size: '1000',
+              checksum_sha256: 'a'.repeat(64),
+              width: asset.width,
+              height: asset.height,
+              created_at: new Date('2026-01-01T00:00:00.000Z'),
+            },
+          ],
+        } as never;
+      }
+
       // The under-the-lock read of the current relation.
       if (text.includes('pm.media_asset_id') && text.includes('ma.storage_key')) {
         if (!state.relation) {
@@ -183,26 +205,12 @@ function storedJourney(
 
       if (text.includes('INSERT INTO media_assets')) {
         const id = String(state.nextAssetId++);
-        const [reference, storageKey, contentType, byteSize, checksum, width, height] =
+        const [reference, storageKey, , , , width, height] =
           values as [string, string, string, number, string, number, number];
 
         state.assets.set(id, { reference, storageKey, width, height });
 
-        return {
-          rows: [
-            {
-              id,
-              reference,
-              storage_key: storageKey,
-              content_type: contentType,
-              byte_size: String(byteSize),
-              checksum_sha256: checksum,
-              width,
-              height,
-              created_at: new Date('2026-01-01T00:00:00.000Z'),
-            },
-          ],
-        } as never;
+        return { rows: [], rowCount: 1, insertId: id } as never;
       }
 
       if (text.includes('INSERT INTO package_media')) {
@@ -374,6 +382,7 @@ function shape(calls: Recorded[]): string[] {
     if (call.text.startsWith('COMMIT')) return 'COMMIT';
     if (call.text.startsWith('ROLLBACK')) return 'ROLLBACK';
     if (call.text.includes('FROM packages WHERE slug')) return 'LOCK';
+    if (call.text.includes('FROM media_assets ma WHERE ma.id')) return 'READ-ASSET';
     if (call.text.includes('ma.storage_key')) return 'READ-IMAGE';
     if (call.text.includes('INSERT INTO media_assets')) return 'INSERT-ASSET';
     if (call.text.includes('INSERT INTO package_media')) return 'INSERT-RELATION';
@@ -551,6 +560,7 @@ describe('journey media: adding the first image', () => {
       'LOCK',
       'READ-IMAGE',
       'INSERT-ASSET',
+      'READ-ASSET',
       'INSERT-RELATION',
       'READ-BACK',
       'COMMIT',
@@ -697,6 +707,7 @@ describe('journey media: replacing the image', () => {
       'LOCK',
       'READ-IMAGE',
       'INSERT-ASSET',
+      'READ-ASSET',
       'REPOINT',
       'DELETE-ASSET',
       'READ-BACK',
@@ -1003,7 +1014,7 @@ describe('journey media: the package row is the only lock', () => {
 
       const locks = state.calls.filter((call) => /FOR UPDATE|FOR SHARE/.test(call.text));
       assert.equal(locks.length, 1, `${label}: one lock, and no second ordering system`);
-      assert.match(locks[0]!.text, /FROM packages WHERE slug = \$1 FOR UPDATE/);
+      assert.match(locks[0]!.text, /FROM packages WHERE slug = BINARY \$1 FOR UPDATE/);
     }
   });
 });
@@ -1232,7 +1243,7 @@ describe('journey media: describing the image', () => {
 
     const locks = stored.calls.filter((call) => /FOR UPDATE|FOR SHARE/.test(call.text));
     assert.equal(locks.length, 1, 'one lock, and no second ordering system');
-    assert.match(locks[0]!.text, /FROM packages WHERE slug = \$1 FOR UPDATE/);
+    assert.match(locks[0]!.text, /FROM packages WHERE slug = BINARY \$1 FOR UPDATE/);
   });
 
   it('changes alt_text and updated_at, and nothing else', async () => {
@@ -1243,7 +1254,7 @@ describe('journey media: describing the image', () => {
     const update = stored.calls.find((call) => call.text.includes('UPDATE package_media'))!;
 
     assert.match(update.text, /SET alt_text = \$2/);
-    assert.match(update.text, /updated_at = now\(\)/);
+    assert.match(update.text, /updated_at = UTC_TIMESTAMP\(3\)/);
     assert.ok(!/media_asset_id/.test(update.text), 'describing a picture cannot change which it is');
 
     // `media_assets` is immutable and is not touched at all.

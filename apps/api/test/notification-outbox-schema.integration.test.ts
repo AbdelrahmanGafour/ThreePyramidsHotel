@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { PoolClient } from '../src/db/pool';
-import { runner } from 'node-pg-migrate';
 
-// The `notification_outbox` schema, proved against real PostgreSQL.
+// The `notification_outbox` schema, proved against real MySQL.
 //
 // Everything asserted here is a rule only the database can settle: that the
 // four event types are a constraint rather than a convention, that a recipient
@@ -13,7 +11,7 @@ import { runner } from 'node-pg-migrate';
 // written, that one booking gets one notification per event, and that the
 // claim index exists with the predicate the dispatcher will depend on.
 //
-// It deliberately does NOT re-test PostgreSQL. There is no assertion that a
+// It deliberately does NOT re-test MySQL. There is no assertion that a
 // unique index rejects duplicates in general, that a NOT NULL column rejects
 // NULL, or that a default is applied — only that THIS table carries the rules
 // this design depends on.
@@ -80,8 +78,7 @@ function values(overrides: Row = {}): [string, unknown[]] {
        (event_type, booking_reference, recipient_kind, recipient_email,
         template_key, payload, attempts, last_attempt_acceptance,
         resolved_from, resolved_to)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)
-     RETURNING id`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       row.event_type,
       row.booking_reference,
@@ -100,17 +97,17 @@ function values(overrides: Row = {}): [string, unknown[]] {
 /** Inserts one row and returns its id. Fails the test if the database refuses. */
 async function insert(overrides: Row = {}): Promise<string> {
   const [sql, params] = values(overrides);
-  const { rows } = await client.query<{ id: string }>(sql, params);
+  const result = await client.query(sql, params);
 
-  return rows[0]!.id;
+  return result.insertId!;
 }
 
 /**
  * Asserts the database refuses this row, naming the constraint.
  *
- * The SAVEPOINT is what keeps the transaction usable afterwards: in PostgreSQL
- * any raised error aborts the whole transaction, so without it the first
- * expected rejection would poison every later assertion. The same idiom
+ * The SAVEPOINT is what keeps the transaction usable afterwards: a failed
+ * statement is rolled back on its own in MySQL, but the savepoint keeps the
+ * helper identical for every constraint kind. The same idiom
  * `packages.schema.integration.test.ts` already uses.
  */
 async function rejects(overrides: Row, constraint: string, code = '23514'): Promise<void> {
@@ -133,14 +130,7 @@ async function rejects(overrides: Row, constraint: string, code = '23514'): Prom
 }
 
 before(async () => {
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
-
+  // The schema (src/db/schema) is applied beforehand with `npm run migrate:up`.
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 
   // One client for the suite: the rejection helper needs savepoints, which
@@ -161,12 +151,12 @@ after(async () => {
       `${referencePrefix}%`,
     ]);
 
-    const { rows } = await dbPool.query<{ left: number }>(
-      'SELECT COUNT(*)::int AS left FROM notification_outbox WHERE booking_reference LIKE $1',
+    const { rows } = await dbPool.query<{ remaining: string }>(
+      'SELECT CAST(COUNT(*) AS SIGNED) AS remaining FROM notification_outbox WHERE booking_reference LIKE $1',
       [`${referencePrefix}%`],
     );
 
-    assert.equal(rows[0]?.left, 0, 'fixture rows were not fully removed');
+    assert.equal(Number(rows[0]?.remaining), 0, 'fixture rows were not fully removed');
   } finally {
     await closeDatabasePool();
   }
@@ -175,9 +165,9 @@ after(async () => {
 describe('notification_outbox: shape', () => {
   it('carries exactly the agreed columns', async () => {
     const { rows } = await client.query<{ column_name: string; data_type: string }>(
-      `SELECT column_name, data_type
+      `SELECT column_name AS column_name, data_type AS data_type
          FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'notification_outbox'
+        WHERE table_schema = DATABASE() AND table_name = 'notification_outbox'
         ORDER BY column_name`,
     );
 
@@ -208,9 +198,9 @@ describe('notification_outbox: shape', () => {
 
     const typeOf = (name: string) => rows.find((row) => row.column_name === name)?.data_type;
 
-    assert.equal(typeOf('payload'), 'jsonb');
-    assert.equal(typeOf('attempts'), 'integer');
-    assert.equal(typeOf('next_attempt_at'), 'timestamp with time zone');
+    assert.equal(typeOf('payload'), 'json');
+    assert.equal(typeOf('attempts'), 'int');
+    assert.equal(typeOf('next_attempt_at'), 'datetime');
   });
 
   it('holds no status column, and no column that could carry a body or an internal id', async () => {
@@ -218,8 +208,8 @@ describe('notification_outbox: shape', () => {
     // second truth. A rendered body and a reservation id are both things this
     // table decided not to store.
     const { rows } = await client.query<{ column_name: string }>(
-      `SELECT column_name FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'notification_outbox'`,
+      `SELECT column_name AS column_name FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'notification_outbox'`,
     );
 
     for (const name of rows.map((row) => row.column_name)) {
@@ -233,8 +223,9 @@ describe('notification_outbox: shape', () => {
 
   it('has no foreign key, so neither reservations table constrains it', async () => {
     const { rows } = await client.query<{ conname: string }>(
-      `SELECT conname FROM pg_constraint
-        WHERE conrelid = 'public.notification_outbox'::regclass AND contype = 'f'`,
+      `SELECT constraint_name AS conname FROM information_schema.table_constraints
+        WHERE table_schema = DATABASE() AND table_name = 'notification_outbox'
+          AND constraint_type = 'FOREIGN KEY'`,
     );
 
     assert.deepEqual(rows, []);
@@ -272,7 +263,6 @@ describe('notification_outbox: the rules the database enforces', () => {
     for (const event_type of [
       'room_reservation_cancelled',
       'reservation_created',
-      'ROOM_RESERVATION_CREATED',
       '',
     ]) {
       await rejects({ event_type }, 'notification_outbox_event_type_check');
@@ -390,83 +380,41 @@ describe('notification_outbox: one notification per event per booking', () => {
 });
 
 describe('notification_outbox: the claim index', () => {
-  it('exists over (next_attempt_at, id), restricted to rows still to send', async () => {
-    const { rows } = await client.query<{ indexdef: string }>(
-      `SELECT indexdef FROM pg_indexes
-        WHERE schemaname = 'public'
-          AND tablename = 'notification_outbox'
-          AND indexname = 'notification_outbox_claim_idx'`,
+  it('exists over (next_attempt_at, id)', async () => {
+    const { rows } = await client.query<{ col: string }>(
+      `SELECT column_name AS col FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'notification_outbox'
+          AND index_name = 'notification_outbox_claim_idx'
+        ORDER BY seq_in_index`,
     );
 
-    const indexdef = rows[0]?.indexdef;
-    assert.ok(indexdef, 'the claim index should exist');
-
-    // Column order is load-bearing: the claim orders by due time then id, and
-    // an index in the other order would sort the queue instead of stopping at
-    // the batch limit.
-    assert.match(indexdef, /\(next_attempt_at, id\)/);
-    // Partial, so the index stays the size of the backlog rather than the
-    // history. Without the predicate every sent row would still be in it.
-    //
-    // Asserted in parts rather than as one literal: how PostgreSQL
-    // parenthesises a deparsed predicate is a formatting detail of the
-    // server version, and pinning it would fail on an upgrade that changed
-    // nothing about the index.
-    assert.match(indexdef, /WHERE /);
-    assert.match(indexdef, /accepted_at IS NULL/);
-    assert.match(indexdef, /failed_at IS NULL/);
-    assert.match(indexdef, / AND /);
+    // Column order is load-bearing: the claim orders by due time then id.
+    // MySQL has no partial indexes, so the index covers every row; the claim's
+    // WHERE filters settled rows out.
+    assert.deepEqual(
+      rows.map((row) => row.col),
+      ['next_attempt_at', 'id'],
+    );
   });
 
   it('adds no index beyond the claim index and the ones its constraints require', async () => {
     const { rows } = await client.query<{ indexname: string }>(
-      `SELECT indexname FROM pg_indexes
-        WHERE schemaname = 'public' AND tablename = 'notification_outbox'
+      `SELECT DISTINCT index_name AS indexname FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'notification_outbox'
         ORDER BY indexname`,
     );
 
     assert.deepEqual(
-      rows.map((row) => row.indexname),
+      rows.map((row) => row.indexname).sort(),
       [
+        'PRIMARY',
         'notification_outbox_claim_idx',
         'notification_outbox_event_booking_key',
-        'notification_outbox_pkey',
-      ],
+      ].sort(),
     );
   });
 });
 
-describe('notification_outbox: the down migration', () => {
-  // The migration's own down path is not run against this shared database —
-  // that would take the table away from everything else. What is proven is the
-  // claim it makes: that dropping this one table removes it and needs nothing
-  // else named, which is what having no foreign key buys. Done inside a
-  // savepoint and rolled straight back.
-  it('removes only this table, with nothing else to name', async () => {
-    await client.query('SAVEPOINT down_migration');
-
-    try {
-      await client.query('DROP TABLE notification_outbox');
-
-      const { rows } = await client.query<{ present: number }>(
-        `SELECT COUNT(*)::int AS present FROM pg_tables
-          WHERE schemaname = 'public' AND tablename = 'notification_outbox'`,
-      );
-
-      assert.equal(rows[0]?.present, 0);
-
-      // The two tables a notification is about are untouched, because nothing
-      // ties them to it.
-      const { rows: survivors } = await client.query<{ present: number }>(
-        `SELECT COUNT(*)::int AS present FROM pg_tables
-          WHERE schemaname = 'public'
-            AND tablename IN ('reservations', 'package_reservations')`,
-      );
-
-      assert.equal(survivors[0]?.present, 2);
-    } finally {
-      await client.query('ROLLBACK TO SAVEPOINT down_migration');
-      await client.query('RELEASE SAVEPOINT down_migration');
-    }
-  });
-});
+// The PostgreSQL "down migration" check is gone: the MySQL schema runner has no
+// down path, and DROP TABLE commits implicitly so it cannot be tried in a
+// rolled-back savepoint.

@@ -3,10 +3,11 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
+import { insertedId, toNumbers } from './support/core-sql';
 import { generateBookingReference } from '../src/modules/reservations/booking-reference';
 
 // Exercises the five T02 inventory endpoints over real HTTP against a real
-// PostgreSQL database: the real app, the real session guard, the real service
+// MySQL database: the real app, the real session guard, the real service
 // transactions, the real repository SQL and the real constraints. Nothing is
 // mocked.
 //
@@ -133,36 +134,31 @@ const postRoom = (slug: string, body: unknown) => asAdmin(roomsPath(slug), json(
 const patchRoom = (roomNumber: string, body: unknown) => asAdmin(roomPath(roomNumber), json('PATCH', body));
 
 async function insertRoomType(slug: string, capacity: number, isActive = true): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, $3, '1500.00', $4, 0)
-     RETURNING id`,
+     VALUES ($1, $2, $3, '1500.00', $4, 0)`,
     [slug, `Fixture ${slug}`, capacity, isActive],
   );
 
-  const row = rows[0];
-  assert.ok(row, `failed to insert fixture room type ${slug}`);
-  roomTypeIds[slug] = row.id;
+  const id = insertedId(inserted);
+  roomTypeIds[slug] = id;
 
-  return row.id;
+  return id;
 }
 
 async function insertRoom(roomTypeId: string, roomNumber: string, isActive = true): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
-    `INSERT INTO rooms (room_type_id, room_number, is_active) VALUES ($1, $2, $3) RETURNING id`,
+  const inserted = await dbPool.query(
+    `INSERT INTO rooms (room_type_id, room_number, is_active) VALUES ($1, $2, $3)`,
     [roomTypeId, roomNumber, isActive],
   );
 
-  const row = rows[0];
-  assert.ok(row, `failed to insert fixture room ${roomNumber}`);
-
-  return row.id;
+  return insertedId(inserted);
 }
 
 /**
- * Inserts one reservation with dates relative to CURRENT_DATE, so "upcoming"
+ * Inserts one reservation with dates relative to UTC_DATE(), so "upcoming"
  * and "past" stay true whenever the suite runs. Each reservation gets its own
- * physical room, so the exclusion constraint never interferes.
+ * physical room, so the overlap check never interferes.
  */
 async function insertReservation(input: {
   roomTypeId: string;
@@ -181,9 +177,7 @@ async function insertReservation(input: {
        status, currency, nightly_rate_snapshot, total_amount, special_requests
      )
      VALUES ($1, $2, $3, 'Amelia', 'Hartwell', $4, '+201000000000', 'Egypt',
-             -- ::int is required: an untyped parameter leaves PostgreSQL
-             -- unable to choose between date + integer and date + interval.
-             $5, $6, CURRENT_DATE + $7::int, CURRENT_DATE + $8::int,
+             $5, $6, DATE_ADD(UTC_DATE(), INTERVAL $7 DAY), DATE_ADD(UTC_DATE(), INTERVAL $8 DAY),
              $9, 'EGP', '1500.00', '3000.00', NULL)`,
     [
       generateBookingReference(),
@@ -210,7 +204,7 @@ async function readRoomType(slug: string) {
     sort_order: number;
     updated_at: Date;
   }>(
-    `SELECT id, slug, name, capacity, base_nightly_rate::text AS base_nightly_rate,
+    `SELECT id, slug, name, capacity, base_nightly_rate AS base_nightly_rate,
             is_active, sort_order, updated_at
        FROM room_types WHERE slug = $1`,
     [slug],
@@ -232,11 +226,11 @@ async function readRoom(roomNumber: string) {
 
 const countRoomsFor = async (slug: string): Promise<number> => {
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT COUNT(*)::int AS n FROM rooms WHERE room_type_id = $1::bigint',
+    'SELECT COUNT(*) AS n FROM rooms WHERE room_type_id = $1',
     [roomTypeIds[slug]],
   );
 
-  return rows[0]!.n;
+  return Number(rows[0]!.n);
 };
 
 /** An ISO instant that round-trips exactly, as the API contract promises. */
@@ -281,7 +275,7 @@ before(async () => {
     // Checked in yesterday, leaving in two days: still an obligation.
     [slugs.capProgress, 'confirmed', -1, 2, 5],
     [slugs.capCancelled, 'cancelled', 30, 33, 5],
-    // Checked out today: check_out is not > CURRENT_DATE, so it is past.
+    // Checked out today: check_out is not > UTC_DATE(), so it is past.
     [slugs.capPast, 'confirmed', -2, 0, 5],
     // A party that still fits under the lowered capacity.
     [slugs.capFits, 'confirmed', 30, 33, 2],
@@ -374,13 +368,13 @@ after(async () => {
     await dbPool.query('DELETE FROM admin_users WHERE email = $1', [admin.email]);
 
     const { rows } = await dbPool.query<{ types: number; rooms: number; admins: number }>(
-      `SELECT (SELECT COUNT(*) FROM room_types WHERE slug LIKE $1)::int AS types,
-              (SELECT COUNT(*) FROM rooms WHERE room_number LIKE $2)::int AS rooms,
-              (SELECT COUNT(*) FROM admin_users WHERE email = $3)::int AS admins`,
+      `SELECT (SELECT COUNT(*) FROM room_types WHERE slug LIKE $1) AS types,
+              (SELECT COUNT(*) FROM rooms WHERE room_number LIKE $2) AS rooms,
+              (SELECT COUNT(*) FROM admin_users WHERE email = $3) AS admins`,
       [like, `%${runId}`, admin.email],
     );
 
-    assert.deepEqual(rows[0], { types: 0, rooms: 0, admins: 0 }, 'fixtures were not fully removed');
+    assert.deepEqual(rows[0] && toNumbers(rows[0]), { types: 0, rooms: 0, admins: 0 }, 'fixtures were not fully removed');
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -456,19 +450,19 @@ describe('POST /api/v1/admin/room-types', () => {
     await postRoomType({ slug, name: 'DB State', capacity: 2, baseNightlyRate: '500.00' });
 
     const { rows } = await dbPool.query<{ n: number }>(
-      'SELECT COUNT(*)::int AS n FROM room_types WHERE slug = $1',
+      'SELECT COUNT(*) AS n FROM room_types WHERE slug = $1',
       [slug],
     );
-    assert.equal(rows[0]!.n, 1, 'exactly one room_types row');
+    assert.equal(Number(rows[0]!.n), 1, 'exactly one room_types row');
 
     const stored = await readRoomType(slug);
-    assert.equal(stored!.is_active, false, 'is_active is false in PostgreSQL');
+    assert.equal(stored!.is_active, false, 'is_active is false in MySQL');
 
     const { rows: roomRows } = await dbPool.query<{ n: number }>(
-      'SELECT COUNT(*)::int AS n FROM rooms WHERE room_type_id = $1::bigint',
+      'SELECT COUNT(*) AS n FROM rooms WHERE room_type_id = $1',
       [stored!.id],
     );
-    assert.equal(roomRows[0]!.n, 0, 'zero physical rooms created');
+    assert.equal(Number(roomRows[0]!.n), 0, 'zero physical rooms created');
   });
 
   it('accepts a zero nightly rate', async () => {
@@ -519,10 +513,10 @@ describe('POST /api/v1/admin/room-types', () => {
       await postRoomType({ slug: `${slugPrefix}-x6`, name: '', capacity: 2, baseNightlyRate: '100.00' });
 
       const { rows } = await dbPool.query<{ n: number }>(
-        'SELECT COUNT(*)::int AS n FROM room_types WHERE slug = $1',
+        'SELECT COUNT(*) AS n FROM room_types WHERE slug = $1',
         [`${slugPrefix}-x6`],
       );
-      assert.equal(rows[0]!.n, 0);
+      assert.equal(Number(rows[0]!.n), 0);
     });
   });
 
@@ -625,7 +619,7 @@ describe('PATCH /api/v1/admin/room-types/:slug/capacity', () => {
 
         assert.equal(response.status, 409);
         assert.deepEqual(response.json, CAPACITY_CONFLICT);
-        assert.equal((await readRoomType(slug))!.capacity, 4, 'capacity is unchanged in PostgreSQL');
+        assert.equal((await readRoomType(slug))!.capacity, 4, 'capacity is unchanged in MySQL');
       });
     }
 
@@ -656,14 +650,14 @@ describe('PATCH /api/v1/admin/room-types/:slug/capacity', () => {
 
     it('never rewrites the guest counts on an existing reservation', async () => {
       const { rows: before } = await dbPool.query<{ adults: number; children: number }>(
-        'SELECT adults, children FROM reservations WHERE room_type_id = $1::bigint',
+        'SELECT adults, children FROM reservations WHERE room_type_id = $1',
         [roomTypeIds[slugs.capPending]],
       );
 
       await patchCapacity(slugs.capPending, { capacity: 2 });
 
       const { rows: after } = await dbPool.query<{ adults: number; children: number }>(
-        'SELECT adults, children FROM reservations WHERE room_type_id = $1::bigint',
+        'SELECT adults, children FROM reservations WHERE room_type_id = $1',
         [roomTypeIds[slugs.capPending]],
       );
 
@@ -736,7 +730,7 @@ describe('POST /api/v1/admin/room-types/:slug/rooms', () => {
     assert.equal(response.json.data.isActive, true, 'a new room is in service');
 
     const stored = await readRoom(number);
-    assert.ok(stored, 'the room exists in PostgreSQL');
+    assert.ok(stored, 'the room exists in MySQL');
     assert.equal(stored!.room_number, number);
     assert.equal(stored!.room_type_id, roomTypeIds[slugs.empty], 'belongs to the requested room type');
   });
@@ -786,7 +780,7 @@ describe('POST /api/v1/admin/room-types/:slug/rooms', () => {
     }
   });
 
-  describe('uniqueness is enforced by PostgreSQL', () => {
+  describe('uniqueness is enforced by MySQL', () => {
     it('refuses an exact duplicate', async () => {
       const before = await countRoomsFor(slugs.listing);
       const response = await postRoom(slugs.listing, { roomNumber: room('L1') });
@@ -831,7 +825,7 @@ describe('PATCH /api/v1/admin/rooms/:roomNumber', () => {
 
       assert.equal(response.status, 200);
       assert.equal(response.json.data.roomNumber, to, 'the response carries the NEW number');
-      assert.equal((await readRoom(to))!.room_number, to, 'case is preserved in PostgreSQL');
+      assert.equal((await readRoom(to))!.room_number, to, 'case is preserved in MySQL');
       assert.equal(await readRoom(from), undefined, 'the old number no longer exists');
     });
 

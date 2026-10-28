@@ -15,7 +15,7 @@ import {
 // is handed — which columns it touches, which it must never touch, and the
 // guards that keep a settled row settled.
 //
-// The behaviour only PostgreSQL can settle — that SKIP LOCKED really divides a
+// The behaviour only MySQL can settle — that SKIP LOCKED really divides a
 // backlog between workers, that COALESCE really freezes an envelope after the
 // first claim — belongs in an integration suite and is not claimed here.
 
@@ -30,6 +30,22 @@ function recordingClient(
   const client = {
     async query(text: string, values: unknown[] = []): Promise<unknown> {
       statements.push({ text, values });
+      // The claim is three statements on MySQL (no UPDATE ... RETURNING): the
+      // locking SELECT, the lease UPDATE, and the read-back of the leased rows.
+      if (text.includes('SKIP LOCKED')) {
+        const picked = (rows as Array<Record<string, unknown>>).map((row) => ({
+          id: row.id,
+          next_attempt_at: row.claim_due_at,
+        }));
+        return { rows: picked, rowCount: picked.length };
+      }
+      if (text.includes('CAST(o.id AS CHAR)')) {
+        const leased = (rows as Array<Record<string, unknown>>).map(({ claim_due_at: _due, ...rest }) => rest);
+        return { rows: leased, rowCount: leased.length };
+      }
+      if (text.trimStart().startsWith('UPDATE notification_outbox') && text.includes('IN (')) {
+        return { rows: [], rowCount: options.matched ?? rows.length };
+      }
       // `matched` stands in for the row count an UPDATE reports, which is what
       // decides `applied`. Zero is how the database says "your guard did not
       // match", not an error.
@@ -78,6 +94,13 @@ const setClause = (text: string): string => {
   return clause;
 };
 
+/** The three statements of a claim, in order. */
+const claim = (statements: Recorded[]): { select: Recorded; update: Recorded; read: Recorded } => {
+  assert.equal(statements.length, 3, `expected three statements, got ${statements.length}`);
+
+  return { select: statements[0] as Recorded, update: statements[1] as Recorded, read: statements[2] as Recorded };
+};
+
 const only = (statements: Recorded[]): Recorded => {
   assert.equal(statements.length, 1, `expected one statement, got ${statements.length}`);
 
@@ -85,13 +108,13 @@ const only = (statements: Recorded[]): Recorded => {
 };
 
 describe('claimNotificationEvents', () => {
-  it('leases in one statement, on the client it was given', async () => {
+  it('leases on the client it was given, in three statements', async () => {
     const { client, statements } = recordingClient([claimedRow()]);
     const { client: untouched, statements: untouchedStatements } = recordingClient();
 
     await claimNotificationEvents(client, CLAIM_INPUT);
 
-    assert.equal(statements.length, 1, 'choosing and leasing are not two statements');
+    assert.equal(statements.length, 3, 'select-and-lock, lease, read back');
     assert.equal(untouchedStatements.length, 0, 'no other client was used');
     assert.ok(untouched);
   });
@@ -104,7 +127,7 @@ describe('claimNotificationEvents', () => {
     const { text } = only(statements);
     assert.match(text, /WHERE accepted_at IS NULL/);
     assert.match(text, /AND failed_at IS NULL/);
-    assert.match(text, /AND next_attempt_at <= now\(\)/);
+    assert.match(text, /AND next_attempt_at <= UTC_TIMESTAMP\(3\)/);
   });
 
   it('takes the lock that lets two dispatchers share a backlog', async () => {
@@ -129,36 +152,37 @@ describe('claimNotificationEvents', () => {
   it('counts the attempt at claim time', async () => {
     // A process that dies mid-flight has still used an attempt. Counting only
     // completed sends would let a row that crashes the sender retry forever.
-    const { client, statements } = recordingClient();
+    const { client, statements } = recordingClient([claimedRow()]);
 
     await claimNotificationEvents(client, CLAIM_INPUT);
 
-    assert.match(only(statements).text, /SET attempts = o\.attempts \+ 1/);
-    assert.match(only(statements).text, /last_attempt_at = now\(\)/);
+    const { text } = claim(statements).update;
+    assert.match(text, /SET attempts = attempts \+ 1/);
+    assert.match(text, /last_attempt_at = UTC_TIMESTAMP\(3\)/);
   });
 
   it('moves the row out of reach for the lease it was given', async () => {
-    const { client, statements } = recordingClient();
+    const { client, statements } = recordingClient([claimedRow()]);
 
     await claimNotificationEvents(client, CLAIM_INPUT);
 
-    const { text, values } = only(statements);
-    assert.match(text, /next_attempt_at = now\(\) \+ make_interval\(secs => \$4/);
-    assert.equal(values[3], 120, 'the caller decides how long a send may take');
+    const { text, values } = claim(statements).update;
+    assert.match(text, /next_attempt_at = UTC_TIMESTAMP\(3\) \+ INTERVAL \? SECOND/);
+    assert.equal(values[0], 120, 'the caller decides how long a send may take');
   });
 
   it('resolves the envelope first-write-wins, never overwriting one', async () => {
     // Every retry goes under one idempotency key, so a settings change between
     // attempts must not be able to alter a queued message.
-    const { client, statements } = recordingClient();
+    const { client, statements } = recordingClient([claimedRow()]);
 
     await claimNotificationEvents(client, CLAIM_INPUT);
 
-    const { text, values } = only(statements);
-    assert.match(text, /resolved_from = COALESCE\(o\.resolved_from, \$2\)/);
+    const { text, values } = claim(statements).update;
+    assert.match(text, /resolved_from = COALESCE\(resolved_from, \?\)/);
     // A guest row keeps its own address; only a hotel row falls through to the
     // configured recipient.
-    assert.match(text, /resolved_to = COALESCE\(o\.resolved_to, o\.recipient_email, \$3\)/);
+    assert.match(text, /resolved_to = COALESCE\(resolved_to, recipient_email, \?\)/);
     assert.equal(values[1], 'hotel@example.test');
     assert.equal(values[2], 'desk@example.test');
   });
@@ -203,7 +227,7 @@ describe('claimNotificationEvents', () => {
   });
 
   it('returns rows in claim order whatever order the driver gives them', async () => {
-    // UPDATE ... FROM promises nothing about ordering.
+    // The read-back promises nothing about ordering.
     const { client } = recordingClient([
       claimedRow({ id: '7' }),
       claimedRow({ id: '2' }),
@@ -258,7 +282,7 @@ describe('markNotificationAccepted', () => {
     await markNotificationAccepted(client, { id: '42', expectedAttempt: 3, providerReference: 'msg_123' });
 
     const { text, values } = only(statements);
-    assert.match(text, /SET accepted_at = now\(\)/);
+    assert.match(text, /SET accepted_at = UTC_TIMESTAMP\(3\)/);
     assert.match(text, /provider_reference = \$3/);
     assert.deepEqual(values, ['42', 3, 'msg_123']);
   });
@@ -311,7 +335,7 @@ describe('markNotificationAttemptFailed', () => {
     });
 
     const { text, values } = only(statements);
-    assert.match(text, /next_attempt_at = now\(\) \+ make_interval\(secs => \$5/);
+    assert.match(text, /next_attempt_at = UTC_TIMESTAMP\(3\) \+ INTERVAL \$5 SECOND/);
     assert.match(text, /last_attempt_acceptance = \$3/);
     assert.match(text, /last_error = \$4/);
     assert.deepEqual(values, ['42', 3, 'unknown', 'timed out', 300]);
@@ -392,7 +416,7 @@ describe('markNotificationAbandoned', () => {
     await markNotificationAbandoned(client, { id: '42', expectedAttempt: 3, acceptance: 'unknown', error: 'gave up' });
 
     const { text, values } = only(statements);
-    assert.match(text, /SET failed_at = now\(\)/);
+    assert.match(text, /SET failed_at = UTC_TIMESTAMP\(3\)/);
     assert.match(text, /last_attempt_acceptance = \$3/);
     assert.deepEqual(values, ['42', 3, 'unknown', 'gave up']);
   });
@@ -636,9 +660,8 @@ describe('claim ordering', () => {
 
     await claimNotificationEvents(client, CLAIM_INPUT);
 
-    const { text } = only(statements);
-    assert.match(text, /SELECT id, next_attempt_at/, 'the CTE keeps the pre-claim due time');
-    assert.match(text, /RETURNING due\.next_attempt_at AS claim_due_at/);
+    const { select } = claim(statements);
+    assert.match(select.text, /SELECT id, next_attempt_at/, 'the pre-claim due time is read before the lease');
   });
 
   it('does not expose the ordering column on the sending contract', async () => {

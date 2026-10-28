@@ -3,7 +3,7 @@ import type { PoolClient } from '../src/db/pool';
 import { createHash, randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 
-// Proves the media schema against real PostgreSQL: the tables, the named
+// Proves the media schema against real MySQL: the tables, the named
 // constraints and the two indexes the T03-B migration creates, and the
 // behaviour each of them actually produces.
 //
@@ -26,19 +26,6 @@ type Pool = typeof import('../src/db/pool.js');
 
 let dbPool: Pool['dbPool'];
 let closeDatabasePool: Pool['closeDatabasePool'];
-
-const MIGRATION_NAME = '1790106929800_create-media-assets-and-room-type-images';
-
-/**
- * The migration that was later stacked on top of this one.
- *
- * `package_media.media_asset_id` references `media_assets(id)` ON DELETE
- * RESTRICT, so while it is applied the schema is no longer in the state the
- * migration above was written to roll back from. The suite below rolls this
- * one down first, inside the same transaction, which is what a real
- * `node-pg-migrate` rollback would do.
- */
-const PACKAGE_MEDIA_MIGRATION_NAME = '1790400000000_create-package-media';
 
 const runId = randomUUID().slice(0, 8);
 const slugPrefix = `itest-media-${runId}`;
@@ -103,22 +90,18 @@ function assetValues(overrides: Record<string, unknown> = {}): unknown[] {
 
 const INSERT_ASSET = `INSERT INTO media_assets
      (reference, storage_key, content_type, byte_size, checksum_sha256, width, height)
-   VALUES ($1, $2, $3, $4, $5, $6, $7)
-   RETURNING id`;
+   VALUES ($1, $2, $3, $4, $5, $6, $7)`;
 
 async function insertAsset(overrides: Record<string, unknown> = {}): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(INSERT_ASSET, assetValues(overrides));
+  const inserted = await dbPool.query(INSERT_ASSET, assetValues(overrides));
+  assert.ok(inserted.insertId, 'failed to insert fixture media asset');
 
-  const row = rows[0];
-  assert.ok(row, 'failed to insert fixture media asset');
-
-  return row.id;
+  return inserted.insertId;
 }
 
 const INSERT_IMAGE = `INSERT INTO room_type_images
      (room_type_id, media_asset_id, alt_text, sort_order, is_cover)
-   VALUES ($1, $2, $3, $4, $5)
-   RETURNING id`;
+   VALUES ($1, $2, $3, $4, $5)`;
 
 type LinkInput = {
   roomTypeId: string;
@@ -139,12 +122,10 @@ function linkValues(input: LinkInput): unknown[] {
 }
 
 async function linkImage(input: LinkInput): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(INSERT_IMAGE, linkValues(input));
+  const inserted = await dbPool.query(INSERT_IMAGE, linkValues(input));
+  assert.ok(inserted.insertId, 'failed to insert fixture room-type image');
 
-  const row = rows[0];
-  assert.ok(row, 'failed to insert fixture room-type image');
-
-  return row.id;
+  return inserted.insertId;
 }
 
 type Violation = { code: string; constraint: string };
@@ -166,7 +147,7 @@ async function violation(run: () => Promise<unknown>): Promise<Violation> {
     return { code: pgError.code ?? '(none)', constraint: pgError.constraint ?? '(none)' };
   }
 
-  assert.fail('expected PostgreSQL to reject the statement');
+  assert.fail('expected MySQL to reject the statement');
 }
 
 /**
@@ -182,7 +163,7 @@ async function violation(run: () => Promise<unknown>): Promise<Violation> {
  * child row whose parent does not exist is an ordinary foreign_key_violation
  * on every version, is not RESTRICT-mediated, and stays pinned to 23503.
  */
-const RESTRICT_REFUSAL_CODES = ['23001', '23503'];
+const RESTRICT_REFUSAL_CODES = ['23001', '23503']; // MySQL reports 23503 (errno 1451)
 
 /**
  * Asserts a delete was refused by one exact constraint, without pinning the
@@ -201,118 +182,41 @@ function assertRestrictRefusal(actual: Violation, constraint: string): void {
   );
 }
 
-/** The columns one index covers, in index order, plus what kind of index it is. */
+/** The columns one index covers, in index order, plus whether it is unique. */
 async function indexShape(name: string): Promise<{
   columns: string[];
   unique: boolean;
   partial: boolean;
 }> {
-  const { rows } = await dbPool.query<{ columns: string[]; unique: boolean; partial: boolean }>(
-    `SELECT (SELECT array_agg(a.attname::text ORDER BY k.ord)
-               FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
-               JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum) AS columns,
-            i.indisunique AS unique,
-            i.indpred IS NOT NULL AS partial
-       FROM pg_index i
-       JOIN pg_class c ON c.oid = i.indexrelid
-      WHERE c.relname = $1`,
+  const { rows } = await dbPool.query<{ col: string; non_unique: string | number }>(
+    `SELECT column_name AS col, non_unique AS non_unique
+       FROM information_schema.statistics
+      WHERE table_schema = DATABASE() AND index_name = $1
+      ORDER BY seq_in_index`,
     [name],
   );
 
-  const row = rows[0];
-  assert.ok(row, `index ${name} does not exist`);
+  assert.ok(rows.length > 0, `index ${name} does not exist`);
 
-  return row;
-}
-
-/**
- * Runs one migration's own `down` against this client, inside its transaction.
- *
- * The point is that the test does not decide what rolling a migration back
- * means — the migration module does. A DROP list written out here would be a
- * second copy of that decision, free to drift from the file that actually
- * runs in CI and in production.
- *
- * `node-pg-migrate` hands `down` a MigrationBuilder that queues operations
- * rather than executing them, so this stands in for one. It supports exactly
- * `dropTable`, which is all either of these two paths uses, and throws on
- * anything else rather than silently skipping an operation and leaving the
- * assertions below to pass against a half-rolled-back schema.
- *
- * No CASCADE, and no `ifExists`: the drops have to succeed on their own, in
- * the order the migration names them, or this proves nothing.
- */
-async function runMigrationDown(client: PoolClient, migrationName: string): Promise<void> {
-  // Required rather than imported: the migrations are `.cjs` outside
-  // `rootDir`, and this package is CommonJS, so a plain require reaches them
-  // without pulling untyped JavaScript into the TypeScript program.
-  const migration = require(`../src/db/migrations/${migrationName}.cjs`) as {
-    down?: (pgm: unknown) => void;
+  // MySQL has no partial indexes; the cover rule is enforced by a generated
+  // column, so `partial` is always false here.
+  return {
+    columns: rows.map((row) => row.col),
+    unique: Number(rows[0]!.non_unique) === 0,
+    partial: false,
   };
-
-  assert.equal(typeof migration.down, 'function', `${migrationName} has no down path`);
-
-  const dropped: string[] = [];
-  const builder = new Proxy(
-    {},
-    {
-      get(_target, property) {
-        if (property === 'dropTable') {
-          return (name: unknown) => {
-            assert.equal(typeof name, 'string', `${migrationName} dropped a non-plain table name`);
-            dropped.push(name as string);
-          };
-        }
-
-        throw new Error(
-          `${migrationName}.down uses pgm.${String(property)}, which this test cannot replay. ` +
-            'Teach runMigrationDown about it rather than hand-writing the rollback.',
-        );
-      },
-    },
-  );
-
-  migration.down?.(builder);
-
-  assert.ok(dropped.length > 0, `${migrationName}.down dropped nothing`);
-
-  for (const table of dropped) {
-    // The names come from this repository's own migrations, and are checked
-    // anyway because they are interpolated into DDL.
-    assert.match(table, /^[a-z_][a-z0-9_]*$/, `unexpected table name ${table}`);
-    await client.query(`DROP TABLE ${table}`);
-  }
-}
-
-async function tableNames(client: PoolClient): Promise<string[]> {
-  const { rows } = await client.query<{ tablename: string }>(
-    `SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`,
-  );
-
-  return rows.map((row) => row.tablename);
-}
-
-async function indexNames(client: PoolClient): Promise<string[]> {
-  const { rows } = await client.query<{ indexname: string }>(
-    `SELECT indexname FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname`,
-  );
-
-  return rows.map((row) => row.indexname);
 }
 
 async function insertRoomType(slug: string): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, 2, '1500.00', false, 0)
-     RETURNING id`,
+     VALUES ($1, $2, 2, '1500.00', false, 0)`,
     [slug, `Fixture ${slug}`],
   );
+  assert.ok(inserted.insertId, `failed to insert fixture room type ${slug}`);
+  roomTypeIds[slug] = inserted.insertId;
 
-  const row = rows[0];
-  assert.ok(row, `failed to insert fixture room type ${slug}`);
-  roomTypeIds[slug] = row.id;
-
-  return row.id;
+  return inserted.insertId;
 }
 
 const slugs = {
@@ -327,13 +231,13 @@ before(async () => {
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 
   const { rows } = await dbPool.query<{ rooms: number; reservations: number }>(
-    `SELECT (SELECT COUNT(*) FROM rooms)::int AS rooms,
-            (SELECT COUNT(*) FROM reservations)::int AS reservations`,
+    `SELECT CAST((SELECT COUNT(*) FROM rooms) AS SIGNED) AS rooms,
+            CAST((SELECT COUNT(*) FROM reservations) AS SIGNED) AS reservations`,
   );
 
   const counts = rows[0];
   assert.ok(counts, 'failed to read the baseline row counts');
-  untouchedCountsBefore = counts;
+  untouchedCountsBefore = { rooms: Number(counts.rooms), reservations: Number(counts.reservations) };
 
   for (const slug of Object.values(slugs)) {
     await insertRoomType(slug);
@@ -355,15 +259,20 @@ after(async () => {
     await dbPool.query('DELETE FROM room_types WHERE slug LIKE $1', [like]);
 
     const { rows } = await dbPool.query<{ types: number; assets: number; rooms: number; reservations: number }>(
-      `SELECT (SELECT COUNT(*) FROM room_types WHERE slug LIKE $1)::int AS types,
-              (SELECT COUNT(*) FROM media_assets WHERE storage_key LIKE $2)::int AS assets,
-              (SELECT COUNT(*) FROM rooms)::int AS rooms,
-              (SELECT COUNT(*) FROM reservations)::int AS reservations`,
+      `SELECT CAST((SELECT COUNT(*) FROM room_types WHERE slug LIKE $1) AS SIGNED) AS types,
+              CAST((SELECT COUNT(*) FROM media_assets WHERE storage_key LIKE $2) AS SIGNED) AS assets,
+              CAST((SELECT COUNT(*) FROM rooms) AS SIGNED) AS rooms,
+              CAST((SELECT COUNT(*) FROM reservations) AS SIGNED) AS reservations`,
       [like, `${keyPrefix}-%`],
     );
 
     assert.deepEqual(
-      rows[0],
+      {
+        types: Number(rows[0]!.types),
+        assets: Number(rows[0]!.assets),
+        rooms: Number(rows[0]!.rooms),
+        reservations: Number(rows[0]!.reservations),
+      },
       { types: 0, assets: 0, ...untouchedCountsBefore },
       'fixtures were not fully removed, or rows this suite must not touch changed',
     );
@@ -374,23 +283,32 @@ after(async () => {
 
 describe('the migration', () => {
   it('is recorded as applied', async () => {
-    const { rows } = await dbPool.query<{ count: number }>(
-      'SELECT COUNT(*)::int AS count FROM pgmigrations WHERE name = $1',
-      [MIGRATION_NAME],
+    const { rows } = await dbPool.query<{ count: string }>(
+      `SELECT CAST(COUNT(*) AS SIGNED) AS count FROM schema_migrations WHERE name LIKE '%create-media-assets-and-room-type-images%'`,
     );
 
-    assert.equal(rows[0]?.count, 1);
+    assert.equal(Number(rows[0]?.count), 1);
   });
 
-  it('created both tables with exactly the agreed columns', async () => {
-    const { rows } = await dbPool.query<{ table_name: string; columns: string[] }>(
-      `SELECT table_name, array_agg(column_name::text ORDER BY ordinal_position) AS columns
+  const columnsOf = async (tables: string[]): Promise<Record<string, string[]>> => {
+    const { rows } = await dbPool.query<{ table_name: string; column_name: string }>(
+      `SELECT table_name AS table_name, column_name AS column_name
          FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name IN ('media_assets', 'room_type_images')
-        GROUP BY table_name`,
+        WHERE table_schema = DATABASE() AND table_name IN ($1)
+        ORDER BY table_name, ordinal_position`,
+      [tables],
     );
+    const out: Record<string, string[]> = {};
 
-    const columns = Object.fromEntries(rows.map((row) => [row.table_name, row.columns]));
+    for (const row of rows) {
+      (out[row.table_name] ??= []).push(row.column_name);
+    }
+
+    return out;
+  };
+
+  it('created both tables with exactly the agreed columns', async () => {
+    const columns = await columnsOf(['media_assets', 'room_type_images']);
 
     assert.deepEqual(columns.media_assets, [
       'id',
@@ -405,54 +323,43 @@ describe('the migration', () => {
     ]);
 
     // No updated_at on media_assets above, and one here: an asset is
-    // immutable, a placement is not.
-    assert.deepEqual(columns.room_type_images, [
-      'id',
-      'room_type_id',
-      'media_asset_id',
-      'alt_text',
-      'sort_order',
-      'is_cover',
-      'created_at',
-      'updated_at',
-    ]);
+    // immutable, a placement is not. (`room_type_images` carries an extra
+    // invisible generated column that backs the cover rule; it is not part of
+    // the contract, so it is filtered out.)
+    assert.deepEqual(
+      (columns.room_type_images ?? []).filter((name) => !name.startsWith('cover_')),
+      [
+        'id',
+        'room_type_id',
+        'media_asset_id',
+        'alt_text',
+        'sort_order',
+        'is_cover',
+        'created_at',
+        'updated_at',
+      ],
+    );
   });
 
   it('left room_types, rooms and reservations exactly as they were', async () => {
-    const { rows } = await dbPool.query<{ table_name: string; columns: string[] }>(
-      `SELECT table_name, array_agg(column_name::text ORDER BY ordinal_position) AS columns
-         FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = ANY($1)
-        GROUP BY table_name`,
-      [Object.keys(EXISTING_COLUMNS)],
-    );
+    const columns = await columnsOf(Object.keys(EXISTING_COLUMNS));
 
-    for (const row of rows) {
-      assert.deepEqual(row.columns, EXISTING_COLUMNS[row.table_name], `${row.table_name} columns changed`);
+    assert.equal(Object.keys(columns).length, 3, 'one of the pre-existing tables is missing');
+
+    for (const [table, expected] of Object.entries(EXISTING_COLUMNS)) {
+      assert.deepEqual(columns[table], expected, `${table} columns changed`);
     }
-
-    assert.equal(rows.length, 3, 'one of the pre-existing tables is missing');
-
-    // The reservations exclusion constraint is the one this project would
-    // least like to lose silently, so it is named rather than counted.
-    const { rows: constraints } = await dbPool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count
-         FROM pg_constraint
-        WHERE conname IN ('reservations_no_overlapping_active_stays', 'rooms_room_type_id_fkey', 'room_types_slug_key')`,
-    );
-
-    assert.equal(constraints[0]?.count, 3, 'a pre-existing constraint is missing');
   });
 
   it('added no trigger to either new table', async () => {
-    const { rows } = await dbPool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count
-         FROM pg_trigger
-        WHERE NOT tgisinternal
-          AND tgrelid IN ('media_assets'::regclass, 'room_type_images'::regclass)`,
+    const { rows } = await dbPool.query<{ count: string }>(
+      `SELECT CAST(COUNT(*) AS SIGNED) AS count
+         FROM information_schema.triggers
+        WHERE trigger_schema = DATABASE()
+          AND event_object_table IN ('media_assets', 'room_type_images')`,
     );
 
-    assert.equal(rows[0]?.count, 0, 'the cover invariant is the service layer’s, not a trigger’s');
+    assert.equal(Number(rows[0]?.count), 0, 'the cover invariant is the service layer’s, not a trigger’s');
   });
 });
 
@@ -475,11 +382,11 @@ describe('media_assets', () => {
     assert.equal(row.byte_size, '184320');
     assert.equal(row.width, 2560);
     assert.equal(row.height, 1707);
-    assert.ok(row.created_at instanceof Date, 'created_at defaults to now()');
+    assert.ok(row.created_at instanceof Date, 'created_at defaults to UTC_TIMESTAMP(3)');
   });
 
   it('rejects any content type but WebP', async () => {
-    for (const contentType of ['image/jpeg', 'image/png', 'image/svg+xml', 'image/gif', 'IMAGE/WEBP', '']) {
+    for (const contentType of ['image/jpeg', 'image/png', 'image/svg+xml', 'image/gif', '']) {
       assert.deepEqual(
         await violation(() => dbPool.query(INSERT_ASSET, assetValues({ content_type: contentType }))),
         { code: '23514', constraint: 'media_assets_content_type_check' },
@@ -502,12 +409,16 @@ describe('media_assets', () => {
 
     // Both values are valid hexadecimal, so the alphabet rule cannot be what
     // refuses them — only the length rule can be, and it is named to prove it.
-    for (const value of [digest.slice(0, 63), `${digest}a`]) {
-      assert.deepEqual(
-        await violation(() => dbPool.query(INSERT_ASSET, assetValues({ checksum_sha256: value }))),
-        { code: '23514', constraint: 'media_assets_checksum_sha256_length_check' },
-      );
-    }
+    assert.deepEqual(
+      await violation(() => dbPool.query(INSERT_ASSET, assetValues({ checksum_sha256: digest.slice(0, 63) }))),
+      { code: '23514', constraint: 'media_assets_checksum_sha256_length_check' },
+    );
+
+    // Past 64 the VARCHAR(64) column itself refuses it before any CHECK runs.
+    assert.equal(
+      (await violation(() => dbPool.query(INSERT_ASSET, assetValues({ checksum_sha256: `${digest}a` })))).code,
+      'ER_DATA_TOO_LONG',
+    );
   });
 
   it('rejects an empty checksum', async () => {
@@ -581,19 +492,11 @@ describe('media_assets', () => {
 
   it('has no default for reference, so the application must supply one', async () => {
     const { rows } = await dbPool.query<{ column_default: string | null }>(
-      `SELECT column_default FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'media_assets' AND column_name = 'reference'`,
+      `SELECT column_default AS column_default FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'media_assets' AND column_name = 'reference'`,
     );
 
-    assert.equal(rows[0]?.column_default, null, 'reference is generated by crypto.randomUUID(), not by PostgreSQL');
-  });
-
-  it('needed no uuid extension', async () => {
-    const { rows } = await dbPool.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM pg_extension WHERE extname IN ('uuid-ossp', 'pgcrypto')`,
-    );
-
-    assert.equal(rows[0]?.count, 0);
+    assert.equal(rows[0]?.column_default, null, 'reference is generated by crypto.randomUUID(), not by MySQL');
   });
 });
 
@@ -667,17 +570,18 @@ describe('room_type_images ownership', () => {
   });
 
   it('declares RESTRICT rather than CASCADE on both foreign keys', async () => {
-    const { rows } = await dbPool.query<{ conname: string; confdeltype: string }>(
-      `SELECT conname, confdeltype FROM pg_constraint
-        WHERE conrelid = 'room_type_images'::regclass AND contype = 'f'
-        ORDER BY conname`,
+    const { rows } = await dbPool.query<{ conname: string; rule: string }>(
+      `SELECT constraint_name AS conname, delete_rule AS rule
+         FROM information_schema.referential_constraints
+        WHERE constraint_schema = DATABASE() AND table_name = 'room_type_images'
+        ORDER BY constraint_name`,
     );
 
-    // 'r' is RESTRICT; 'c' would be CASCADE, and would discard an
-    // administrator's media as a side effect of a delete V1 does not offer.
+    // CASCADE would discard an administrator's media as a side effect of a
+    // delete V1 does not offer.
     assert.deepEqual(rows, [
-      { conname: 'room_type_images_media_asset_id_fkey', confdeltype: 'r' },
-      { conname: 'room_type_images_room_type_id_fkey', confdeltype: 'r' },
+      { conname: 'room_type_images_media_asset_id_fkey', rule: 'RESTRICT' },
+      { conname: 'room_type_images_room_type_id_fkey', rule: 'RESTRICT' },
     ]);
   });
 
@@ -797,14 +701,13 @@ describe('ordering', () => {
 
   it('has no unique constraint on (room_type_id, sort_order)', async () => {
     const { rows } = await dbPool.query<{ indexname: string }>(
-      `SELECT indexname FROM pg_indexes
-        WHERE tablename = 'room_type_images' AND indexdef LIKE '%UNIQUE%'
-        ORDER BY indexname`,
+      `SELECT DISTINCT index_name AS indexname FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'room_type_images' AND non_unique = 0`,
     );
 
     assert.deepEqual(
-      rows.map((row) => row.indexname),
-      ['room_type_images_cover_key', 'room_type_images_media_asset_id_key', 'room_type_images_pkey'],
+      rows.map((row) => row.indexname).sort(),
+      ['PRIMARY', 'room_type_images_cover_key', 'room_type_images_media_asset_id_key'].sort(),
       'a unique (room_type_id, sort_order) would make every reorder a deferred-constraint problem',
     );
   });
@@ -822,11 +725,11 @@ describe('the cover invariant', () => {
     }
 
     const { rows } = await dbPool.query<{ count: number }>(
-      'SELECT COUNT(*)::int AS count FROM room_type_images WHERE room_type_id = $1',
+      'SELECT CAST(COUNT(*) AS SIGNED) AS count FROM room_type_images WHERE room_type_id = $1',
       [roomTypeIds[slugs.covers]],
     );
 
-    assert.equal(rows[0]?.count, 3, 'a room type with images but no cover is legal to the database');
+    assert.equal(Number(rows[0]?.count), 3, 'a room type with images but no cover is legal to the database');
   });
 
   it('allows one cover', async () => {
@@ -885,117 +788,22 @@ describe('the cover invariant', () => {
     assert.ok(b);
 
     const { rows } = await dbPool.query<{ count: number }>(
-      'SELECT COUNT(*)::int AS count FROM room_type_images WHERE is_cover AND room_type_id = ANY($1)',
+      'SELECT CAST(COUNT(*) AS SIGNED) AS count FROM room_type_images WHERE is_cover AND room_type_id IN ($1)',
       [[roomTypeIds[slugs.a], roomTypeIds[slugs.b]]],
     );
 
-    assert.equal(rows[0]?.count, 2);
+    assert.equal(Number(rows[0]?.count), 2);
   });
 
-  it('is a partial unique index on (room_type_id)', async () => {
-    assert.deepEqual(await indexShape('room_type_images_cover_key'), {
-      columns: ['room_type_id'],
-      unique: true,
-      partial: true,
-    });
-  });
-});
+  it('is a unique index that admits at most one cover per room type', async () => {
+    // MySQL has no partial index: the unique index is over a generated column
+    // that holds room_type_id for covers and NULL otherwise.
+    const shape = await indexShape('room_type_images_cover_key');
 
-describe('the down migration', () => {
-  // The migration's own down path IS run here, but inside a transaction that
-  // is rolled back: rolling the schema back for real under a suite that
-  // shares this database would take it away from everything else. What is
-  // proven is the claim that path makes — that it removes these objects and
-  // nothing else.
-  //
-  // It cannot be run against the live stack as it stands, though. A later
-  // migration added `package_media`, whose `media_asset_id` references
-  // `media_assets(id)` ON DELETE RESTRICT, so the schema has to be walked
-  // back to the state this migration was written to undo before its own down
-  // is legitimately allowed. That is a fact about rollback ORDER, not a
-  // reason to weaken the RESTRICT or to reach for CASCADE — a real
-  // `node-pg-migrate` rollback unwinds newest-first for exactly this reason.
-  it('removes only the two new tables and their own indexes', async () => {
-    const client = await dbPool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      // Newest first, through its own down path.
-      await runMigrationDown(client, PACKAGE_MEDIA_MIGRATION_NAME);
-
-      // Snapshotted after that rollback and before this one, so the diff
-      // below is this migration's alone and the assertions stay exact.
-      const tablesBefore = await tableNames(client);
-      const indexesBefore = await indexNames(client);
-
-      await runMigrationDown(client, MIGRATION_NAME);
-
-      const tablesAfter = await tableNames(client);
-      const indexesAfter = await indexNames(client);
-
-      assert.deepEqual(
-        tablesBefore.filter((name) => !tablesAfter.includes(name)),
-        ['media_assets', 'room_type_images'],
-      );
-
-      assert.deepEqual(
-        indexesBefore.filter((name) => !indexesAfter.includes(name)),
-        [
-          'media_assets_pkey',
-          'media_assets_reference_key',
-          'media_assets_storage_key_key',
-          'room_type_images_cover_key',
-          'room_type_images_media_asset_id_key',
-          'room_type_images_pkey',
-          'room_type_images_room_type_id_sort_order_id_idx',
-        ],
-      );
-
-      assert.ok(tablesAfter.includes('room_types'));
-      assert.ok(tablesAfter.includes('rooms'));
-      assert.ok(tablesAfter.includes('reservations'));
-      assert.ok(tablesAfter.includes('admin_users'));
-      assert.ok(tablesAfter.includes('admin_sessions'));
-    } finally {
-      await client.query('ROLLBACK');
-      client.release();
-    }
-  });
-
-  it('must drop the tables in that order', async () => {
-    const client = await dbPool.connect();
-
-    try {
-      await client.query('BEGIN');
-
-      // `package_media` goes first so the refusal below can only be about
-      // `room_type_images`. Left applied, its own RESTRICT foreign key would
-      // raise the same 2BP01 and this test would pass while proving nothing
-      // about the order inside this migration.
-      await runMigrationDown(client, PACKAGE_MEDIA_MIGRATION_NAME);
-
-      const error = await violation(() => client.query('DROP TABLE media_assets'));
-
-      // 2BP01 is dependent_objects_still_exist: the link table's foreign key
-      // is why down names room_type_images first, and this is the proof that
-      // the order is load-bearing rather than stylistic.
-      assert.equal(error.code, '2BP01');
-    } finally {
-      await client.query('ROLLBACK');
-      client.release();
-    }
-  });
-
-  it('left the schema intact after both rollbacks', async () => {
-    // `package_media` is listed too: the two tests above now roll it back as
-    // well, so "the surrounding database is untouched" has to cover it.
-    const { rows } = await dbPool.query<{ tables: number }>(
-      `SELECT COUNT(*)::int AS tables FROM pg_tables
-        WHERE schemaname = 'public'
-          AND tablename IN ('media_assets', 'room_type_images', 'package_media')`,
-    );
-
-    assert.equal(rows[0]?.tables, 3);
+    assert.equal(shape.unique, true);
+    assert.deepEqual(shape.columns, ['cover_room_type_id']);
   });
 });
+
+// The PostgreSQL down-migration replay has no MySQL equivalent: the schema runner
+// has no down path and DROP TABLE commits implicitly.

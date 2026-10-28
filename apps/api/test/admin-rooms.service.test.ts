@@ -78,6 +78,10 @@ function classify(text: string): string {
   if (trimmed.startsWith('SELECT COUNT')) {
     return 'COUNT';
   }
+  if (/WHERE r\.id = \$1/.test(trimmed) && !/FOR UPDATE/.test(trimmed)) {
+    // The plain read-back that replaces RETURNING in MySQL.
+    return 'READBACK';
+  }
   if (/FROM room_types rt\b/.test(trimmed) && /FOR UPDATE/.test(trimmed)) {
     return 'LOCK_TYPE';
   }
@@ -100,7 +104,11 @@ function respond(text: string): Promise<{ rows: unknown[] }> {
     case 'LIST':
       return Promise.resolve({ rows: listRows });
     case 'INSERT':
-      return Promise.resolve({ rows: insertRows });
+      return Promise.resolve(
+        insertRows.length > 0 ? { rows: [], rowCount: 1, insertId: '42' } : { rows: [], rowCount: 0 },
+      );
+    case 'READBACK':
+      return Promise.resolve({ rows: [...insertRows, ...updateRows] });
     case 'RESOLVE':
       return Promise.resolve({ rows: resolveRows });
     case 'LOCK_TYPE':
@@ -110,7 +118,7 @@ function respond(text: string): Promise<{ rows: unknown[] }> {
     case 'COUNT':
       return Promise.resolve({ rows: countRows });
     case 'UPDATE':
-      return Promise.resolve({ rows: updateRows });
+      return Promise.resolve({ rows: [], rowCount: 1 });
     default:
       return Promise.resolve({ rows: [] });
   }
@@ -119,7 +127,7 @@ function respond(text: string): Promise<{ rows: unknown[] }> {
 before(async () => {
   // The service's module graph reaches db/pool, which requires DATABASE_URL at
   // import time. Nothing here connects: the pool is replaced before any call.
-  process.env.DATABASE_URL ??= 'postgresql://unused:unused@127.0.0.1:1/unused';
+  process.env.DATABASE_URL ??= 'mysql://unused:unused@127.0.0.1:1/unused';
   ({ dbPool } = await import('../src/db/pool.js'));
   ({ listAdminPhysicalRooms, addAdminPhysicalRoom, changeAdminPhysicalRoom } = await import(
     '../src/modules/admin-rooms/admin-rooms.service.js'
@@ -221,7 +229,7 @@ describe('addAdminPhysicalRoom', () => {
 
     await addAdminPhysicalRoom(SLUG, ROOM);
 
-    assert.deepEqual(sequence(), ['INSERT']);
+    assert.deepEqual(sequence(), ['INSERT', 'READBACK']);
     assert.deepEqual(calls[0]!.values, [SLUG, ROOM]);
   });
 
@@ -304,7 +312,7 @@ describe('changeAdminPhysicalRoom', () => {
 
       await changeAdminPhysicalRoom(ROOM, { isActive: true });
 
-      assert.deepEqual(sequence(), ['RESOLVE', 'BEGIN', 'LOCK_TYPE', 'LOCK_ROOM', 'UPDATE', 'COMMIT']);
+      assert.deepEqual(sequence(), ['RESOLVE', 'BEGIN', 'LOCK_TYPE', 'LOCK_ROOM', 'UPDATE', 'READBACK', 'COMMIT']);
 
       const order = sequence();
       assert.ok(
@@ -423,8 +431,8 @@ describe('changeAdminPhysicalRoom', () => {
       assert.deepEqual(count.values, ['42']);
       assert.match(count.text, /status IN \('pending', 'confirmed'\)/);
       // A stay already checked in but not yet checked out still blocks.
-      assert.match(count.text, /check_out > CURRENT_DATE/);
-      assert.doesNotMatch(count.text, /check_in >= CURRENT_DATE/);
+      assert.match(count.text, /check_out > UTC_DATE()/);
+      assert.doesNotMatch(count.text, /check_in >= UTC_DATE()/);
     });
 
     it('succeeds when nothing upcoming is allocated to the room', async () => {
@@ -443,6 +451,7 @@ describe('changeAdminPhysicalRoom', () => {
         'LOCK_ROOM',
         'COUNT',
         'UPDATE',
+        'READBACK',
         'COMMIT',
       ]);
     });
@@ -505,7 +514,7 @@ describe('changeAdminPhysicalRoom', () => {
       await changeAdminPhysicalRoom(ROOM, { roomNumber: 'D-201' });
 
       assert.ok(!statementOfKind('COUNT'), 'renaming strands nobody');
-      assert.deepEqual(sequence(), ['RESOLVE', 'BEGIN', 'LOCK_TYPE', 'LOCK_ROOM', 'UPDATE', 'COMMIT']);
+      assert.deepEqual(sequence(), ['RESOLVE', 'BEGIN', 'LOCK_TYPE', 'LOCK_ROOM', 'UPDATE', 'READBACK', 'COMMIT']);
     });
 
     it('passes the new number through untouched, with no case transformation', async () => {
@@ -580,6 +589,7 @@ describe('changeAdminPhysicalRoom', () => {
         'LOCK_ROOM',
         'COUNT',
         'UPDATE',
+        'READBACK',
         'COMMIT',
       ]);
       assert.deepEqual(statementOfKind('UPDATE')!.values, ['42', 'D-201', false]);

@@ -122,24 +122,23 @@ async function sortOrders(roomTypeId: string): Promise<number[]> {
 
 async function coverCount(roomTypeId: string): Promise<number> {
   const { rows } = await dbPool.query<{ total: number }>(
-    `SELECT COUNT(*)::int AS total FROM room_type_images WHERE room_type_id = $1 AND is_cover`,
+    `SELECT CAST(COUNT(*) AS SIGNED) AS total FROM room_type_images WHERE room_type_id = $1 AND is_cover`,
     [roomTypeId],
   );
 
-  return rows[0]!.total;
+  return Number(rows[0]!.total);
 }
 
 async function insertRoomType(slug: string): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, 2, '1500.00', false, 0)
-     RETURNING id`,
+     VALUES ($1, $2, 2, '1500.00', false, 0)`,
     [slug, `Fixture ${slug}`],
   );
 
-  roomTypeIds[slug] = rows[0]!.id;
+  roomTypeIds[slug] = inserted.insertId!;
 
-  return rows[0]!.id;
+  return inserted.insertId!;
 }
 
 /**
@@ -157,7 +156,7 @@ async function clearImages(roomTypeId: string): Promise<void> {
   await dbPool.query('DELETE FROM room_type_images WHERE room_type_id = $1', [roomTypeId]);
 
   if (rows.length > 0) {
-    await dbPool.query('DELETE FROM media_assets WHERE id = ANY($1)', [rows.map((row) => row.media_asset_id)]);
+    await dbPool.query('DELETE FROM media_assets WHERE id IN ($1)', [rows.map((row) => row.media_asset_id)]);
   }
 }
 
@@ -167,11 +166,11 @@ before(async () => {
   repository = await import('../src/modules/admin-room-type-media/admin-room-type-media.repository.js');
 
   const { rows } = await dbPool.query<{ rooms: number; reservations: number }>(
-    `SELECT (SELECT COUNT(*) FROM rooms)::int AS rooms,
-            (SELECT COUNT(*) FROM reservations)::int AS reservations`,
+    `SELECT CAST((SELECT COUNT(*) FROM rooms) AS SIGNED) AS rooms,
+            CAST((SELECT COUNT(*) FROM reservations) AS SIGNED) AS reservations`,
   );
 
-  untouchedBefore = rows[0]!;
+  untouchedBefore = { rooms: Number(rows[0]!.rooms), reservations: Number(rows[0]!.reservations) };
 
   for (const slug of Object.values(slugs)) {
     await insertRoomType(slug);
@@ -196,16 +195,16 @@ after(async () => {
       rooms: number;
       reservations: number;
     }>(
-      `SELECT (SELECT COUNT(*) FROM room_types WHERE slug LIKE $1)::int AS types,
-              (SELECT COUNT(*) FROM media_assets WHERE storage_key LIKE $2)::int AS assets,
-              (SELECT COUNT(*) FROM room_type_images)::int AS images,
-              (SELECT COUNT(*) FROM rooms)::int AS rooms,
-              (SELECT COUNT(*) FROM reservations)::int AS reservations`,
+      `SELECT CAST((SELECT COUNT(*) FROM room_types WHERE slug LIKE $1) AS SIGNED) AS types,
+              CAST((SELECT COUNT(*) FROM media_assets WHERE storage_key LIKE $2) AS SIGNED) AS assets,
+              CAST((SELECT COUNT(*) FROM room_type_images) AS SIGNED) AS images,
+              CAST((SELECT COUNT(*) FROM rooms) AS SIGNED) AS rooms,
+              CAST((SELECT COUNT(*) FROM reservations) AS SIGNED) AS reservations`,
       [like, `${keyPrefix}-%`],
     );
 
     assert.deepEqual(
-      { types: rows[0]!.types, assets: rows[0]!.assets, rooms: rows[0]!.rooms, reservations: rows[0]!.reservations },
+      { types: Number(rows[0]!.types), assets: Number(rows[0]!.assets), rooms: Number(rows[0]!.rooms), reservations: Number(rows[0]!.reservations) },
       { types: 0, assets: 0, ...untouchedBefore },
       'fixtures were not fully removed, or rows this suite must not touch changed',
     );
@@ -258,7 +257,7 @@ describe('resolving and locking a room type', () => {
       await assert.rejects(
         () => contender.query(`SELECT id FROM room_types WHERE slug = $1 FOR UPDATE NOWAIT`, [slugs.locks]),
         (error: { code?: string }) => {
-          assert.equal(error.code, '55P03', 'lock_not_available');
+          assert.ok(error.code === 'ER_LOCK_NOWAIT' || error.code === 'ER_LOCK_NOWAIT', 'lock_not_available');
 
           return true;
         },
@@ -952,11 +951,11 @@ describe('the caller owns the transaction', () => {
       assert.deepEqual(await references(roomTypeId()), []);
 
       const { rows } = await dbPool.query<{ total: number }>(
-        `SELECT COUNT(*)::int AS total FROM media_assets WHERE reference = $1`,
+        `SELECT CAST(COUNT(*) AS SIGNED) AS total FROM media_assets WHERE reference = $1`,
         [image.reference],
       );
 
-      assert.equal(rows[0]!.total, 0, 'the asset must not survive either');
+      assert.equal(Number(rows[0]!.total), 0, 'the asset must not survive either');
     } finally {
       client.release();
     }
@@ -1007,7 +1006,7 @@ describe('the parent lock is what makes a ceiling enforceable', () => {
       await second.query('BEGIN');
       await assert.rejects(
         () => second.query(`SELECT id FROM room_types WHERE slug = $1 FOR UPDATE NOWAIT`, [slugs.locks]),
-        (error: { code?: string }) => error.code === '55P03',
+        (error: { code?: string }) => error.code === 'ER_LOCK_NOWAIT',
         'the second decision window opened while the first was still deciding',
       );
       await second.query('ROLLBACK');

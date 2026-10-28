@@ -327,7 +327,7 @@ describe('admin default variant: moving the flag', () => {
     }
 
     assert.match(writes[0]!.text, /SET is_default = false WHERE package_id = \$1 AND is_default/);
-    assert.match(writes[1]!.text, /SET is_default = true WHERE package_id = \$1 AND key = \$2/);
+    assert.match(writes[1]!.text, /SET is_default = true WHERE package_id = \$1 AND `key` = \$2/);
     assert.deepEqual(writes[1]!.values, [PACKAGE_ID, 'premium-service']);
   });
 
@@ -380,7 +380,7 @@ describe('admin default variant: moving the flag', () => {
 
     const own = stored.calls.find((call) => call.text.includes('UPDATE packages'))!;
     assert.match(own.text, /seed_managed = false/);
-    assert.match(own.text, /updated_at = now\(\)/);
+    assert.match(own.text, /updated_at = UTC_TIMESTAMP\(3\)/);
   });
 
   it('preserves publication, and never deactivates on the administrator\'s behalf', async () => {

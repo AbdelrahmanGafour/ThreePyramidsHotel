@@ -60,7 +60,7 @@ type Recorded = { text: string; values: unknown[] | undefined };
 /**
  * One journey, with the transaction applied to real state.
  *
- * The insert is modelled the way `unnest ... WITH ORDINALITY` behaves, and
+ * The insert is modelled as the multi-row VALUES list it is, and
  * the per-kind unique index is enforced on every row written, so a regression
  * that numbered all three kinds from one sequence would collide here.
  */
@@ -120,22 +120,22 @@ function storedJourney(options: {
       }
 
       if (text.includes('INSERT INTO package_content_items')) {
-        const kind = values![1] as string;
-        const entries = values![2] as string[];
-
-        entries.forEach((entry, index) => {
-          const sortOrder = index + 1;
+        // One multi-row VALUES list: (package_id, kind, text, sort_order) per row.
+        for (let at = 0; at < values!.length; at += 4) {
+          const kind = values![at + 1] as string;
+          const entry = values![at + 2] as string;
+          const sortOrder = values![at + 3] as number;
 
           // What UNIQUE (package_id, kind, sort_order) would do.
           if (state.items.some((i) => i.kind === kind && i.sort_order === sortOrder)) {
             throw Object.assign(
-              new Error('duplicate key value violates unique constraint'),
+              new Error('Duplicate entry'),
               { code: '23505', constraint: 'package_content_items_package_kind_sort_key' },
             );
           }
 
           state.items.push({ kind, text: entry, sort_order: sortOrder });
-        });
+        }
 
         state.inserts += 1;
         return { rows: [] } as never;

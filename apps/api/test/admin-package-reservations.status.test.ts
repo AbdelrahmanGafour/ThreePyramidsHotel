@@ -4,12 +4,11 @@ import { afterEach, before, describe, it } from 'node:test';
 
 // The admin package reservation status transition, without a database.
 //
-// The conditional UPDATE's concurrency guarantee is modelled rather than
-// mocked away: the fake below holds one row's status and applies the same
-// `status = ANY(allowed)` test the SQL does, which is exactly what PostgreSQL
-// re-evaluates after it grants the row lock to the second writer. A second
-// transition therefore matches zero rows here for the same reason it does in
-// the database.
+// The concurrency guarantee is modelled rather than mocked away: the fake
+// below holds one row's status behind an exclusive lock taken by the
+// `SELECT ... FOR UPDATE` and released at COMMIT/ROLLBACK, which is what InnoDB
+// does. The second transition therefore reads the committed status and is
+// refused for the same reason it is in the database.
 
 type RepositoryModule = typeof import('../src/modules/admin-package-reservations/admin-package-reservations.repository.js');
 type ControllerModule = typeof import('../src/modules/admin-package-reservations/admin-package-reservations.controller.js');
@@ -75,32 +74,76 @@ function row(status: string) {
 type Recorded = { text: string; values: unknown[] | undefined };
 
 /**
- * One stored reservation, updated only when its current status is in the
- * allowed set the query supplies — the same condition the real UPDATE applies.
+ * One stored reservation behind a transactional fake. The `FOR UPDATE` read
+ * takes a row lock that is held until COMMIT or ROLLBACK, so a second
+ * transition waits and then sees the committed status, exactly as InnoDB
+ * does. The update then applies only if the status read under that lock is in
+ * the allowed set.
  */
 function storedReservation(initialStatus: string | null) {
-  const state = { status: initialStatus, updates: 0, calls: [] as Recorded[] };
+  const state = {
+    status: initialStatus,
+    updates: 0,
+    outbox: 0,
+    committed: 0,
+    rolledBack: 0,
+    calls: [] as Recorded[],
+  };
+  let tail: Promise<void> = Promise.resolve();
+
+  const connect = async () => {
+    let unlock: (() => void) | null = null;
+
+    return {
+      async query(text: string, values?: unknown[]) {
+        state.calls.push({ text, values });
+        const compact = text.replace(/\s+/g, ' ').trim();
+
+        if (compact === 'BEGIN') return { rows: [], rowCount: 0 } as never;
+
+        if (compact === 'COMMIT' || compact === 'ROLLBACK') {
+          if (compact === 'COMMIT') state.committed += 1;
+          else state.rolledBack += 1;
+          unlock?.();
+          unlock = null;
+          return { rows: [], rowCount: 0 } as never;
+        }
+
+        if (compact.includes('FOR UPDATE OF u')) {
+          const previous = tail;
+          let release!: () => void;
+          tail = new Promise<void>((resolve) => { release = resolve; });
+          await previous;
+          unlock = release;
+          return { rows: state.status === null ? [] : [row(state.status)] } as never;
+        }
+
+        if (compact.includes('UPDATE package_reservations')) {
+          state.status = values?.[1] as string;
+          state.updates += 1;
+          return { rows: [], rowCount: 1 } as never;
+        }
+
+        if (compact.includes('INSERT INTO notification_outbox')) {
+          state.outbox += 1;
+          return { rows: [], rowCount: 1 } as never;
+        }
+
+        throw new Error(`unexpected statement: ${compact}`);
+      },
+      release() {
+        unlock?.();
+        unlock = null;
+      },
+    };
+  };
 
   __setQueryableForTests({
     async query(text: string, values?: unknown[]) {
       state.calls.push({ text, values });
-
-      if (text.includes('UPDATE package_reservations')) {
-        const next = values?.[1] as string;
-        const allowed = (values?.[2] ?? []) as string[];
-
-        if (state.status !== null && allowed.includes(state.status)) {
-          state.status = next;
-          state.updates += 1;
-          return { rows: [row(next)] } as never;
-        }
-
-        return { rows: [] } as never;
-      }
-
-      // The diagnosis read that tells 404 from 409.
-      return { rows: state.status === null ? [] : [{ booking_reference: REFERENCE }] } as never;
+      return { rows: [] } as never;
     },
+    connect,
   } as never);
 
   return state;
@@ -277,26 +320,29 @@ describe('admin package reservation status: concurrency', () => {
     assert.equal(stored.updates, 1);
   });
 
-  it('guards the write with the allowed source states, not a prior read', async () => {
+  it('decides under a row lock, then writes, in one transaction', async () => {
     const stored = storedReservation('pending');
     await transition(REFERENCE, { status: 'confirmed' });
 
-    const update = stored.calls[0];
-    assert.match(update.text, /UPDATE package_reservations/);
-    assert.match(update.text, /AND status = ANY\(\$3::text\[\]\)/);
-    // The allowed sources come from the rule module, not a literal in the SQL.
-    assert.deepEqual(update.values?.[2], ['pending']);
-    // No SELECT happened before the write: there is no read-then-write window.
-    assert.equal(stored.calls.length, 1, 'a successful transition costs one statement');
+    const texts = stored.calls.map((call) => call.text.replace(/\s+/g, ' ').trim());
+    assert.equal(texts[0], 'BEGIN');
+    assert.match(texts[1], /FOR UPDATE OF u$/);
+    assert.match(texts[2], /^UPDATE package_reservations/);
+    assert.match(texts[3], /^INSERT INTO notification_outbox/);
+    assert.equal(texts[4], 'COMMIT');
+    assert.equal(texts.length, 5);
+    assert.equal(stored.committed, 1);
   });
 
   it('writes only status and updated_at, never a snapshot', async () => {
     const stored = storedReservation('pending');
     await transition(REFERENCE, { status: 'confirmed' });
 
-    const setClause = stored.calls[0].text.split('SET')[1].split('WHERE')[0];
+    const update = stored.calls.find((call) => call.text.includes('UPDATE package_reservations'));
+    assert.ok(update);
+    const setClause = update.text.split('SET')[1].split('WHERE')[0];
     assert.match(setClause, /status = \$2/);
-    assert.match(setClause, /updated_at = now\(\)/);
+    assert.match(setClause, /updated_at = UTC_TIMESTAMP\(3\)/);
 
     for (const column of [
       'package_code_snapshot',

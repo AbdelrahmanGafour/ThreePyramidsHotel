@@ -28,27 +28,16 @@ type FindAndLockAvailableRoomInput = {
 /**
  * Finds the active room type a booking is for, and holds it.
  *
- * `FOR KEY SHARE` is the first lock of the canonical order:
+ * `FOR SHARE` is the first lock of the canonical order:
  *
  *     room_types row  ->  rooms row
  *
- * It is the weakest row lock PostgreSQL offers, and it is chosen for exactly
- * what it does and does not conflict with:
- *
- *   FOR UPDATE          conflicts. This is how an administrator takes the row
- *                       before changing capacity, so a booking and a capacity
- *                       change can never overlap.
- *   FOR KEY SHARE       compatible. Any number of bookings hold it at once,
- *                       each going on to lock a *different* physical room.
- *   FOR NO KEY UPDATE   compatible. An ordinary UPDATE that leaves `id` and
- *                       `slug` alone takes this — which is every field of the
- *                       T01 partial update. Editing a description or a rate
- *                       therefore does not queue behind in-flight bookings.
- *
- * That last line is why this is not `FOR SHARE`. `FOR SHARE` would conflict
- * with `FOR NO KEY UPDATE` and make every descriptive edit wait for bookings,
- * buying nothing: the serialisation that matters comes from the administrator's
- * explicit `FOR UPDATE`, which `FOR KEY SHARE` already blocks on.
+ * MySQL has no FOR KEY SHARE, so this is the weakest shared row lock InnoDB
+ * offers. Any number of bookings hold it at once (each going on to lock a
+ * *different* physical room); an administrator's FOR UPDATE (or any UPDATE of
+ * the row) conflicts, so a booking and a capacity change can never overlap.
+ * Unlike PostgreSQL, a descriptive UPDATE also queues behind in-flight
+ * bookings; that is brief and accepted.
  *
  * Without any lock here, an admin transaction could lower capacity and commit
  * in the window between this read and the reservation INSERT, leaving a booking
@@ -58,7 +47,7 @@ type FindAndLockAvailableRoomInput = {
  *
  *   - a capacity change waits for every in-flight booking on this room type;
  *   - a booking waits for an in-flight capacity change, and under READ
- *     COMMITTED the locking SELECT then re-reads the current row version, so
+ *     COMMITTED (set by the service before BEGIN) the locking SELECT then re-reads the current row version, so
  *     the capacity check in the service runs against the value that was just
  *     committed.
  *
@@ -82,7 +71,7 @@ export async function findActiveRoomTypeBySlug(
        FROM room_types rt
       WHERE rt.slug = $1
         AND rt.is_active = true
-        FOR KEY SHARE OF rt`,
+        FOR SHARE OF rt`,
     [slug],
   );
 
@@ -108,8 +97,8 @@ export async function findActiveRoomTypeBySlug(
  * `SKIP LOCKED` makes concurrent requests step over rooms another transaction
  * is already holding and take the next free one instead of blocking or racing
  * for the same room. The lock is a concurrency strategy, not a correctness
- * guarantee: `reservations_no_overlapping_active_stays` remains the final
- * protection against overlapping active reservations.
+ * guarantee: MySQL has no exclusion constraint, so `insertReservation`
+ * re-checks overlap under the room row lock before writing.
  *
  * Returns only the room id — room numbers stay internal.
  */
@@ -127,8 +116,8 @@ export async function findAndLockAvailableRoom(
                 FROM reservations res
                WHERE res.room_id = r.id
                  AND res.status IN ('pending', 'confirmed')
-                 AND daterange(res.check_in, res.check_out, '[)')
-                     && daterange($2::date, $3::date, '[)')
+                 AND res.check_in < $3
+                 AND res.check_out > $2
             )
       ORDER BY r.room_number ASC, r.id ASC
       LIMIT 1
@@ -145,58 +134,85 @@ export async function findAndLockAvailableRoom(
  * Inserts the pending reservation. `status` and `currency` are written as
  * server-owned literals — never taken from the caller.
  *
- * The conflict target is `booking_reference` specifically, so only a duplicate
- * reference returns no row (leaving the transaction usable for a retry). Any
- * other violation, including the exclusion constraint, still raises.
+ * MySQL has no exclusion constraint, so before writing, overlapping active
+ * stays for the (already row-locked) room are checked with a locking read,
+ * which sees the latest committed rows under READ COMMITTED. A hit raises an
+ * error with SQLSTATE `23P01`, which the service reports as no availability.
+ *
+ * Only a duplicate `booking_reference` returns null (a failed statement leaves
+ * the transaction usable for a retry). Any other violation raises.
  */
 export async function insertReservation(
   client: PoolClient,
   input: InsertReservationInput,
 ): Promise<{ id: string } | null> {
-  const { rows } = await client.query<RoomIdRow>(
-    `INSERT INTO reservations (
-       booking_reference,
-       room_type_id,
-       room_id,
-       guest_first_name,
-       guest_last_name,
-       guest_email,
-       guest_phone,
-       guest_country,
-       adults,
-       children,
-       check_in,
-       check_out,
-       status,
-       currency,
-       nightly_rate_snapshot,
-       total_amount,
-       special_requests
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::date, $12::date,
-             'pending', 'EGP', $13, $14, $15)
-     ON CONFLICT (booking_reference) DO NOTHING
-     RETURNING id`,
-    [
-      input.bookingReference,
-      input.roomTypeId,
-      input.roomId,
-      input.guestFirstName,
-      input.guestLastName,
-      input.guestEmail,
-      input.guestPhone,
-      input.guestCountry,
-      input.adults,
-      input.children,
-      input.checkIn,
-      input.checkOut,
-      input.nightlyRateSnapshot,
-      input.totalAmount,
-      input.specialRequests,
-    ],
+  const overlap = await client.query<RoomIdRow>(
+    `SELECT id
+       FROM reservations
+      WHERE room_id = $1
+        AND status IN ('pending', 'confirmed')
+        AND check_in < $3
+        AND check_out > $2
+      LIMIT 1
+        FOR UPDATE`,
+    [input.roomId, input.checkIn, input.checkOut],
   );
 
-  const row = rows[0];
+  if (overlap.rows.length > 0) {
+    throw Object.assign(
+      new Error('Overlapping active stay (reservations_no_overlapping_active_stays)'),
+      { code: '23P01', constraint: 'reservations_no_overlapping_active_stays' },
+    );
+  }
 
-  return row ? { id: row.id } : null;
+  try {
+    const result = await client.query(
+      `INSERT INTO reservations (
+         booking_reference,
+         room_type_id,
+         room_id,
+         guest_first_name,
+         guest_last_name,
+         guest_email,
+         guest_phone,
+         guest_country,
+         adults,
+         children,
+         check_in,
+         check_out,
+         status,
+         currency,
+         nightly_rate_snapshot,
+         total_amount,
+         special_requests
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+               'pending', 'EGP', $13, $14, $15)`,
+      [
+        input.bookingReference,
+        input.roomTypeId,
+        input.roomId,
+        input.guestFirstName,
+        input.guestLastName,
+        input.guestEmail,
+        input.guestPhone,
+        input.guestCountry,
+        input.adults,
+        input.children,
+        input.checkIn,
+        input.checkOut,
+        input.nightlyRateSnapshot,
+        input.totalAmount,
+        input.specialRequests,
+      ],
+    );
+
+    return result.insertId ? { id: result.insertId } : null;
+  } catch (error) {
+    const e = error as { code?: unknown; constraint?: unknown };
+    if (e.code === '23505' && e.constraint === 'reservations_booking_reference_key') {
+      return null;
+    }
+    throw error;
+  }
 }

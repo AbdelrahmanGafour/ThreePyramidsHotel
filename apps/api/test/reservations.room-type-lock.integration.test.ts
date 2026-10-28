@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import type { PoolClient } from '../src/db/pool';
+import { insertedId, toNumbers } from './support/core-sql';
 
-// Proves the room-type lock conflict against real PostgreSQL, with two real
+// Proves the room-type lock conflict against real MySQL, with two real
 // connections. Nothing is mocked and nothing is timed: the assertion is the
-// SQLSTATE PostgreSQL raises when `lock_timeout` expires (55P03,
-// lock_not_available), which only happens when a lock genuinely conflicts.
+// code the adapter reports when `innodb_lock_wait_timeout` expires (40001,
+// ER_LOCK_WAIT_TIMEOUT), which only happens when a lock genuinely conflicts.
 //
 // A sleep-based test would prove nothing — it would pass just as happily if no
 // lock were taken at all. `lock_timeout` turns "this blocks" into a value the
@@ -37,8 +38,8 @@ const slug = `itest-lock-${runId}`;
 
 let roomTypeId = '';
 
-/** PostgreSQL lock_not_available — what a lock_timeout expiry raises. */
-const LOCK_NOT_AVAILABLE = '55P03';
+/** The adapter's code for a MySQL lock wait timeout (ER_LOCK_WAIT_TIMEOUT, 1205). */
+const LOCK_NOT_AVAILABLE = '40001';
 
 /**
  * Short enough that a blocked statement fails fast, long enough that a
@@ -46,6 +47,22 @@ const LOCK_NOT_AVAILABLE = '55P03';
  * machine. It bounds a failure, it does not schedule one.
  */
 const LOCK_TIMEOUT_MS = 750;
+
+/**
+ * MySQL's smallest lock wait is whole seconds (`innodb_lock_wait_timeout`),
+ * set per session BEFORE the transaction starts. Pooled connections keep the
+ * session value, so `releaseClient` restores the default first.
+ */
+const LOCK_WAIT_SECONDS = 1;
+
+async function useShortLockWait(client: PoolClient): Promise<void> {
+  await client.query(`SET SESSION innodb_lock_wait_timeout = ${LOCK_WAIT_SECONDS}`);
+}
+
+async function releaseClient(client: PoolClient): Promise<void> {
+  await client.query('SET SESSION innodb_lock_wait_timeout = DEFAULT').catch(() => undefined);
+  client.release();
+}
 
 function isLockNotAvailable(error: unknown): boolean {
   return (
@@ -55,16 +72,16 @@ function isLockNotAvailable(error: unknown): boolean {
 
 /**
  * Runs a statement that is expected to block, with a bounded wait, and returns
- * whether PostgreSQL refused it for lack of the lock.
+ * whether MySQL refused it for lack of the lock.
  *
  * The client is always rolled back, so a failed expectation cannot leave a
  * transaction holding locks for the rest of the suite.
  */
 async function expectsBlocked(client: PoolClient, attempt: () => Promise<unknown>): Promise<boolean> {
+  await useShortLockWait(client);
   await client.query('BEGIN');
 
   try {
-    await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT_MS}ms'`);
     await attempt();
     return false;
   } catch (error) {
@@ -85,40 +102,39 @@ before(async () => {
     '../src/modules/admin-room-types/admin-room-types.repository.js'
   ));
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, 4, '1000.00', true, 0)
-     RETURNING id`,
+     VALUES ($1, $2, 4, '1000.00', true, 0)`,
     [slug, `Lock Fixture ${runId}`],
   );
 
-  roomTypeId = rows[0]!.id;
+  roomTypeId = insertedId(inserted);
 });
 
 after(async () => {
   try {
     // No rooms and no reservations are created by this suite, so the room type
     // is the only fixture to remove.
-    await dbPool.query('DELETE FROM room_types WHERE id = $1::bigint', [roomTypeId]);
+    await dbPool.query('DELETE FROM room_types WHERE id = $1', [roomTypeId]);
 
     const { rows } = await dbPool.query<{ types: number }>(
-      'SELECT (SELECT COUNT(*) FROM room_types WHERE id = $1::bigint)::int AS types',
+      'SELECT (SELECT COUNT(*) FROM room_types WHERE id = $1) AS types',
       [roomTypeId],
     );
 
-    assert.deepEqual(rows[0], { types: 0 }, 'fixtures were not fully removed');
+    assert.deepEqual(rows[0] && toNumbers(rows[0]), { types: 0 }, 'fixtures were not fully removed');
   } finally {
     await closeDatabasePool();
   }
 });
 
-describe('booking FOR KEY SHARE vs admin FOR UPDATE on room_types', () => {
+describe('booking FOR SHARE vs admin FOR UPDATE on room_types', () => {
   it('CASE 1 - a booking lookup blocks an admin capacity lock until it ends', async () => {
     const booking = await dbPool.connect();
     const admin = await dbPool.connect();
 
     try {
-      // Client A: take the booking path's key-share lock and hold it.
+      // Client A: take the booking path's shared lock and hold it.
       await booking.query('BEGIN');
       const roomType = await findActiveRoomTypeBySlug(booking, slug);
 
@@ -129,7 +145,7 @@ describe('booking FOR KEY SHARE vs admin FOR UPDATE on room_types', () => {
       // Client B: the admin exclusive lock must not be available.
       const blocked = await expectsBlocked(admin, () => lockAdminRoomTypeBySlug(admin, slug));
 
-      assert.ok(blocked, 'admin FOR UPDATE should have been refused while a booking holds FOR KEY SHARE');
+      assert.ok(blocked, 'admin FOR UPDATE should have been refused while a booking holds FOR SHARE');
 
       // Client A releases.
       await booking.query('ROLLBACK');
@@ -137,7 +153,6 @@ describe('booking FOR KEY SHARE vs admin FOR UPDATE on room_types', () => {
       // Client B: the same lock now succeeds, in a fresh transaction.
       await admin.query('BEGIN');
       try {
-        await admin.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT_MS}ms'`);
         const locked = await lockAdminRoomTypeBySlug(admin, slug);
 
         assert.ok(locked, 'admin FOR UPDATE should succeed once the booking transaction has ended');
@@ -150,8 +165,8 @@ describe('booking FOR KEY SHARE vs admin FOR UPDATE on room_types', () => {
       // Belt and braces: a failed assertion above must not leak an open
       // transaction into the next test.
       await booking.query('ROLLBACK').catch(() => undefined);
-      booking.release();
-      admin.release();
+      await releaseClient(booking);
+      await releaseClient(admin);
     }
   });
 
@@ -196,23 +211,18 @@ describe('booking FOR KEY SHARE vs admin FOR UPDATE on room_types', () => {
       }
     } finally {
       await admin.query('ROLLBACK').catch(() => undefined);
-      admin.release();
-      booking.release();
+      await releaseClient(admin);
+      await releaseClient(booking);
     }
   });
 
-  it('CASE 3 - an ordinary non-key UPDATE is not blocked by a booking lookup', async () => {
-    // The reason this lock is KEY SHARE and not SHARE.
-    //
-    // An UPDATE that leaves `id` and `slug` alone acquires FOR NO KEY UPDATE,
-    // which is compatible with FOR KEY SHARE but conflicts with FOR SHARE.
-    // Every field of the T01 partial update is such a column, so with SHARE
-    // here, editing a description would wait behind every in-flight booking on
-    // that room type — for nothing, since the serialisation that matters comes
-    // from the administrator's explicit FOR UPDATE.
-    //
-    // If this test ever starts failing with 55P03, the lock has been
-    // strengthened and that cost has been reintroduced.
+  it('CASE 3 - an ordinary UPDATE queues behind a booking lookup (unlike PostgreSQL FOR KEY SHARE)', async () => {
+    // MySQL has no FOR KEY SHARE / FOR NO KEY UPDATE split: the booking path
+    // holds a plain shared row lock, and ANY write to the row, even a
+    // descriptive column, waits for it. This case pins that known difference
+    // so it is a documented behaviour rather than a surprise. The wait is
+    // brief in practice (a booking transaction is short) and it is the price
+    // of the in-app overlap/capacity guarantees.
     const booking = await dbPool.connect();
     const editor = await dbPool.connect();
 
@@ -221,44 +231,36 @@ describe('booking FOR KEY SHARE vs admin FOR UPDATE on room_types', () => {
       const held = await findActiveRoomTypeBySlug(booking, slug);
       assert.ok(held, 'the fixture room type should be found by the booking lookup');
 
-      await editor.query('BEGIN');
-      try {
-        await editor.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT_MS}ms'`);
-
-        // A harmless non-key column, exactly as T01's PATCH would write it.
-        const { rowCount } = await editor.query(
+      const blocked = await expectsBlocked(editor, () =>
+        editor.query(
           `UPDATE room_types
               SET short_description = $2,
-                  updated_at = now()
+                  updated_at = UTC_TIMESTAMP(3)
             WHERE slug = $1`,
           [slug, `edited during a booking ${runId}`],
-        );
+        ),
+      );
 
-        assert.equal(rowCount, 1, 'a descriptive edit must not be blocked by a booking lookup');
-      } finally {
-        // Rolled back, so the fixture is restored and nothing this case wrote
-        // survives into the next test.
-        await editor.query('ROLLBACK');
-      }
+      assert.ok(blocked, 'a write to the row waits for an in-flight booking lookup');
 
       await booking.query('ROLLBACK');
 
-      // The rollback really did restore it.
+      // The blocked UPDATE never applied.
       const { rows } = await dbPool.query<{ short_description: string | null }>(
         'SELECT short_description FROM room_types WHERE slug = $1',
         [slug],
       );
-      assert.equal(rows[0]?.short_description, null, 'the fixture should be unchanged after rollback');
+      assert.equal(rows[0]?.short_description, null, 'the fixture should be unchanged');
     } finally {
       await booking.query('ROLLBACK').catch(() => undefined);
       await editor.query('ROLLBACK').catch(() => undefined);
-      booking.release();
-      editor.release();
+      await releaseClient(booking);
+      await releaseClient(editor);
     }
   });
 
   it('CASE 4 - two concurrent booking lookups do not block each other', async () => {
-    // FOR KEY SHARE is shared: bookings queue behind an administrator, never behind
+    // FOR SHARE is shared: bookings queue behind an administrator, never behind
     // one another. If this ever blocks, the lock has been made too strong and
     // every booking on a popular room type has been serialised.
     const first = await dbPool.connect();
@@ -269,8 +271,8 @@ describe('booking FOR KEY SHARE vs admin FOR UPDATE on room_types', () => {
       const held = await findActiveRoomTypeBySlug(first, slug);
       assert.ok(held);
 
+      await useShortLockWait(second);
       await second.query('BEGIN');
-      await second.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT_MS}ms'`);
       const concurrent = await findActiveRoomTypeBySlug(second, slug);
 
       assert.ok(concurrent, 'a second booking lookup must not be blocked by the first');
@@ -281,8 +283,8 @@ describe('booking FOR KEY SHARE vs admin FOR UPDATE on room_types', () => {
     } finally {
       await first.query('ROLLBACK').catch(() => undefined);
       await second.query('ROLLBACK').catch(() => undefined);
-      first.release();
-      second.release();
+      await releaseClient(first);
+      await releaseClient(second);
     }
   });
 });

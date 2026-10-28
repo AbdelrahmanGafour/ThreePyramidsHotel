@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 
-// Removing a whole journey, against real PostgreSQL.
+// Removing a whole journey, against real MySQL.
 //
 // The unit suite models the transaction; this proves the cascade chain, which
 // is the part only the schema can settle. One DELETE against `packages` has
@@ -17,12 +16,12 @@ import { runner } from 'node-pg-migrate';
 // it, through the real pool. Every row this suite writes carries an
 // identifier unique to the run, and exactly those rows are removed afterwards.
 
-// Uses the dedicated migrated disposable cluster, never hotel development.
+// Uses the dedicated migrated disposable MySQL database, never hotel development.
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 
 type Pool = typeof import('../src/db/pool.js');
@@ -57,25 +56,32 @@ async function childCounts(packageId: string): Promise<{
     rates: number;
   }>(
     `SELECT
-       (SELECT count(*)::int FROM package_itinerary_sections WHERE package_id = $1) AS itinerary,
-       (SELECT count(*)::int FROM package_content_items WHERE package_id = $1) AS content,
-       (SELECT count(*)::int FROM package_variants WHERE package_id = $1) AS variants,
-       (SELECT count(*)::int FROM package_rate_tiers r
+       (SELECT COUNT(*) FROM package_itinerary_sections WHERE package_id = $1) AS itinerary,
+       (SELECT COUNT(*) FROM package_content_items WHERE package_id = $1) AS content,
+       (SELECT COUNT(*) FROM package_variants WHERE package_id = $1) AS variants,
+       (SELECT COUNT(*) FROM package_rate_tiers r
           JOIN package_variants v ON v.id = r.variant_id
          WHERE v.package_id = $1) AS rates`,
     [packageId],
   );
 
-  return rows[0]!;
+  const row = rows[0]!;
+
+  return {
+    itinerary: Number(row.itinerary),
+    content: Number(row.content),
+    variants: Number(row.variants),
+    rates: Number(row.rates),
+  };
 }
 
 async function packageExists(id: string): Promise<boolean> {
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM packages WHERE id = $1',
+    'SELECT COUNT(*) AS n FROM packages WHERE id = $1',
     [id],
   );
 
-  return rows[0]!.n > 0;
+  return Number(rows[0]!.n) > 0;
 }
 
 let sequence = 0;
@@ -97,14 +103,13 @@ async function createFixture(options: {
   const code = options.code ?? `${codePrefix}-${sequence}`;
   const slug = options.slug ?? `${slugPrefix}-${sequence}`;
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const { insertId: rowsInsertId } = await dbPool.query(
     `INSERT INTO packages (
        code, slug, title, is_active, requires_price_confirmation, sort_order, seed_managed
-     ) VALUES ($1, $2, 'Package delete fixture', $3, false, 0, $4)
-     RETURNING id`,
+     ) VALUES ($1, $2, 'Package delete fixture', $3, false, 0, $4)`,
     [code, slug, options.isActive ?? false, options.seedManaged ?? false],
   );
-  const packageId = rows[0]!.id;
+  const packageId = rowsInsertId!;
 
   await dbPool.query(
     `INSERT INTO package_itinerary_sections (package_id, day_number, heading, body, sort_order)
@@ -124,13 +129,12 @@ async function createFixture(options: {
   const variantIds: string[] = [];
 
   for (const [index, key] of ['alpha', 'beta'].entries()) {
-    const { rows: variantRows } = await dbPool.query<{ id: string }>(
-      `INSERT INTO package_variants (package_id, key, label, is_default, sort_order)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
+    const { insertId: variantRowsInsertId } = await dbPool.query(
+      `INSERT INTO package_variants (package_id, \`key\`, label, is_default, sort_order)
+       VALUES ($1, $2, $3, $4, $5)`,
       [packageId, key, `Label ${key}`, index === 0, index + 1],
     );
-    const variantId = variantRows[0]!.id;
+    const variantId = variantRowsInsertId!;
     variantIds.push(variantId);
 
     await dbPool.query(
@@ -170,23 +174,6 @@ async function bookVariant(
 
 before(async () => {
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
-
-  const version = (await dbPool.query<{ version: number }>(
-    "SELECT current_setting('server_version_num')::int AS version",
-  )).rows[0]!.version;
-  assert.ok(
-    (version >= 160000 && version < 170000) || (version >= 180000 && version < 190000),
-    'PostgreSQL 16 or 18 required',
-  );
-
-  // UP only: the schema suite owns the destructive DOWN/UP lifecycle.
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
 
   ({ deleteAdminPackage } = await import(
     '../src/modules/admin-packages/admin-packages.repository.js'
@@ -230,27 +217,27 @@ after(async () => {
   // over `storage_key`: the key shape is shared with room-type media, so a
   // LIKE would reach rows this suite never made.
   if (createdAssetIds.length > 0) {
-    await dbPool.query('DELETE FROM media_assets WHERE id = ANY($1::bigint[])', [createdAssetIds]);
+    await dbPool.query('DELETE FROM media_assets WHERE id IN (?)', [createdAssetIds]);
   }
 
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM packages WHERE code LIKE $1 OR slug LIKE $2',
+    'SELECT COUNT(*) AS n FROM packages WHERE code LIKE $1 OR slug LIKE $2',
     [`${codePrefix}%`, `${slugPrefix}%`],
   );
-  assert.equal(rows[0]!.n, 0, 'every fixture this run created was removed');
+  assert.equal(Number(rows[0]!.n), 0, 'every fixture this run created was removed');
 
   if (createdAssetIds.length > 0) {
     const { rows: assetRows } = await dbPool.query<{ n: number }>(
-      'SELECT count(*)::int AS n FROM media_assets WHERE id = ANY($1::bigint[])',
+      'SELECT COUNT(*) AS n FROM media_assets WHERE id IN (?)',
       [createdAssetIds],
     );
-    assert.equal(assetRows[0]!.n, 0, 'and so was every media asset it inserted');
+    assert.equal(Number(assetRows[0]!.n), 0, 'and so was every media asset it inserted');
   }
 
   await closeDatabasePool();
 });
 
-describe('admin package removal against PostgreSQL', () => {
+describe('admin package removal against MySQL', () => {
   it('removes the journey and every child row by cascade', async () => {
     const fixture = await createFixture();
 
@@ -276,10 +263,10 @@ describe('admin package removal against PostgreSQL', () => {
     await deleteAdminPackage(fixture.slug);
 
     const { rows } = await dbPool.query<{ n: number }>(
-      'SELECT count(*)::int AS n FROM package_rate_tiers WHERE variant_id = ANY($1::bigint[])',
+      'SELECT COUNT(*) AS n FROM package_rate_tiers WHERE variant_id IN (?)',
       [variantIds],
     );
-    assert.equal(rows[0]!.n, 0, 'the tiers went with their variants');
+    assert.equal(Number(rows[0]!.n), 0, 'the tiers went with their variants');
   });
 
   it('refuses a live journey without touching it', async () => {
@@ -393,14 +380,13 @@ async function attachImage(packageId: string): Promise<{ assetId: string; storag
   const reference = randomUUID();
   const storageKey = `media/${reference}.webp`;
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const { insertId: rowsInsertId } = await dbPool.query(
     `INSERT INTO media_assets
        (reference, storage_key, content_type, byte_size, checksum_sha256, width, height)
-     VALUES ($1, $2, 'image/webp', 4096, $3, 1200, 800)
-     RETURNING id`,
+     VALUES ($1, $2, 'image/webp', 4096, $3, 1200, 800)`,
     [reference, storageKey, 'b'.repeat(64)],
   );
-  const assetId = rows[0]!.id;
+  const assetId = rowsInsertId!;
   createdAssetIds.push(assetId);
 
   await dbPool.query(
@@ -418,15 +404,15 @@ async function mediaCounts(packageId: string, assetId: string): Promise<{
 }> {
   const { rows } = await dbPool.query<{ relations: number; assets: number }>(
     `SELECT
-       (SELECT count(*)::int FROM package_media WHERE package_id = $1) AS relations,
-       (SELECT count(*)::int FROM media_assets WHERE id = $2) AS assets`,
+       (SELECT COUNT(*) FROM package_media WHERE package_id = $1) AS relations,
+       (SELECT COUNT(*) FROM media_assets WHERE id = $2) AS assets`,
     [packageId, assetId],
   );
 
-  return rows[0]!;
+  return { relations: Number(rows[0]!.relations), assets: Number(rows[0]!.assets) };
 }
 
-describe('admin package delete: the journey image, against real PostgreSQL', () => {
+describe('admin package delete: the journey image, against real MySQL', () => {
   it('reports no key for a journey that never had an image', async () => {
     const fixture = await createFixture();
 

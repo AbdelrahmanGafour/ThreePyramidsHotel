@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, describe, it } from 'node:test';
+import { insertedId, toNumbers } from './support/core-sql';
 import { generateBookingReference } from '../src/modules/reservations/booking-reference';
 
-// Exercises the status transition against a real PostgreSQL database, including
+// Exercises the status transition against a real MySQL database, including
 // its row locking: the concurrency cases below start two transactions at once
 // on separate pool clients, which is the only way `FOR UPDATE` can be shown to
 // do anything.
@@ -50,7 +51,7 @@ const toCalendarDay = (instant: number) => new Date(instant).toISOString().slice
  * Dates are computed from a UTC base rather than by incrementing a day number:
  * arithmetic on the instant rolls over month and year ends correctly, where
  * counting days within a hard-coded month silently walks off the end of it and
- * produces something PostgreSQL rightly refuses.
+ * produces something MySQL rightly refuses.
  *
  * Each fixture takes the next pair of days, so no two stays overlap however
  * many a test creates, and `toISOString` makes the formatting independent of
@@ -88,7 +89,7 @@ async function insertReservation(status: 'pending' | 'confirmed' | 'cancelled', 
        status, currency, nightly_rate_snapshot, total_amount, special_requests
      )
      VALUES ($1, $2, $3, 'Amelia', 'Hartwell', $4, '+201000000000', 'Egypt',
-             2, 0, $5::date, $6::date, $7, 'EGP', $8, $9, 'Late arrival')`,
+             2, 0, $5, $6, $7, 'EGP', $8, $9, 'Late arrival')`,
     [
       bookingReference,
       roomTypeId,
@@ -107,8 +108,8 @@ async function insertReservation(status: 'pending' | 'confirmed' | 'cancelled', 
 
 async function readReservation(bookingReference: string): Promise<ReservationRow> {
   const { rows } = await dbPool.query<ReservationRow>(
-    `SELECT status, room_id, check_in::text AS check_in, check_out::text AS check_out,
-            total_amount::text AS total_amount, nightly_rate_snapshot::text AS nightly_rate_snapshot,
+    `SELECT status, room_id, check_in AS check_in, check_out AS check_out,
+            total_amount AS total_amount, nightly_rate_snapshot AS nightly_rate_snapshot,
             created_at, updated_at
        FROM reservations
       WHERE booking_reference = $1`,
@@ -127,22 +128,23 @@ before(async () => {
     '../src/modules/admin-reservations/admin-reservations.service.js'
   ));
 
-  const { rows: roomTypeRows } = await dbPool.query<{ id: string }>(
+  const createdRoomType = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, 2, $3, true, 0)
-     RETURNING id`,
+     VALUES ($1, $2, 2, $3, true, 0)`,
     [fixture.slug, fixture.name, fixture.nightlyRate],
   );
 
-  const createdRoomType = roomTypeRows[0];
-  assert.ok(createdRoomType, 'failed to create the fixture room type');
-  roomTypeId = createdRoomType.id;
+  roomTypeId = insertedId(createdRoomType);
+
+  await dbPool.query(
+    `INSERT INTO rooms (room_type_id, room_number, is_active)
+     VALUES ($1, $2, true), ($1, $3, true), ($1, $4, true), ($1, $5, true)`,
+    [roomTypeId, ...fixture.roomNumbers],
+  );
 
   const { rows: roomRows } = await dbPool.query<{ id: string }>(
-    `INSERT INTO rooms (room_type_id, room_number, is_active)
-     VALUES ($1, $2, true), ($1, $3, true), ($1, $4, true), ($1, $5, true)
-     RETURNING id`,
-    [roomTypeId, ...fixture.roomNumbers],
+    'SELECT id FROM rooms WHERE room_type_id = $1 ORDER BY id',
+    [roomTypeId],
   );
 
   roomIds = roomRows.map((row) => row.id);
@@ -161,7 +163,7 @@ after(async () => {
     );
     const references = booked.map((row) => row.booking_reference);
 
-    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [
+    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference IN ($1)', [
       references,
     ]);
     await dbPool.query('DELETE FROM reservations WHERE room_type_id = $1', [roomTypeId]);
@@ -174,16 +176,16 @@ after(async () => {
       room_types: number;
       notifications: number;
     }>(
-      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1)::int AS reservations,
-              (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1)::int AS rooms,
-              (SELECT COUNT(*) FROM room_types WHERE id = $1)::int AS room_types,
+      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1) AS reservations,
+              (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1) AS rooms,
+              (SELECT COUNT(*) FROM room_types WHERE id = $1) AS room_types,
               (SELECT COUNT(*) FROM notification_outbox
-                WHERE booking_reference = ANY($2::text[]))::int AS notifications`,
+                WHERE booking_reference IN ($2)) AS notifications`,
       [roomTypeId, references],
     );
 
     assert.deepEqual(
-      rows[0],
+      rows[0] && toNumbers(rows[0]),
       { reservations: 0, rooms: 0, room_types: 0, notifications: 0 },
       'fixtures were not fully removed',
     );
@@ -192,7 +194,7 @@ after(async () => {
   }
 });
 
-describe('changeAdminReservationStatus against PostgreSQL', () => {
+describe('changeAdminReservationStatus against MySQL', () => {
   describe('persists a permitted transition', () => {
     const permitted: ['pending' | 'confirmed', 'confirmed' | 'cancelled'][] = [
       ['pending', 'confirmed'],
@@ -329,7 +331,7 @@ describe('changeAdminReservationStatus against PostgreSQL', () => {
 
       const finalStatus = (await readReservation(reference)).status;
 
-      // Which one takes the lock first is PostgreSQL's to decide, so both
+      // Which one takes the lock first is MySQL's to decide, so both
       // histories are correct and neither is forced:
       //
       //   confirm first: pending -> confirmed, then confirmed -> cancelled.
@@ -419,17 +421,17 @@ describe('changeAdminReservationStatus against PostgreSQL', () => {
       assert.equal((await readReservation(reference)).status, 'cancelled');
 
       const { rows } = await dbPool.query<{ total: number }>(
-        'SELECT COUNT(*)::int AS total FROM notification_outbox WHERE booking_reference = $1',
+        'SELECT COUNT(*) AS total FROM notification_outbox WHERE booking_reference = $1',
         [reference],
       );
 
-      assert.equal(rows[0]?.total, 0, 'a cancellation owes the guest no message from this slice');
+      assert.equal(Number(rows[0]?.total), 0, 'a cancellation owes the guest no message from this slice');
     });
 
     it('leaves the reservation pending when the event cannot be written', async () => {
       // A real connection, real SQL and a real transaction — only the one
       // notification INSERT is made to fail, which is the one thing a healthy
-      // PostgreSQL will not do on request. A double cannot prove this: the
+      // MySQL will not do on request. A double cannot prove this: the
       // question is whether the ROLLBACK actually discarded an UPDATE the
       // database had already applied, and only the database can answer it.
       const reference = await insertReservation('pending');
@@ -455,7 +457,7 @@ describe('changeAdminReservationStatus against PostgreSQL', () => {
               // service releases it back into the pool. Leaving an own `query`
               // that rejects every outbox insert would sabotage whichever
               // later test was handed this connection.
-              delete (client as unknown as { query?: unknown }).query;
+              Object.assign(client, { query: realQuery });
               return Promise.reject(failure);
             }
             return (realQuery as (...args: unknown[]) => unknown)(text, ...rest);
@@ -487,11 +489,11 @@ describe('changeAdminReservationStatus against PostgreSQL', () => {
       assert.equal((await readReservation(reference)).status, 'pending');
 
       const { rows } = await dbPool.query<{ total: number }>(
-        'SELECT COUNT(*)::int AS total FROM notification_outbox WHERE booking_reference = $1',
+        'SELECT COUNT(*) AS total FROM notification_outbox WHERE booking_reference = $1',
         [reference],
       );
 
-      assert.equal(rows[0]?.total, 0, 'no event survived either');
+      assert.equal(Number(rows[0]?.total), 0, 'no event survived either');
     });
   });
 });

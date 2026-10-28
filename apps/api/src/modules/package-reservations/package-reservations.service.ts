@@ -39,7 +39,8 @@ export async function createPackageReservation(body: unknown): Promise<CreatedPa
   try {
     // Consistent catalogue snapshot plus shared row locks: no package/variant/
     // selected-rate edits can overtake this creation. No hotel tables involved.
-    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+    // MySQL/InnoDB's default isolation level is REPEATABLE READ.
+    await client.query('BEGIN');
     transaction = true;
     const pkg = await findReservationPackage(client, input.packageSlug);
     if (!pkg) throw new PackageReservationError('PACKAGE_NOT_FOUND', 'Package not found', 404);

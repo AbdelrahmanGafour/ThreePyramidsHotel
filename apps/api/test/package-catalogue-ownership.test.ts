@@ -46,12 +46,12 @@ const EVERY_WRITE = [
   'INSERT INTO package_itinerary_sections',
   'DELETE FROM package_content_items',
   'INSERT INTO package_content_items',
-  'SELECT key, sort_order FROM package_variants',
+  'SELECT `key`, sort_order FROM package_variants',
   'UPDATE package_variants',
   'INSERT INTO package_variants',
   'DELETE FROM package_rate_tiers',
   'INSERT INTO package_rate_tiers',
-  'WITH parked',
+  'parked.rn',
 ] as const;
 
 /** A database holding one row for the fixture's code, owned as stated. */
@@ -65,13 +65,13 @@ function ownershipClient(row: Record<string, unknown> | null) {
       if (text.includes('FROM packages')) {
         return { rows: row ? [row] : [] };
       }
-      if (text.includes('SELECT key, sort_order FROM package_variants')) {
+      if (text.includes('SELECT `key`, sort_order FROM package_variants')) {
         return { rows: [] };
       }
       if (text.includes('INSERT INTO packages')) {
-        return { rows: [{ id: '5' }] };
+        return { rows: [], insertId: '5' };
       }
-      if (text.includes('INSERT INTO package_variants')) {
+      if (text.includes('SELECT id FROM package_variants')) {
         return { rows: [{ id: '10' }] };
       }
       return { rows: [] };
@@ -184,8 +184,8 @@ describe('package catalogue ownership', () => {
             }],
           };
         }
-        if (text.includes('SELECT key, sort_order FROM package_variants')) return { rows: [] };
-        if (text.includes('INSERT INTO package_variants')) return { rows: [{ id: '10' }] };
+        if (text.includes('SELECT `key`, sort_order FROM package_variants')) return { rows: [] };
+        if (text.includes('SELECT id FROM package_variants')) return { rows: [{ id: '10' }] };
         return { rows: [] };
       },
     } as unknown as PoolClient;

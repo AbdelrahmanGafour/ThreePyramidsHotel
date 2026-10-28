@@ -127,7 +127,7 @@ function storedJourney(options: {
 
       if (text.includes('FROM package_reservations')) {
         const blocked = !state.hideReservationsFromPreCheck && state.reserved;
-        return { rows: blocked ? [{ exists: 1 }] : [] } as never;
+        return { rows: blocked ? [{ found: 1 }] : [] } as never;
       }
 
       if (text.includes('FROM package_media pm')) {

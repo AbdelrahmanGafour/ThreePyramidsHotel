@@ -33,7 +33,7 @@ import type {
 //     replay — turning one logical event into a permanent failure.
 //
 //   * Times are the database's business. `created_at` and `next_attempt_at`
-//     default to `now()` in the schema, which is the transaction's own clock;
+//     default to the current time in the schema;
 //     a timestamp taken here would be a second, disagreeing opinion, and a
 //     formatted one would freeze today's locale into a row read months later.
 //

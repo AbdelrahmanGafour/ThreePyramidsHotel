@@ -10,7 +10,7 @@ import { afterEach, before, describe, it } from 'node:test';
 // tests read it back raw, and the comparison that decides the no-op treats
 // null as distinct from every value.
 //
-// The insert is modelled the way `unnest(...) WITH ORDINALITY` behaves, and
+// The insert is modelled as the multi-row VALUES list it is, and
 // the unique index on (package_id, sort_order) is enforced on every row, so a
 // regression that reused a position would fail here.
 
@@ -112,28 +112,25 @@ function storedJourney(options: {
       }
 
       if (text.includes('INSERT INTO package_itinerary_sections')) {
-        const days = values![1] as Array<number | null>;
-        const headings = values![2] as Array<string | null>;
-        const bodies = values![3] as string[];
-
-        bodies.forEach((entry, index) => {
-          const sortOrder = index + 1;
+        // One multi-row VALUES list: (package_id, day, heading, body, sort_order).
+        for (let at = 0; at < values!.length; at += 5) {
+          const sortOrder = values![at + 4] as number;
 
           // What UNIQUE (package_id, sort_order) would do.
           if (state.sections.some((s) => s.sort_order === sortOrder)) {
             throw Object.assign(
-              new Error('duplicate key value violates unique constraint'),
+              new Error('Duplicate entry'),
               { code: '23505', constraint: 'package_itinerary_sections_package_sort_key' },
             );
           }
 
           state.sections.push({
-            day_number: days[index]!,
-            heading: headings[index]!,
-            body: entry,
+            day_number: values![at + 1] as number | null,
+            heading: values![at + 2] as string | null,
+            body: values![at + 3] as string,
             sort_order: sortOrder,
           });
-        });
+        }
 
         state.inserts += 1;
         return { rows: [] } as never;

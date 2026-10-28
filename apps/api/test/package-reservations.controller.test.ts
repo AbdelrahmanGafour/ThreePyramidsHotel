@@ -64,7 +64,7 @@ function commitFailingClient(): PoolClientLike {
         return { rows: [{ adult_unit_rate: '92.00', currency: 'USD' }] };
       }
       if (text.includes('INSERT INTO package_reservations')) {
-        return { rows: [{ booking_reference: (values as string[])[0] }] };
+        return { rows: [], rowCount: 1 };
       }
       return { rows: [] };
     },

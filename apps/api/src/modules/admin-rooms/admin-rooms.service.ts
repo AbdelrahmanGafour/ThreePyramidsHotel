@@ -20,7 +20,7 @@ import type { AdminPhysicalRoom, AdminPhysicalRoomUpdate } from './admin-rooms.t
  * ---------------------------------------------------------------------------
  * CANONICAL ADMIN LOCK ORDER
  *
- *     booking:          room_types FOR KEY SHARE -> rooms FOR UPDATE SKIP LOCKED
+ *     booking:          room_types FOR SHARE -> rooms FOR UPDATE SKIP LOCKED
  *     admin capacity:   room_types FOR UPDATE
  *     admin room edit:  room_types FOR UPDATE    -> rooms FOR UPDATE
  *
@@ -35,7 +35,7 @@ import type { AdminPhysicalRoom, AdminPhysicalRoomUpdate } from './admin-rooms.t
  * because this system has no way to move a booking to another room.
  */
 
-/** PostgreSQL unique_violation. */
+/** MySQL unique_violation. */
 const UNIQUE_VIOLATION = '23505';
 
 /**

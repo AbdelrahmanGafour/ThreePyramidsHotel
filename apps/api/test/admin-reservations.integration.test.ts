@@ -3,12 +3,13 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
+import { insertedId, toNumbers } from './support/core-sql';
 // Safe to import statically: the booking-reference module reaches nothing but
 // node:crypto, unlike the src modules below that require DATABASE_URL on load.
 import { generateBookingReference } from '../src/modules/reservations/booking-reference';
 
 // Exercises GET /api/v1/admin/reservations over real HTTP against a real
-// PostgreSQL database: the real app, the real session guard, the real
+// MySQL database: the real app, the real session guard, the real
 // repository SQL and its room_types join. Nothing is mocked.
 //
 // It creates its own admin account, room type, rooms and reservations with
@@ -108,7 +109,7 @@ async function insertReservation(input: {
   // exist in production would prove nothing about looking one up.
   const bookingReference = generateBookingReference();
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO reservations (
        booking_reference, room_type_id, room_id,
        guest_first_name, guest_last_name, guest_email, guest_phone, guest_country,
@@ -116,8 +117,7 @@ async function insertReservation(input: {
        status, currency, nightly_rate_snapshot, total_amount, special_requests, created_at
      )
      VALUES ($1, $2, $3, $4, $5, $6, $13, $14,
-             2, 0, $7::date, $8::date, $9, 'EGP', $10, $11, $15, $12::timestamptz)
-     RETURNING id`,
+             2, 0, $7, $8, $9, 'EGP', $10, $11, $15, $12)`,
     [
       bookingReference,
       roomTypeId,
@@ -130,17 +130,14 @@ async function insertReservation(input: {
       input.status,
       fixture.nightlyRate,
       fixture.totalAmount,
-      input.createdAt,
+      new Date(input.createdAt),
       fixture.guestPhone,
       fixture.guestCountry,
       input.specialRequests === undefined ? 'Late arrival' : input.specialRequests,
     ],
   );
 
-  const row = rows[0];
-  assert.ok(row, `failed to insert fixture reservation ${bookingReference}`);
-
-  return { bookingReference, id: row.id };
+  return { bookingReference, id: insertedId(inserted) };
 }
 
 async function requestReservations(query: string, headers: Record<string, string>): Promise<ListResponse> {
@@ -208,22 +205,23 @@ before(async () => {
     [admin.email, admin.displayName, await hashPassword(admin.password)],
   );
 
-  const { rows: roomTypeRows } = await dbPool.query<{ id: string }>(
+  const createdRoomType = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, $3, $4, true, 0)
-     RETURNING id`,
+     VALUES ($1, $2, $3, $4, true, 0)`,
     [fixture.slug, fixture.name, fixture.capacity, fixture.nightlyRate],
   );
 
-  const createdRoomType = roomTypeRows[0];
-  assert.ok(createdRoomType, 'failed to create the fixture room type');
-  roomTypeId = createdRoomType.id;
+  roomTypeId = insertedId(createdRoomType);
+
+  await dbPool.query(
+    `INSERT INTO rooms (room_type_id, room_number, is_active)
+     VALUES ($1, $2, true), ($1, $3, true), ($1, $4, true)`,
+    [roomTypeId, ...fixture.roomNumbers],
+  );
 
   const { rows: roomRows } = await dbPool.query<{ id: string }>(
-    `INSERT INTO rooms (room_type_id, room_number, is_active)
-     VALUES ($1, $2, true), ($1, $3, true), ($1, $4, true)
-     RETURNING id`,
-    [roomTypeId, ...fixture.roomNumbers],
+    'SELECT id FROM rooms WHERE room_type_id = $1 ORDER BY id',
+    [roomTypeId],
   );
 
   roomIds = roomRows.map((row) => row.id);
@@ -298,15 +296,15 @@ after(async () => {
       room_types: number;
       admins: number;
     }>(
-      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1)::int AS reservations,
-              (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1)::int AS rooms,
-              (SELECT COUNT(*) FROM room_types WHERE id = $1)::int AS room_types,
-              (SELECT COUNT(*) FROM admin_users WHERE email = $2)::int AS admins`,
+      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1) AS reservations,
+              (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1) AS rooms,
+              (SELECT COUNT(*) FROM room_types WHERE id = $1) AS room_types,
+              (SELECT COUNT(*) FROM admin_users WHERE email = $2) AS admins`,
       [roomTypeId, admin.email],
     );
 
     assert.deepEqual(
-      rows[0],
+      rows[0] && toNumbers(rows[0]),
       { reservations: 0, rooms: 0, room_types: 0, admins: 0 },
       'fixtures were not fully removed',
     );
@@ -411,7 +409,7 @@ describe('GET /api/v1/admin/reservations', () => {
 
     it('reports the same total the database reports', async () => {
       const data = requireData(await listReservationsAsAdmin('?limit=1'));
-      const { rows } = await dbPool.query<{ total: string }>('SELECT COUNT(*)::text AS total FROM reservations');
+      const { rows } = await dbPool.query<{ total: string }>('SELECT COUNT(*) AS total FROM reservations');
 
       assert.equal(String(data.pagination.total), rows[0]!.total);
     });

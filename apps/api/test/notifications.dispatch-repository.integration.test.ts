@@ -77,8 +77,8 @@ async function insertQueued(options: {
        (event_type, booking_reference, recipient_kind, recipient_email, template_key, payload,
         next_attempt_at)
      VALUES ('room_reservation_created', $1, $2, $3, 'room_created_hotel.v1',
-             '{"bookingReference":"fixture"}'::jsonb,
-             now() + make_interval(secs => $4::double precision))`,
+             '{"bookingReference":"fixture"}',
+             UTC_TIMESTAMP(3) + INTERVAL $4 SECOND)`,
     [reference, kind, kind === 'guest' ? GUEST_EMAIL : null, options.dueInSeconds ?? -1],
   );
 
@@ -87,7 +87,7 @@ async function insertQueued(options: {
 
 const readRow = async (reference: string) =>
   (await dbPool.query(
-    `SELECT id::text AS id, attempts, accepted_at, failed_at, next_attempt_at,
+    `SELECT CAST(id AS CHAR) AS id, attempts, accepted_at, failed_at, next_attempt_at,
             resolved_from, resolved_to, provider_reference, last_error, last_attempt_acceptance
        FROM notification_outbox WHERE booking_reference = $1`,
     [reference],
@@ -123,10 +123,10 @@ after(async () => {
     assert.ok((rowCount ?? 0) >= 0);
 
     const { rows } = await dbPool.query<{ total: number }>(
-      'SELECT count(*)::int AS total FROM notification_outbox WHERE booking_reference LIKE $1',
+      'SELECT CAST(COUNT(*) AS SIGNED) AS total FROM notification_outbox WHERE booking_reference LIKE $1',
       [`${referencePrefix}-%`],
     );
-    assert.equal(rows[0]?.total, 0, 'this run left rows behind');
+    assert.equal(Number(rows[0]?.total), 0, 'this run left rows behind');
   } finally {
     await closeDatabasePool();
   }

@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 
-// Admin content replacement against real PostgreSQL.
+// Admin content replacement against real MySQL.
 //
 // The unit suite models the transaction; this proves what only the database
 // can settle. `UNIQUE (package_id, kind, sort_order)` is scoped per kind, so
@@ -18,12 +17,12 @@ import { runner } from 'node-pg-migrate';
 // it, through the real pool. Every row this suite writes carries an
 // identifier unique to the run, and exactly those rows are removed afterwards.
 
-// Uses the dedicated migrated disposable cluster, never hotel development.
+// Uses the dedicated migrated disposable MySQL database, never hotel development.
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 
 type Pool = typeof import('../src/db/pool.js');
@@ -62,7 +61,7 @@ async function packageState(id: string): Promise<{
     is_active: boolean;
     updated_at: string;
   }>(
-    'SELECT seed_managed, is_active, updated_at::text AS updated_at FROM packages WHERE id = $1',
+    'SELECT seed_managed, is_active, CAST(updated_at AS CHAR) AS updated_at FROM packages WHERE id = $1',
     [id],
   );
 
@@ -84,14 +83,13 @@ async function createFixture(options: {
   const code = `${codePrefix}-${sequence}`;
   const slug = `${slugPrefix}-${sequence}`;
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const { insertId: rowsInsertId } = await dbPool.query(
     `INSERT INTO packages (
        code, slug, title, is_active, requires_price_confirmation, sort_order, seed_managed
-     ) VALUES ($1, $2, 'Content fixture', $3, false, 0, $4)
-     RETURNING id`,
+     ) VALUES ($1, $2, 'Content fixture', $3, false, 0, $4)`,
     [code, slug, options.isActive ?? false, options.seedManaged ?? true],
   );
-  const packageId = rows[0]!.id;
+  const packageId = rowsInsertId!;
 
   for (const item of options.items ?? []) {
     await dbPool.query(
@@ -107,23 +105,6 @@ async function createFixture(options: {
 before(async () => {
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 
-  const version = (await dbPool.query<{ version: number }>(
-    "SELECT current_setting('server_version_num')::int AS version",
-  )).rows[0]!.version;
-  assert.ok(
-    (version >= 160000 && version < 170000) || (version >= 180000 && version < 190000),
-    'PostgreSQL 16 or 18 required',
-  );
-
-  // UP only: the schema suite owns the destructive DOWN/UP lifecycle.
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
-
   ({ replaceAdminPackageContent } = await import(
     '../src/modules/admin-packages/admin-packages.repository.js'
   ));
@@ -138,15 +119,15 @@ after(async () => {
   await dbPool.query('DELETE FROM packages WHERE code LIKE $1', [`${codePrefix}%`]);
 
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM packages WHERE code LIKE $1',
+    'SELECT COUNT(*) AS n FROM packages WHERE code LIKE $1',
     [`${codePrefix}%`],
   );
-  assert.equal(rows[0]!.n, 0, 'every fixture this run created was removed');
+  assert.equal(Number(rows[0]!.n), 0, 'every fixture this run created was removed');
 
   await closeDatabasePool();
 });
 
-describe('admin content replacement against PostgreSQL', () => {
+describe('admin content replacement against MySQL', () => {
   it('writes all three kinds, each numbered from 1', async () => {
     const fixture = await createFixture();
 

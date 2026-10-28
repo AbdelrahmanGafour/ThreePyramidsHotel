@@ -114,7 +114,7 @@ function scriptedClient(script: Script = {}): { client: PoolClient; log: Recordi
         log.inserts += 1;
         if (script.failInsert) throw new Error('simulated insert failure');
         const reference = (_values as string[])[0];
-        return { rows: [{ booking_reference: reference }] };
+        return { rows: [], rowCount: 1 };
       }
 
       return { rows: [] };

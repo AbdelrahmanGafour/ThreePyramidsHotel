@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, beforeEach, describe, it } from 'node:test';
+import { toNumbers } from './support/core-sql';
 
 // Exercises the two account-settings endpoints over real HTTP against real
-// PostgreSQL, using this suite's own admin accounts.
+// MySQL, using this suite's own admin accounts.
 //
 // The things that only a real database can answer live here: that the unique
 // index is what refuses a taken address, that `updated_at` genuinely does not
@@ -130,11 +131,11 @@ const accountRow = async (email: string) => {
 
 const sessionCountFor = async (adminUserId: string) => {
   const { rows } = await dbPool.query<{ count: number }>(
-    'SELECT COUNT(*)::int AS count FROM admin_sessions WHERE admin_user_id = $1',
+    'SELECT COUNT(*) AS count FROM admin_sessions WHERE admin_user_id = $1',
     [adminUserId],
   );
 
-  return rows[0]?.count ?? 0;
+  return Number(rows[0]?.count ?? 0);
 };
 
 const sessionStatus = async (cookie: string) => {
@@ -161,20 +162,20 @@ after(async () => {
   try {
     await dbPool.query(
       `DELETE FROM admin_sessions
-        WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email = ANY($1::text[]))`,
+        WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email IN ($1))`,
       [fixtureEmails],
     );
-    await dbPool.query('DELETE FROM admin_users WHERE email = ANY($1::text[])', [fixtureEmails]);
+    await dbPool.query('DELETE FROM admin_users WHERE email IN ($1)', [fixtureEmails]);
 
     const { rows } = await dbPool.query<{ admins: number; sessions: number }>(
-      `SELECT (SELECT COUNT(*) FROM admin_users WHERE email = ANY($1::text[]))::int AS admins,
+      `SELECT (SELECT COUNT(*) FROM admin_users WHERE email IN ($1)) AS admins,
               (SELECT COUNT(*) FROM admin_sessions s
                  JOIN admin_users u ON u.id = s.admin_user_id
-                WHERE u.email = ANY($1::text[]))::int AS sessions`,
+                WHERE u.email IN ($1)) AS sessions`,
       [fixtureEmails],
     );
 
-    assert.deepEqual(rows[0], { admins: 0, sessions: 0 }, 'fixture admins were not fully removed');
+    assert.deepEqual(rows[0] && toNumbers(rows[0]), { admins: 0, sessions: 0 }, 'fixture admins were not fully removed');
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -188,10 +189,10 @@ after(async () => {
 beforeEach(async () => {
   await dbPool.query(
     `DELETE FROM admin_sessions
-      WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email = ANY($1::text[]))`,
+      WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email IN ($1))`,
     [[subject.email, `itest-account-moved-${runId}@example.com`]],
   );
-  await dbPool.query('DELETE FROM admin_users WHERE email = ANY($1::text[])', [
+  await dbPool.query('DELETE FROM admin_users WHERE email IN ($1)', [
     [subject.email, `itest-account-moved-${runId}@example.com`],
   ]);
   await insertAdmin(subject);

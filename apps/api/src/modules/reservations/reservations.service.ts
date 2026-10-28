@@ -126,7 +126,7 @@ function parseSpecialRequests(value: unknown): string | null {
  * `ReservationValidationError` on anything unusable.
  *
  * Room capacity is not checked here — that needs the room type from
- * PostgreSQL. Neither is any "date must be in the future" rule.
+ * MySQL. Neither is any "date must be in the future" rule.
  */
 export function parseReservationInput(body: unknown): ReservationInput {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -236,7 +236,7 @@ const MAX_BOOKING_REFERENCE_ATTEMPTS = 5;
  * A seam, not a framework. It exists so a test can drive the whole transaction
  * against a double — the ordering of the outbox insert against the COMMIT, and
  * what happens when that insert fails, cannot be observed from outside and
- * cannot be provoked against a healthy PostgreSQL. Production never replaces
+ * cannot be provoked against a healthy MySQL. Production never replaces
  * it, so runtime behaviour is unchanged.
  *
  * Mirrors the same seam in `package-reservations.service.ts`.
@@ -252,7 +252,7 @@ export function __setClientFactoryForTests(factory: ClientFactory | null): void 
   acquireClient = factory ?? defaultClientFactory;
 }
 
-// PostgreSQL exclusion_violation.
+// Raised by insertReservation's in-app overlap check (MySQL has no exclusion constraint).
 const EXCLUSION_VIOLATION_SQLSTATE = '23P01';
 
 function isExclusionViolation(error: unknown): boolean {
@@ -269,8 +269,8 @@ function isExclusionViolation(error: unknown): boolean {
  * and insert.
  *
  * The room-row lock keeps concurrent requests off the same room; the
- * `reservations_no_overlapping_active_stays` exclusion constraint remains the
- * final guarantee, and a violation from it is reported as no availability.
+ * overlap re-check in `insertReservation` (under that lock) is the final
+ * guarantee, and a conflict is reported as no availability.
  */
 export async function createReservation(body: unknown): Promise<CreatedReservation> {
   const input = parseReservationInput(body);
@@ -280,6 +280,8 @@ export async function createReservation(body: unknown): Promise<CreatedReservati
   let inTransaction = false;
 
   try {
+    // MySQL: the isolation level must be set before the transaction starts.
+    await client.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     await client.query('BEGIN');
     inTransaction = true;
 
@@ -366,7 +368,7 @@ export async function createReservation(body: unknown): Promise<CreatedReservati
     // reserved and nobody is going to be told.
     //
     // Strict, and allowed to be fatal. `insertNotificationEvent` carries no
-    // `ON CONFLICT` and translates nothing, so a duplicate or a constraint
+    // duplicate-ignoring clause and translates nothing, so a duplicate or a constraint
     // failure raises straight past here into the catch below, which rolls the
     // whole reservation back. That is the intended trade: a guest who sees an
     // error and rebooks costs less than a confirmed stay the hotel never hears

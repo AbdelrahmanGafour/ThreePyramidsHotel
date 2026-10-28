@@ -136,7 +136,7 @@ function groupImagesByRoomTypeId(rows: RoomTypeImageRow[]): Map<string, PublicRo
 /**
  * Every image of every given room type, in ONE query.
  *
- * `= ANY($1::bigint[])` rather than a query per room type: the list endpoint
+ * `IN ($1)` rather than a query per room type: the list endpoint
  * must cost two queries whether it returns three rooms or thirty. The
  * `(room_type_id, sort_order, id)` index the T03-B migration creates is what
  * makes that one query cheap.
@@ -160,7 +160,7 @@ async function findImagesByRoomTypeIds(
             rti.is_cover
        FROM room_type_images rti
        JOIN media_assets ma ON ma.id = rti.media_asset_id
-      WHERE rti.room_type_id = ANY($1::bigint[])
+      WHERE rti.room_type_id IN ($1)
       ${ROOM_TYPE_IMAGE_ORDER}`,
     [roomTypeIds],
   );

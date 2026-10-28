@@ -295,11 +295,13 @@ describe('admin package detail: ordering', () => {
     const { res } = fakeResponse();
     await getAdminPackageHandler(request(SLUG), res);
 
+    // MySQL's JSON_ARRAYAGG has no ORDER BY: each element carries the sort
+    // keys the public catalogue orders by, and the repository applies them.
     const sql = calls[0].text;
-    assert.match(sql, /ORDER BY s\.sort_order/, 'itinerary');
-    assert.match(sql, /ORDER BY c\.kind, c\.sort_order/, 'content');
-    assert.match(sql, /ORDER BY v\.sort_order, v\.key/, 'variants');
-    assert.match(sql, /ORDER BY r\.min_party_size/, 'rate tiers');
+    assert.match(sql, /'_o', JSON_ARRAY\(s\.sort_order\)/, 'itinerary');
+    assert.match(sql, /'_o', JSON_ARRAY\(c\.kind, c\.sort_order\)/, 'content');
+    assert.match(sql, /'_o', JSON_ARRAY\(v\.sort_order, v\.`key`\)/, 'variants');
+    assert.match(sql, /'_o', JSON_ARRAY\(r\.min_party_size\)/, 'rate tiers');
   });
 
   it('preserves the order the database returned, without re-sorting in code', async () => {

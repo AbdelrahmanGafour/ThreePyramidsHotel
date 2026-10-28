@@ -256,7 +256,7 @@ describe('admin package list: query strategy', () => {
 
     const sql = calls[0].text;
     assert.match(sql, /LEFT JOIN package_variants/, 'a package with no variants still appears');
-    assert.match(sql, /COUNT\(pv\.id\)::int AS variant_count/, 'COUNT(*) would call zero variants one');
+    assert.match(sql, /COUNT\(pv\.id\) AS variant_count/, 'COUNT(*) would call zero variants one');
     assert.match(sql, /GROUP BY p\.id/);
   });
 

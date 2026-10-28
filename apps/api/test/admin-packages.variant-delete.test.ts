@@ -134,7 +134,7 @@ function storedJourney(options: {
         return { rows: found ? [{ id: found.id, is_default: found.is_default }] : [] } as never;
       }
 
-      if (text.includes('COUNT(*)::int AS remaining')) {
+      if (text.includes('COUNT(*) AS remaining')) {
         return {
           rows: [{
             remaining: state.variants.filter((variant) => variant.id !== values?.[1]).length,
@@ -145,7 +145,7 @@ function storedJourney(options: {
       if (text.includes('FROM package_reservations')) {
         const reserved = !state.hideReservationsFromPreCheck
           && state.reservedVariantIds.includes(values?.[0] as string);
-        return { rows: reserved ? [{ exists: 1 }] : [] } as never;
+        return { rows: reserved ? [{ found: 1 }] : [] } as never;
       }
 
       if (text.includes('DELETE FROM package_variants')) {
@@ -494,7 +494,7 @@ describe('admin variant delete: refusals', () => {
         if (text.includes('FROM package_variants') && text.includes('FOR UPDATE')) {
           return { rows: [{ id: '2', is_default: false }] } as never;
         }
-        if (text.includes('COUNT(*)::int AS remaining')) {
+        if (text.includes('COUNT(*) AS remaining')) {
           return { rows: [{ remaining: 2 }] } as never;
         }
         if (text.includes('FROM package_reservations')) return { rows: [] } as never;
@@ -632,7 +632,7 @@ describe('admin variant delete: transaction and ownership', () => {
 
     const own = stored.calls.find((call) => call.text.includes('UPDATE packages'))!;
     assert.match(own.text, /seed_managed = false/);
-    assert.match(own.text, /updated_at = now\(\)/);
+    assert.match(own.text, /updated_at = UTC_TIMESTAMP\(3\)/);
     for (const column of ['is_active', 'title', 'code', 'slug']) {
       assert.ok(!own.text.includes(column), `${column} must never be written here`);
     }

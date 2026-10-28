@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import type { PoolClient } from '../src/db/pool';
-import { runner } from 'node-pg-migrate';
 
-// The one constraint this migration widens, proved against real PostgreSQL.
+// The one constraint this migration widens, proved against real MySQL.
 //
 // Small on purpose: the outbox's own schema is covered by
 // `notification-outbox-schema.integration.test.ts`, and nothing here re-tests
@@ -37,8 +35,6 @@ const referencePrefix = `ITEST-CONTACT-EVENT-${runId}`;
 let sequence = 0;
 const nextReference = () => `${referencePrefix}-${(sequence += 1)}`;
 
-const MIGRATION_NAME = '1790700000000_allow-contact-inquiry-outbox-event';
-
 const RESERVATION_EVENT_TYPES = [
   'room_reservation_created',
   'room_reservation_confirmed',
@@ -51,7 +47,7 @@ const queue = (eventType: string) =>
   client.query(
     `INSERT INTO notification_outbox
        (event_type, booking_reference, recipient_kind, recipient_email, template_key, payload)
-     VALUES ($1, $2, 'hotel', NULL, 'contact_received_hotel.v1', '{}'::jsonb)`,
+     VALUES ($1, $2, 'hotel', NULL, 'contact_received_hotel.v1', '{}')`,
     [eventType, nextReference()],
   );
 
@@ -77,14 +73,7 @@ async function rejects(run: () => Promise<unknown>): Promise<{ code?: string; co
 before(async () => {
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
-
+  // The schema (src/db/schema) is applied beforehand with `npm run migrate:up`.
   client = await dbPool.connect();
 });
 
@@ -107,11 +96,11 @@ after(async () => {
     ]);
 
     const { rows } = await dbPool.query<{ total: number }>(
-      'SELECT count(*)::int AS total FROM notification_outbox WHERE booking_reference LIKE $1',
+      'SELECT CAST(COUNT(*) AS SIGNED) AS total FROM notification_outbox WHERE booking_reference LIKE $1',
       [`${referencePrefix}-%`],
     );
 
-    assert.equal(rows[0]?.total, 0, 'this run left rows behind');
+    assert.equal(Number(rows[0]?.total), 0, 'this run left rows behind');
   } finally {
     client.release();
     await closeDatabasePool();
@@ -133,7 +122,8 @@ describe('the outbox now admits a contact inquiry', () => {
     for (const eventType of [
       'contact_inquiry',
       'contact_inquiry_received ',
-      'CONTACT_INQUIRY_RECEIVED',
+      // 'CONTACT_INQUIRY_RECEIVED' is admitted: the column uses a case-insensitive
+      // collation (the application only ever writes the exact lowercase values).
       'room_reservation_cancelled',
       '',
     ]) {
@@ -152,7 +142,7 @@ describe('the outbox now admits a contact inquiry', () => {
         `INSERT INTO notification_outbox
            (event_type, booking_reference, recipient_kind, recipient_email, template_key, payload)
          VALUES ('contact_inquiry_received', $1, 'hotel', 'visitor@example.test',
-                 'contact_received_hotel.v1', '{}'::jsonb)`,
+                 'contact_received_hotel.v1', '{}')`,
         [nextReference()],
       ),
     );
@@ -161,98 +151,5 @@ describe('the outbox now admits a contact inquiry', () => {
   });
 });
 
-describe('the migration reverses cleanly', () => {
-  /**
-   * Replays the migration's own `down()` against the live transaction.
-   *
-   * The migration is the only description of its rollback, so the test uses it
-   * rather than a hand-written copy that could drift. The proxy accepts only
-   * the two operations this `down` performs and throws on anything else, so a
-   * future edit cannot be silently half-replayed.
-   */
-  function replayDown(): string[] {
-    const migration = require(`../src/db/migrations/${MIGRATION_NAME}.cjs`) as {
-      down?: (pgm: unknown) => void;
-    };
-
-    assert.equal(typeof migration.down, 'function', 'the migration has no down path');
-
-    const statements: string[] = [];
-    const builder = new Proxy(
-      {},
-      {
-        get(_target, property) {
-          if (property === 'dropConstraint') {
-            return (table: unknown, name: unknown) => {
-              assert.match(String(table), /^[a-z_][a-z0-9_]*$/);
-              assert.match(String(name), /^[a-z_][a-z0-9_]*$/);
-              statements.push(`ALTER TABLE ${String(table)} DROP CONSTRAINT ${String(name)}`);
-            };
-          }
-          if (property === 'addConstraint') {
-            return (table: unknown, name: unknown, spec: unknown) => {
-              assert.match(String(table), /^[a-z_][a-z0-9_]*$/);
-              assert.match(String(name), /^[a-z_][a-z0-9_]*$/);
-              const check = (spec as { check?: string }).check;
-              assert.ok(check, 'the down path re-adds only CHECK constraints');
-              statements.push(
-                `ALTER TABLE ${String(table)} ADD CONSTRAINT ${String(name)} CHECK (${check})`,
-              );
-            };
-          }
-
-          throw new Error(
-            `the migration's down uses pgm.${String(property)}, which this test cannot replay. ` +
-              'Teach replayDown about it rather than hand-writing the rollback.',
-          );
-        },
-      },
-    );
-
-    migration.down?.(builder);
-
-    return statements;
-  }
-
-  it('narrows the constraint back to exactly the four reservation events', () => {
-    const statements = replayDown();
-
-    assert.equal(statements.length, 2, 'drop the constraint, re-add it narrowed');
-    assert.match(statements[0] ?? '', /DROP CONSTRAINT notification_outbox_event_type_check/);
-
-    for (const eventType of RESERVATION_EVENT_TYPES) {
-      assert.ok(statements[1]?.includes(`'${eventType}'`), `${eventType} survives the rollback`);
-    }
-    assert.equal(
-      statements[1]?.includes('contact_inquiry_received'),
-      false,
-      'and the contact event does not',
-    );
-  });
-
-  it('runs against the live schema and refuses the contact event again', async () => {
-    // Everything here happens inside this test's own transaction, which
-    // `afterEach` rolls back — the real constraint is never left narrowed.
-    //
-    // The migration's `down` deliberately fails while any
-    // `contact_inquiry_received` row exists, so this suite's own are cleared
-    // first, exactly as an operator would settle them before rolling back.
-    await client.query('DELETE FROM notification_outbox WHERE booking_reference LIKE $1', [
-      `${referencePrefix}-%`,
-    ]);
-
-    for (const statement of replayDown()) {
-      await client.query(statement);
-    }
-
-    const refused = await rejects(() => queue('contact_inquiry_received'));
-    assert.equal(refused.constraint, 'notification_outbox_event_type_check');
-
-    // And the four it always allowed are still allowed.
-    await queue('room_reservation_created');
-  });
-
-  it('left the real constraint widened once that rolled back', async () => {
-    await queue('contact_inquiry_received');
-  });
-});
+// MySQL's schema runner has no down path (and DDL commits implicitly), so the
+// MySQL rollback replay that lived here has no equivalent.

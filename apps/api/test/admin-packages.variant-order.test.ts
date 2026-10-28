@@ -141,7 +141,7 @@ function storedJourney(options: {
       }
 
       // The parking pass: every row moves to base + its row number.
-      if (text.includes('WITH parked')) {
+      if (text.includes('AS parked')) {
         const base = values![1] as number;
         const ordered = [...state.variants].sort((left, right) => Number(left.id) - Number(right.id));
 
@@ -380,7 +380,7 @@ describe('admin variant order: rearranging', () => {
     const stored = storedJourney({ variants: threeVariants() });
     await reorder(SLUG, { variantKeys: ['gamma', 'beta', 'alpha'] });
 
-    const park = stored.calls.findIndex((call) => call.text.includes('WITH parked'));
+    const park = stored.calls.findIndex((call) => call.text.includes('AS parked'));
     const firstFinal = stored.calls.findIndex(
       (call) => call.text.includes('UPDATE package_variants SET sort_order'),
     );
@@ -481,7 +481,7 @@ describe('admin variant order: the no-op', () => {
     assert.equal(stored.variantWrites, 0, 'no parking and no renumber');
     assert.equal(stored.packageWrites, 0);
     assert.equal(stored.updatedAt, 0, 'when the journey last changed is not rewritten');
-    assert.ok(!stored.calls.some((call) => call.text.includes('WITH parked')));
+    assert.ok(!stored.calls.some((call) => call.text.includes('AS parked')));
   });
 
   it('does not move ownership, because nothing diverged from the brochure', async () => {
@@ -664,7 +664,7 @@ describe('admin variant order: transaction and ownership', () => {
       if (call.text.includes('FROM package_variants') && call.text.includes('FOR UPDATE')) {
         return 'LOCK-VARIANTS';
       }
-      if (call.text.includes('WITH parked')) return 'PARK';
+      if (call.text.includes('AS parked')) return 'PARK';
       if (call.text.includes('UPDATE package_variants SET sort_order')) return 'POSITION';
       if (call.text.includes('UPDATE packages')) return 'OWN';
       return 'READ';
@@ -745,7 +745,7 @@ describe('admin variant order: transaction and ownership', () => {
     __setClientFactoryForTests(async () => ({
       async query(text: string) {
         calls.push(text.split('\n')[0]!.trim());
-        if (text.includes('WITH parked')) throw new Error('deadlock detected');
+        if (text.includes('AS parked')) throw new Error('deadlock detected');
         if (text.includes('FROM packages WHERE slug')) {
           return { rows: [{ id: PACKAGE_ID, is_active: false }] } as never;
         }

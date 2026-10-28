@@ -223,7 +223,7 @@ describe('refuses a row the schema should have made impossible', () => {
     ['a null rate', { base_nightly_rate: null }, /base_nightly_rate/],
     ['a non-boolean is_active', { is_active: 'true' }, /is_active/],
     ['a negative sort_order', { sort_order: -1 }, /sort_order/],
-    ['a room count as a string', { room_count: '4' }, /room_count/],
+    ['a non-numeric room count string', { room_count: 'four' }, /room_count/],
     ['a negative room count', { room_count: -1 }, /room_count/],
     ['updated_at as a string', { updated_at: '2026-09-20T18:45:22.411Z' }, /updated_at/],
     ['an invalid updated_at', { updated_at: new Date('not-a-date') }, /updated_at/],

@@ -70,7 +70,12 @@ const sequence = () =>
       return 'OUTBOX';
     }
 
-    return text.startsWith('SELECT') ? 'SELECT' : 'UPDATE';
+    // The non-locking SELECT is the read-back that replaces RETURNING.
+    if (text.startsWith('SELECT')) {
+      return text.includes('FOR UPDATE') ? 'SELECT' : 'READBACK';
+    }
+
+    return 'UPDATE';
   });
 
 const statementStartingWith = (keyword: string) => calls.find((call) => call.text.trim().startsWith(keyword));
@@ -79,7 +84,7 @@ before(async () => {
   // The service's module graph reaches db/pool, which requires DATABASE_URL at
   // import time. Nothing here connects: the pool's connect is replaced before
   // any call, and a placeholder is enough to load the module.
-  process.env.DATABASE_URL ??= 'postgresql://unused:unused@127.0.0.1:1/unused';
+  process.env.DATABASE_URL ??= 'mysql://unused:unused@127.0.0.1:1/unused';
   ({ dbPool } = await import('../src/db/pool.js'));
   ({ changeAdminReservationStatus } = await import(
     '../src/modules/admin-reservations/admin-reservations.service.js'
@@ -98,10 +103,10 @@ before(async () => {
           return Promise.reject(new Error(`database failure during ${failOn}`));
         }
         if (trimmed.startsWith('SELECT')) {
-          return Promise.resolve({ rows: lockedRows });
+          return Promise.resolve({ rows: trimmed.includes('FOR UPDATE') ? lockedRows : updatedRows });
         }
         if (trimmed.startsWith('UPDATE')) {
-          return Promise.resolve({ rows: updatedRows });
+          return Promise.resolve({ rows: [], rowCount: 1 });
         }
 
         return Promise.resolve({ rows: [] });
@@ -134,7 +139,7 @@ describe('changeAdminReservationStatus', () => {
 
       // A confirmation also queues the guest's notification, inside the same
       // transaction and before the COMMIT.
-      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'OUTBOX', 'COMMIT']);
+      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'READBACK', 'OUTBOX', 'COMMIT']);
     });
 
     it('takes the row lock rather than reading it unlocked', async () => {
@@ -179,7 +184,7 @@ describe('changeAdminReservationStatus', () => {
       const update = statementStartingWith('UPDATE')!;
       assert.match(update.text, /SET status = \$2/);
       // No trigger maintains it, so the statement must.
-      assert.match(update.text, /updated_at = now\(\)/);
+      assert.match(update.text, /updated_at = UTC_TIMESTAMP\(3\)/);
       assert.match(update.text, /WHERE booking_reference = \$1/);
 
       for (const untouched of ['room_id', 'room_type_id', 'check_in', 'check_out', 'total_amount', 'nightly_rate']) {
@@ -237,8 +242,8 @@ describe('changeAdminReservationStatus', () => {
         assert.deepEqual(
           sequence(),
           to === 'confirmed'
-            ? ['BEGIN', 'SELECT', 'UPDATE', 'OUTBOX', 'COMMIT']
-            : ['BEGIN', 'SELECT', 'UPDATE', 'COMMIT'],
+            ? ['BEGIN', 'SELECT', 'UPDATE', 'READBACK', 'OUTBOX', 'COMMIT']
+            : ['BEGIN', 'SELECT', 'UPDATE', 'READBACK', 'COMMIT'],
         );
       });
     }

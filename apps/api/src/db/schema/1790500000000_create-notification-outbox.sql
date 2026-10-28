@@ -1,0 +1,32 @@
+-- The PostgreSQL partial claim index (WHERE accepted_at IS NULL AND failed_at
+-- IS NULL) becomes a plain index.
+CREATE TABLE notification_outbox (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  event_type VARCHAR(64) NOT NULL,
+  booking_reference VARCHAR(64) NOT NULL,
+  recipient_kind VARCHAR(16) NOT NULL,
+  recipient_email TEXT NULL,
+  template_key TEXT NOT NULL,
+  payload JSON NOT NULL,
+  attempts INT NOT NULL DEFAULT 0,
+  last_attempt_at DATETIME(3) NULL,
+  next_attempt_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  accepted_at DATETIME(3) NULL,
+  failed_at DATETIME(3) NULL,
+  last_attempt_acceptance VARCHAR(16) NULL,
+  last_error TEXT NULL,
+  provider_reference TEXT NULL,
+  resolved_from TEXT NULL,
+  resolved_to TEXT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  CONSTRAINT notification_outbox_event_type_check CHECK (event_type IN ('room_reservation_created', 'room_reservation_confirmed', 'package_reservation_created', 'package_reservation_confirmed')),
+  CONSTRAINT notification_outbox_recipient_kind_check CHECK (recipient_kind IN ('hotel', 'guest')),
+  CONSTRAINT notification_outbox_event_booking_key UNIQUE (event_type, booking_reference),
+  CONSTRAINT notification_outbox_recipient_pairing_check CHECK ((recipient_kind = 'guest') = (recipient_email IS NOT NULL)),
+  CONSTRAINT notification_outbox_attempts_check CHECK (attempts >= 0),
+  CONSTRAINT notification_outbox_resolved_envelope_check CHECK ((resolved_from IS NULL) = (resolved_to IS NULL)),
+  CONSTRAINT notification_outbox_last_attempt_acceptance_check CHECK (last_attempt_acceptance IS NULL OR last_attempt_acceptance IN ('rejected', 'unknown')),
+  KEY notification_outbox_claim_idx (next_attempt_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci

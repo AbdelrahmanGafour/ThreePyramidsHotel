@@ -95,7 +95,12 @@ const sequence = () =>
       return 'COUNT';
     }
 
-    return text.startsWith('SELECT') ? 'SELECT' : 'UPDATE';
+    // The non-locking SELECT is the read-back that replaces RETURNING.
+    if (text.startsWith('SELECT')) {
+      return text.includes('FOR UPDATE') ? 'SELECT' : 'READBACK';
+    }
+
+    return text.startsWith('INSERT') ? 'INSERT' : 'UPDATE';
   });
 
 const statementMatching = (pattern: RegExp) => calls.find((call) => pattern.test(call.text));
@@ -111,6 +116,8 @@ const statementStartingWith = (prefix: string) =>
 /** The conflict count, which is the only statement that *starts* with it. */
 const conflictCount = () => statementStartingWith('SELECT COUNT');
 
+const readBackRows = () => insertedRows;
+
 function respond(text: string): Promise<{ rows: unknown[] }> {
   const trimmed = text.trim();
 
@@ -118,13 +125,17 @@ function respond(text: string): Promise<{ rows: unknown[] }> {
     return Promise.resolve({ rows: countRows });
   }
   if (trimmed.startsWith('SELECT')) {
-    return Promise.resolve({ rows: lockedRows });
+    // The locking read returns the locked row; the plain read-back that
+    // replaces RETURNING returns the written row.
+    return Promise.resolve({
+      rows: trimmed.includes('FOR UPDATE') ? lockedRows : [...updatedRows, ...readBackRows()],
+    });
   }
   if (trimmed.startsWith('UPDATE')) {
-    return Promise.resolve({ rows: updatedRows });
+    return Promise.resolve({ rows: [], rowCount: 1 });
   }
   if (trimmed.startsWith('INSERT')) {
-    return Promise.resolve({ rows: insertedRows });
+    return Promise.resolve({ rows: [], rowCount: 1, insertId: '42' });
   }
 
   return Promise.resolve({ rows: [] });
@@ -134,7 +145,7 @@ before(async () => {
   // The service's module graph reaches db/pool, which requires DATABASE_URL at
   // import time. Nothing here connects: the pool is replaced before any call,
   // and a placeholder is enough to load the module.
-  process.env.DATABASE_URL ??= 'postgresql://unused:unused@127.0.0.1:1/unused';
+  process.env.DATABASE_URL ??= 'mysql://unused:unused@127.0.0.1:1/unused';
   ({ dbPool } = await import('../src/db/pool.js'));
   ({ createAdminRoomType, changeAdminRoomTypeCapacity } = await import(
     '../src/modules/admin-room-types/admin-room-types.service.js'
@@ -190,13 +201,15 @@ describe('createAdminRoomType', () => {
     assert.equal(result.outcome === 'created' && result.roomType.roomCount, 0);
   });
 
-  it('runs one statement and no transaction', async () => {
+  it('runs the INSERT and its read-back in one transaction', async () => {
     insertedRows = [detailRow(2)];
 
     await createAdminRoomType(CREATE_INPUT);
 
-    assert.equal(calls.length, 1, 'a single INSERT, with no BEGIN/COMMIT around it');
-    assert.match(calls[0]!.text, /INSERT INTO room_types/);
+    // MySQL has no RETURNING: the new row is read back by its generated key.
+    assert.deepEqual(sequence(), ['BEGIN', 'INSERT', 'READBACK', 'COMMIT']);
+    assert.match(calls[1]!.text, /INSERT INTO room_types/);
+    assert.deepEqual(calls[2]!.values, ['42']);
   });
 
   it('writes is_active as a literal false, never as a parameter', async () => {
@@ -217,7 +230,11 @@ describe('createAdminRoomType', () => {
 
     await createAdminRoomType(CREATE_INPUT);
 
-    assert.ok(!statementMatching(/^\s*SELECT/), 'the unique index is the authority, not a SELECT');
+    const insertAt = calls.findIndex((call) => /^\s*INSERT/.test(call.text));
+    assert.ok(
+      !calls.slice(0, insertAt).some((call) => /^\s*SELECT/.test(call.text)),
+      'the unique index is the authority, not a SELECT before the INSERT',
+    );
   });
 
   it('maps a slug unique violation to the conflict', async () => {
@@ -254,7 +271,7 @@ describe('changeAdminRoomTypeCapacity', () => {
       const result = await changeAdminRoomTypeCapacity(SLUG, 2);
 
       assert.equal(result.outcome, 'updated');
-      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'COUNT', 'UPDATE', 'COMMIT']);
+      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'COUNT', 'UPDATE', 'READBACK', 'COMMIT']);
     });
 
     it('takes the row lock rather than reading it unlocked', async () => {
@@ -337,7 +354,7 @@ describe('changeAdminRoomTypeCapacity', () => {
       const result = await changeAdminRoomTypeCapacity(SLUG, 4);
 
       assert.equal(result.outcome, 'updated');
-      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'COMMIT']);
+      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'READBACK', 'COMMIT']);
       assert.ok(!conflictCount(), 'no existing party can stop fitting in a larger room');
     });
 
@@ -348,7 +365,7 @@ describe('changeAdminRoomTypeCapacity', () => {
       const result = await changeAdminRoomTypeCapacity(SLUG, 2);
 
       assert.equal(result.outcome, 'updated');
-      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'COMMIT']);
+      assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'READBACK', 'COMMIT']);
       assert.ok(!conflictCount());
     });
   });
@@ -375,7 +392,7 @@ describe('changeAdminRoomTypeCapacity', () => {
       const count = conflictCount()!;
       assert.deepEqual(count.values, ['7', 2]);
       assert.match(count.text, /status IN \('pending', 'confirmed'\)/);
-      assert.match(count.text, /check_out > CURRENT_DATE/);
+      assert.match(count.text, /check_out > UTC_DATE\(\)/);
     });
 
     it('refuses and rolls back when an upcoming stay would no longer fit', async () => {

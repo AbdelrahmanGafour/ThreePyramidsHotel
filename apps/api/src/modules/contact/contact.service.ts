@@ -41,7 +41,7 @@ import { parseContactInquiryInput } from './contact.validation';
 /** Matches the room flow's `MAX_BOOKING_REFERENCE_ATTEMPTS`. */
 const MAX_REFERENCE_ATTEMPTS = 5;
 
-/** PostgreSQL unique_violation. */
+/** MySQL unique_violation. */
 const UNIQUE_VIOLATION_SQLSTATE = '23505';
 
 /**
@@ -78,7 +78,7 @@ export type ContactInquiryAccepted = { readonly received: true };
  *
  * @throws {ContactInquiryValidationError} for anything the form should not
  * have sent, the honeypot included and indistinguishable.
- * @throws whatever PostgreSQL raised, unchanged, for any error that is not a
+ * @throws whatever MySQL raised, unchanged, for any error that is not a
  * reference collision.
  */
 export async function submitContactInquiry(body: unknown): Promise<ContactInquiryAccepted> {
@@ -107,7 +107,7 @@ export async function submitContactInquiry(body: unknown): Promise<ContactInquir
       } catch (error) {
         // Only a collision on the outbox's own uniqueness is worth another
         // reference. Everything else — a CHECK violation, a lost connection,
-        // a different unique index — propagates exactly as PostgreSQL raised
+        // a different unique index — propagates exactly as MySQL raised
         // it, because none of it would be fixed by trying again.
         if (!isReferenceCollision(error)) {
           throw error;

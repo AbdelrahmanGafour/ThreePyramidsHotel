@@ -440,7 +440,7 @@ describe('admin variant update: write scope', () => {
 
     const own = stored.calls.find((call) => call.text.includes('UPDATE packages'))!;
     assert.match(own.text, /seed_managed = false/);
-    assert.match(own.text, /updated_at = now\(\)/);
+    assert.match(own.text, /updated_at = UTC_TIMESTAMP\(3\)/);
 
     for (const column of ['is_active', 'title', 'summary', 'code', 'slug', 'sort_order']) {
       assert.ok(!own.text.includes(column), `${column} must never be written by a variant edit`);

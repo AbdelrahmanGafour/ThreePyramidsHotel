@@ -178,7 +178,7 @@ export async function logout(cookieHeader: string | undefined): Promise<void> {
 // Nothing below logs, and no password or hash appears in any thrown message.
 // ---------------------------------------------------------------------------
 
-/** PostgreSQL unique_violation. */
+/** MySQL unique_violation. */
 const UNIQUE_VIOLATION = '23505';
 
 /** The one index that decides whether an address is free. */

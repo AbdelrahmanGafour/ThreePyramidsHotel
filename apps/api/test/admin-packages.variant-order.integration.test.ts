@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 
-// Admin variant reordering against real PostgreSQL.
+// Admin variant reordering against real MySQL.
 //
 // The unit suite models the two-pass renumber; this proves the part only the
 // database can settle — that `package_variants_package_sort_key`, a
@@ -18,12 +17,12 @@ import { runner } from 'node-pg-migrate';
 // it, through the real pool. Every row this suite writes carries an
 // identifier unique to the run, and exactly those rows are removed afterwards.
 
-// Uses the dedicated migrated disposable cluster, never hotel development.
+// Uses the dedicated migrated disposable MySQL database, never hotel development.
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 
 type Pool = typeof import('../src/db/pool.js');
@@ -44,10 +43,10 @@ type StoredVariant = { id: string; key: string; sort_order: number; is_default: 
 /** A journey's variants in the catalogue's own order. */
 async function storedVariants(packageId: string): Promise<StoredVariant[]> {
   const { rows } = await dbPool.query<StoredVariant>(
-    `SELECT id, key, sort_order, is_default
+    `SELECT id, \`key\`, sort_order, is_default
        FROM package_variants
       WHERE package_id = $1
-      ORDER BY sort_order, key`,
+      ORDER BY sort_order, \`key\``,
     [packageId],
   );
 
@@ -78,24 +77,22 @@ async function createFixture(options: {
   const code = `${codePrefix}-${sequence}`;
   const slug = `${slugPrefix}-${sequence}`;
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const { insertId: rowsInsertId } = await dbPool.query(
     `INSERT INTO packages (
        code, slug, title, is_active, requires_price_confirmation, sort_order, seed_managed
-     ) VALUES ($1, $2, 'Variant order fixture', $3, false, 0, $4)
-     RETURNING id`,
+     ) VALUES ($1, $2, 'Variant order fixture', $3, false, 0, $4)`,
     [code, slug, options.isActive ?? false, options.seedManaged ?? true],
   );
-  const packageId = rows[0]!.id;
+  const packageId = rowsInsertId!;
   const idsByKey = new Map<string, string>();
 
   for (const [index, variant] of options.variants.entries()) {
-    const { rows: variantRows } = await dbPool.query<{ id: string }>(
-      `INSERT INTO package_variants (package_id, key, label, is_default, sort_order)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
+    const { insertId: variantRowsInsertId } = await dbPool.query(
+      `INSERT INTO package_variants (package_id, \`key\`, label, is_default, sort_order)
+       VALUES ($1, $2, $3, $4, $5)`,
       [packageId, variant.key, `Label ${variant.key}`, index === 0, variant.sortOrder],
     );
-    const variantId = variantRows[0]!.id;
+    const variantId = variantRowsInsertId!;
     idsByKey.set(variant.key, variantId);
 
     await dbPool.query(
@@ -111,23 +108,6 @@ async function createFixture(options: {
 
 before(async () => {
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
-
-  const version = (await dbPool.query<{ version: number }>(
-    "SELECT current_setting('server_version_num')::int AS version",
-  )).rows[0]!.version;
-  assert.ok(
-    (version >= 160000 && version < 170000) || (version >= 180000 && version < 190000),
-    'PostgreSQL 16 or 18 required',
-  );
-
-  // UP only: the schema suite owns the destructive DOWN/UP lifecycle.
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
 
   ({ reorderAdminPackageVariants } = await import(
     '../src/modules/admin-packages/admin-packages.repository.js'
@@ -163,15 +143,15 @@ after(async () => {
   await dbPool.query('DELETE FROM packages WHERE code LIKE $1', [`${codePrefix}%`]);
 
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM packages WHERE code LIKE $1',
+    'SELECT COUNT(*) AS n FROM packages WHERE code LIKE $1',
     [`${codePrefix}%`],
   );
-  assert.equal(rows[0]!.n, 0, 'every fixture this run created was removed');
+  assert.equal(Number(rows[0]!.n), 0, 'every fixture this run created was removed');
 
   await closeDatabasePool();
 });
 
-describe('admin variant reordering against PostgreSQL', () => {
+describe('admin variant reordering against MySQL', () => {
   it('swaps two variants without tripping the unique index', async () => {
     const fixture = await createFixture({
       variants: [{ key: 'alpha', sortOrder: 1 }, { key: 'beta', sortOrder: 2 }],
@@ -292,9 +272,9 @@ describe('admin variant reordering against PostgreSQL', () => {
 
     const { rows } = await dbPool.query<Record<string, unknown>>(
       `SELECT variant_id, package_id, variant_label_snapshot, package_code_snapshot,
-              package_title_snapshot, adults, children, tour_date::text AS tour_date,
-              adult_unit_rate_snapshot::text AS adult_unit_rate_snapshot,
-              total_amount_snapshot::text AS total_amount_snapshot, currency, pricing_status
+              package_title_snapshot, adults, children, tour_date AS tour_date,
+              adult_unit_rate_snapshot AS adult_unit_rate_snapshot,
+              total_amount_snapshot AS total_amount_snapshot, currency, pricing_status
          FROM package_reservations
         WHERE booking_reference = $1`,
       [bookingReference],

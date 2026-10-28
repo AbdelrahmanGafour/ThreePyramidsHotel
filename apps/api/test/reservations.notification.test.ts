@@ -25,7 +25,7 @@ let createReservation: ServiceModule['createReservation'];
 let __setClientFactoryForTests: ServiceModule['__setClientFactoryForTests'];
 
 before(async () => {
-  process.env.DATABASE_URL ??= 'postgresql://unused:unused@127.0.0.1:1/unused';
+  process.env.DATABASE_URL ??= 'mysql://unused:unused@127.0.0.1:1/unused';
   ({ createReservation, __setClientFactoryForTests } = await import(
     '../src/modules/reservations/reservations.service.js'
   ));
@@ -64,9 +64,9 @@ type Recorded = { text: string; values: unknown[] };
 
 type Script = {
   /**
-   * How many reservation INSERTs return no row before one succeeds, standing
-   * in for booking-reference collisions. The service retries on an empty
-   * result, exactly as `ON CONFLICT (booking_reference) DO NOTHING` produces.
+   * How many reservation INSERTs hit the booking-reference unique key before
+   * one succeeds, standing in for booking-reference collisions. The repository
+   * turns that violation into "no row" and the service retries.
    */
   referenceCollisions?: number;
   /** Make the outbox insert throw this, standing in for a strict failure. */
@@ -106,12 +106,15 @@ function scriptedClient(script: Script = {}): { client: PoolClient; log: Recordi
 
       if (text.includes('INSERT INTO reservations')) {
         reservationInserts += 1;
-        // An empty result is the collision signal: the row was not inserted
-        // and the transaction is still usable.
+        // A unique violation on the reference is the collision signal: the row
+        // was not inserted and the transaction is still usable in MySQL.
         if (reservationInserts <= (script.referenceCollisions ?? 0)) {
-          return { rows: [] };
+          throw Object.assign(new Error('Duplicate entry for key reservations_booking_reference_key'), {
+            code: '23505',
+            constraint: 'reservations_booking_reference_key',
+          });
         }
-        return { rows: [{ id: '101' }] };
+        return { rows: [], rowCount: 1, insertId: '101' };
       }
 
       if (text.includes('INSERT INTO notification_outbox')) {
@@ -140,6 +143,7 @@ const sequence = (log: Recording): string[] =>
     if (compact.startsWith('INSERT INTO reservations')) return 'RESERVATION';
     if (compact.startsWith('SELECT rt.id')) return 'ROOM_TYPE';
     if (compact.startsWith('SELECT r.id')) return 'ROOM_LOCK';
+    if (compact.startsWith('SELECT id FROM reservations')) return 'OVERLAP_CHECK';
 
     return compact.split(' ')[0] as string;
   });
@@ -178,9 +182,11 @@ describe('room reservation creation queues the hotel notification', () => {
     await createReservation(requestBody());
 
     assert.deepEqual(sequence(log), [
+      'SET',
       'BEGIN',
       'ROOM_TYPE',
       'ROOM_LOCK',
+      'OVERLAP_CHECK',
       'RESERVATION',
       'OUTBOX',
       'COMMIT',
@@ -252,7 +258,11 @@ describe('room reservation creation queues the hotel notification', () => {
     await createReservation(requestBody());
 
     assert.equal(sequence(log).filter((statement) => statement.startsWith('SELECT')).length, 0);
-    assert.equal(log.statements.length, 6, 'BEGIN, two reads, the insert, the outbox, COMMIT');
+    assert.equal(
+      log.statements.length,
+      8,
+      'SET ISOLATION, BEGIN, two reads, the overlap check, the insert, the outbox, COMMIT',
+    );
   });
 });
 
@@ -279,11 +289,15 @@ describe('booking-reference collisions and the outbox', () => {
     await createReservation(requestBody());
 
     assert.deepEqual(sequence(log), [
+      'SET',
       'BEGIN',
       'ROOM_TYPE',
       'ROOM_LOCK',
+      'OVERLAP_CHECK',
       'RESERVATION',
+      'OVERLAP_CHECK',
       'RESERVATION',
+      'OVERLAP_CHECK',
       'RESERVATION',
       'OUTBOX',
       'COMMIT',
@@ -305,7 +319,7 @@ describe('booking-reference collisions and the outbox', () => {
 });
 
 describe('a failed outbox insert fails the booking', () => {
-  /** As PostgreSQL raises a unique violation. */
+  /** As MySQL raises a unique violation. */
   const uniqueViolation = () =>
     Object.assign(new Error('duplicate key value violates unique constraint'), {
       code: '23505',
@@ -321,9 +335,11 @@ describe('a failed outbox insert fails the booking', () => {
     await assert.rejects(createReservation(requestBody()));
 
     assert.deepEqual(sequence(log), [
+      'SET',
       'BEGIN',
       'ROOM_TYPE',
       'ROOM_LOCK',
+      'OVERLAP_CHECK',
       'RESERVATION',
       'OUTBOX',
       'ROLLBACK',

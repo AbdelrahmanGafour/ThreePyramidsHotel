@@ -3,7 +3,7 @@
  * `rooms` module on purpose: different audience, different guard, and a wider
  * set of fields. Nothing here is reachable without an admin session.
  *
- * Money and measurements stay exact decimal strings, as PostgreSQL returned
+ * Money and measurements stay exact decimal strings, as MySQL returned
  * them. A `numeric` read through a JavaScript number is a value that has
  * already lost precision by the time anyone looks at it.
  */

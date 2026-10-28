@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 
-// Admin default-variant switching against real PostgreSQL.
+// Admin default-variant switching against real MySQL.
 //
 // The unit suite models the transaction; this proves the parts only the
 // database can settle. Chiefly it proves the partial unique index
@@ -17,12 +16,12 @@ import { runner } from 'node-pg-migrate';
 // it, through the real pool. Every row this suite writes carries an
 // identifier unique to the run, and exactly those rows are removed afterwards.
 
-// Uses the dedicated migrated disposable cluster, never hotel development.
+// Uses the dedicated migrated disposable MySQL database, never hotel development.
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 
 type Pool = typeof import('../src/db/pool.js');
@@ -47,14 +46,14 @@ type StoredVariant = {
 /** A journey's variants in the catalogue's own order. */
 async function storedVariants(packageId: string): Promise<StoredVariant[]> {
   const { rows } = await dbPool.query<StoredVariant>(
-    `SELECT key,
+    `SELECT \`key\`,
             label,
             is_default,
             sort_order,
-            child_discount_percent::text AS child_discount_percent
+            child_discount_percent AS child_discount_percent
        FROM package_variants
       WHERE package_id = $1
-      ORDER BY sort_order, key`,
+      ORDER BY sort_order, \`key\``,
     [packageId],
   );
 
@@ -70,11 +69,11 @@ async function storedVariants(packageId: string): Promise<StoredVariant[]> {
  */
 async function defaultCount(packageId: string): Promise<number> {
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM package_variants WHERE package_id = $1 AND is_default',
+    'SELECT COUNT(*) AS n FROM package_variants WHERE package_id = $1 AND is_default',
     [packageId],
   );
 
-  return rows[0]!.n;
+  return Number(rows[0]!.n);
 }
 
 async function packageState(id: string): Promise<{
@@ -87,7 +86,7 @@ async function packageState(id: string): Promise<{
     is_active: boolean;
     updated_at: string;
   }>(
-    'SELECT seed_managed, is_active, updated_at::text AS updated_at FROM packages WHERE id = $1',
+    'SELECT seed_managed, is_active, CAST(updated_at AS CHAR) AS updated_at FROM packages WHERE id = $1',
     [id],
   );
 
@@ -109,14 +108,14 @@ async function storedTiers(packageId: string): Promise<Array<{
     max_party_size: number | null;
     adult_unit_rate: string;
   }>(
-    `SELECT v.key,
+    `SELECT v.\`key\`,
             r.min_party_size,
             r.max_party_size,
-            r.adult_unit_rate::text AS adult_unit_rate
+            r.adult_unit_rate AS adult_unit_rate
        FROM package_rate_tiers r
        JOIN package_variants v ON v.id = r.variant_id
       WHERE v.package_id = $1
-      ORDER BY v.key, r.min_party_size`,
+      ORDER BY v.\`key\`, r.min_party_size`,
     [packageId],
   );
 
@@ -144,22 +143,20 @@ async function createFixture(options: {
   const code = `${codePrefix}-${sequence}`;
   const slug = `${slugPrefix}-${sequence}`;
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const { insertId: rowsInsertId } = await dbPool.query(
     `INSERT INTO packages (
        code, slug, title, is_active, requires_price_confirmation, sort_order, seed_managed
-     ) VALUES ($1, $2, 'Default variant fixture', $3, false, 0, $4)
-     RETURNING id`,
+     ) VALUES ($1, $2, 'Default variant fixture', $3, false, 0, $4)`,
     [code, slug, options.isActive ?? false, options.seedManaged ?? true],
   );
-  const packageId = rows[0]!.id;
+  const packageId = rowsInsertId!;
 
   for (const variant of options.variants) {
-    const { rows: variantRows } = await dbPool.query<{ id: string }>(
+    const { insertId: variantRowsInsertId } = await dbPool.query(
       `INSERT INTO package_variants (
-         package_id, key, label, is_default, sort_order,
+         package_id, \`key\`, label, is_default, sort_order,
          child_min_age, child_max_age, child_discount_percent
-       ) VALUES ($1, $2, $3, $4, $5, 6, 12, '33.33')
-       RETURNING id`,
+       ) VALUES ($1, $2, $3, $4, $5, 6, 12, '33.33')`,
       [packageId, variant.key, `Label ${variant.key}`, variant.isDefault, variant.sortOrder],
     );
 
@@ -168,7 +165,7 @@ async function createFixture(options: {
       `INSERT INTO package_rate_tiers (
          variant_id, min_party_size, max_party_size, adult_unit_rate, currency
        ) VALUES ($1, 1, NULL, $2, 'USD')`,
-      [variantRows[0]!.id, `10${variant.sortOrder}.00`],
+      [variantRowsInsertId!, `10${variant.sortOrder}.00`],
     );
   }
 
@@ -178,27 +175,10 @@ async function createFixture(options: {
 before(async () => {
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 
-  const version = (await dbPool.query<{ version: number }>(
-    "SELECT current_setting('server_version_num')::int AS version",
-  )).rows[0]!.version;
-  assert.ok(
-    (version >= 160000 && version < 170000) || (version >= 180000 && version < 190000),
-    'PostgreSQL 16 or 18 required',
-  );
-
   // Do not depend on test-file execution order. UP is a no-op when the schema
   // lifecycle suite has already run against this disposable database, and it
   // brings a fresh one up to the current schema when it has not.
   //
-  // UP only: the schema suite owns the destructive DOWN/UP lifecycle.
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
-
   ({ setAdminPackageDefaultVariant } = await import(
     '../src/modules/admin-packages/admin-packages.repository.js'
   ));
@@ -226,15 +206,15 @@ after(async () => {
   await dbPool.query('DELETE FROM packages WHERE code LIKE $1', [`${codePrefix}%`]);
 
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM packages WHERE code LIKE $1',
+    'SELECT COUNT(*) AS n FROM packages WHERE code LIKE $1',
     [`${codePrefix}%`],
   );
-  assert.equal(rows[0]!.n, 0, 'every fixture this run created was removed');
+  assert.equal(Number(rows[0]!.n), 0, 'every fixture this run created was removed');
 
   await closeDatabasePool();
 });
 
-describe('admin default variant against PostgreSQL', () => {
+describe('admin default variant against MySQL', () => {
   it('moves the default from one variant to another', async () => {
     const fixture = await createFixture({
       seedManaged: true,

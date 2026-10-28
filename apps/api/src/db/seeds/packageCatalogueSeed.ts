@@ -272,10 +272,10 @@ async function resolvePackageId(
               description = $4,
               duration_label = $5,
               schedule_label = $6,
-              operating_days = $7,
+              operating_days = CAST($7 AS JSON),
               requires_price_confirmation = $8,
               sort_order = $9,
-              updated_at = now()
+              updated_at = UTC_TIMESTAMP(3)
         WHERE id = $1`,
       [
         current.id,
@@ -284,7 +284,7 @@ async function resolvePackageId(
         item.description,
         item.durationLabel,
         item.scheduleLabel,
-        item.operatingDays,
+        item.operatingDays === null ? null : JSON.stringify(item.operatingDays),
         item.requiresPriceConfirmation,
         0,
       ],
@@ -295,13 +295,12 @@ async function resolvePackageId(
   // `seed_managed` is stated rather than left to the column default: a row
   // this function creates is one the brochure owns, and that should be legible
   // here rather than inferred from a migration.
-  const inserted = await client.query<{ id: string }>(
+  const inserted = await client.query(
     `INSERT INTO packages (
        code, slug, title, summary, description, duration_label, schedule_label,
        operating_days, is_active, requires_price_confirmation, sort_order, seed_managed
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10, true)
-     RETURNING id`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CAST($8 AS JSON), true, $9, $10, true)`,
     [
       item.code,
       item.slug,
@@ -310,13 +309,13 @@ async function resolvePackageId(
       item.description,
       item.durationLabel,
       item.scheduleLabel,
-      item.operatingDays,
+      item.operatingDays === null ? null : JSON.stringify(item.operatingDays),
       item.requiresPriceConfirmation,
       0,
     ],
   );
 
-  const id = inserted.rows[0]?.id;
+  const id = inserted.insertId;
   if (!id) throw new Error(`Package seed failed to insert ${item.code}`);
   return id;
 }
@@ -341,7 +340,7 @@ async function reconcilePackageContent(
   for (const content of item.content) {
     kindOrder[content.kind] += 1;
     await client.query(
-      `INSERT INTO package_content_items (package_id, kind, text, sort_order)
+      `INSERT INTO package_content_items (package_id, kind, \`text\`, sort_order)
        VALUES ($1, $2, $3, $4)`,
       [packageId, content.kind, content.text, kindOrder[content.kind]],
     );
@@ -357,7 +356,7 @@ async function reconcilePackageVariants(
   // `sort_order` is read here so the parking base below comes from rows this
   // transaction already holds locks on, without a second round trip.
   const existing = await client.query<{ key: string; sort_order: number }>(
-    'SELECT key, sort_order FROM package_variants WHERE package_id = $1 FOR UPDATE',
+    'SELECT `key`, sort_order FROM package_variants WHERE package_id = $1 FOR UPDATE',
     [packageId],
   );
   const unexpected = existing.rows.map((row) => row.key).filter((key) => !expectedKeys.includes(key));
@@ -393,20 +392,19 @@ async function reconcilePackageVariants(
   await client.query('UPDATE package_variants SET is_default = false WHERE package_id = $1', [packageId]);
 
   for (const [index, variant] of item.variants.entries()) {
-    const upserted = await client.query<{ id: string }>(
+    await client.query(
       `INSERT INTO package_variants (
-         package_id, key, label, is_default, sort_order,
+         package_id, \`key\`, label, is_default, sort_order,
          child_min_age, child_max_age, child_discount_percent
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (package_id, key) DO UPDATE SET
-         label = EXCLUDED.label,
-         is_default = EXCLUDED.is_default,
-         sort_order = EXCLUDED.sort_order,
-         child_min_age = EXCLUDED.child_min_age,
-         child_max_age = EXCLUDED.child_max_age,
-         child_discount_percent = EXCLUDED.child_discount_percent
-       RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) AS excluded
+       ON DUPLICATE KEY UPDATE
+         label = excluded.label,
+         is_default = excluded.is_default,
+         sort_order = excluded.sort_order,
+         child_min_age = excluded.child_min_age,
+         child_max_age = excluded.child_max_age,
+         child_discount_percent = excluded.child_discount_percent`,
       [
         packageId,
         variant.key,
@@ -419,6 +417,10 @@ async function reconcilePackageVariants(
       ],
     );
 
+    const upserted = await client.query<{ id: string }>(
+      'SELECT id FROM package_variants WHERE package_id = $1 AND `key` = $2',
+      [packageId, variant.key],
+    );
     const variantId = upserted.rows[0]?.id;
     if (!variantId) throw new Error(`Package seed failed to upsert ${item.code}/${variant.key}`);
 

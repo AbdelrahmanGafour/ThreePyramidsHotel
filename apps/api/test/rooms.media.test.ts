@@ -134,7 +134,7 @@ describe('public room media: query strategy', () => {
     assert.match(imageQuery.text, /FROM room_type_images/);
     // One query carrying every id, not one query per id.
     assert.deepEqual(imageQuery.values, [['1', '2', '3']]);
-    assert.match(imageQuery.text, /= ANY\(\$1::bigint\[\]\)/);
+    assert.match(imageQuery.text, /room_type_id IN \(\$1\)/);
   });
 
   it('does not query for images at all when no room types are active', async () => {

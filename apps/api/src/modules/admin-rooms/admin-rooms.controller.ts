@@ -41,7 +41,7 @@ import {
 //   POST create body   INVALID_ROOM_CREATE
 //   PATCH update body  INVALID_ROOM_UPDATE
 //
-// Nothing about PostgreSQL reaches this layer. A constraint violation was
+// Nothing about MySQL reaches this layer. A constraint violation was
 // already classified by the service into an outcome; no SQLSTATE, constraint
 // name or stack trace appears in any response, and no rejected room number or
 // slug is echoed back.

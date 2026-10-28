@@ -13,7 +13,7 @@ export type AvailabilityInput = {
 
 /**
  * One qualifying room type with its live availability for a requested stay.
- * `availableRoomCount` is calculated in PostgreSQL per request and never
+ * `availableRoomCount` is calculated in MySQL per request and never
  * stored; it can legitimately be 0. Physical rooms stay internal — only the
  * count of them is exposed.
  */
@@ -21,7 +21,7 @@ export type RoomTypeAvailability = {
   slug: string;
   name: string;
   capacity: number;
-  /** PostgreSQL numeric, kept as a string so no precision is lost. */
+  /** MySQL numeric, kept as a string so no precision is lost. */
   baseNightlyRate: string;
   availableRoomCount: number;
 };
@@ -31,7 +31,7 @@ export type RoomTypeAvailabilityResponse = {
   slug: string;
   name: string;
   capacity: number;
-  /** PostgreSQL numeric strings — exact two-decimal money, never floats. */
+  /** MySQL numeric strings — exact two-decimal money, never floats. */
   baseNightlyRate: string;
   totalAmount: string;
   currency: 'EGP';

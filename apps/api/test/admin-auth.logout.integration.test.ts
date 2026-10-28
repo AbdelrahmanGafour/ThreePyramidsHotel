@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
+import { toNumbers } from './support/core-sql';
 
 // Exercises POST /api/v1/admin/auth/logout over real HTTP against a real
-// PostgreSQL database, using its own admin account.
+// MySQL database, using its own admin account.
 if (!process.env.DATABASE_URL) {
   throw new Error(
     'DATABASE_URL is required for the integration tests. Run them from a shell that has it set, e.g.\n' +
@@ -126,14 +127,14 @@ after(async () => {
     await dbPool.query('DELETE FROM admin_users WHERE email = $1', [admin.email]);
 
     const { rows } = await dbPool.query<{ admins: number; sessions: number }>(
-      `SELECT (SELECT COUNT(*) FROM admin_users WHERE email = $1)::int AS admins,
+      `SELECT (SELECT COUNT(*) FROM admin_users WHERE email = $1) AS admins,
               (SELECT COUNT(*) FROM admin_sessions s
                  JOIN admin_users u ON u.id = s.admin_user_id
-                WHERE u.email = $1)::int AS sessions`,
+                WHERE u.email = $1) AS sessions`,
       [admin.email],
     );
 
-    assert.deepEqual(rows[0], { admins: 0, sessions: 0 }, 'fixture admin was not fully removed');
+    assert.deepEqual(rows[0] && toNumbers(rows[0]), { admins: 0, sessions: 0 }, 'fixture admin was not fully removed');
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

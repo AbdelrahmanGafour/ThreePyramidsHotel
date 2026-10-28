@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
+import { insertedId } from './support/core-sql';
 
-// The public room media read path against real PostgreSQL.
+// The public room media read path against real MySQL.
 //
 // What is proved here is only what a database can prove: that the ordering
 // clause produces cover-first, then sort_order, then id; that a room type
@@ -48,32 +49,26 @@ async function insertAsset(): Promise<{ id: string; reference: string }> {
   const key = `${keyPrefix}-${(keySeq += 1)}.webp`;
   const checksum = createHash('sha256').update(key).digest('hex');
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO media_assets (reference, storage_key, content_type, byte_size, checksum_sha256, width, height)
-     VALUES ($1, $2, 'image/webp', 2048, $3, 1600, 900)
-     RETURNING id`,
+     VALUES ($1, $2, 'image/webp', 2048, $3, 1600, 900)`,
     [reference, key, checksum],
   );
 
-  const row = rows[0];
-  assert.ok(row, 'failed to insert fixture media asset');
-
-  return { id: row.id, reference };
+  return { id: insertedId(inserted), reference };
 }
 
 async function insertRoomType(slug: string): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, 2, '1500.00', true, 0)
-     RETURNING id`,
+     VALUES ($1, $2, 2, '1500.00', true, 0)`,
     [slug, `Fixture ${slug}`],
   );
 
-  const row = rows[0];
-  assert.ok(row, `failed to insert fixture room type ${slug}`);
-  roomTypeIds[slug] = row.id;
+  const id = insertedId(inserted);
+  roomTypeIds[slug] = id;
 
-  return row.id;
+  return id;
 }
 
 async function linkImage(
@@ -135,7 +130,7 @@ after(async () => {
   await closeDatabasePool();
 });
 
-describe('public room media against PostgreSQL', () => {
+describe('public room media against MySQL', () => {
   it('orders a gallery cover first, then by sort order, then by id', async () => {
     const room = await findActiveRoomTypeBySlug(GALLERY_SLUG);
 

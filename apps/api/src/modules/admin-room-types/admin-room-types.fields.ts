@@ -155,7 +155,7 @@ export function parseOptionalText(value: unknown, maxLength: number): string | n
 }
 
 /**
- * A decimal kept as a string all the way to PostgreSQL.
+ * A decimal kept as a string all the way to MySQL.
  *
  * Deliberately never parsed with `Number`: the point of a `numeric` column is
  * that 1234.55 is exactly 1234.55, and routing it through a float to check its
@@ -184,12 +184,12 @@ export function parseDecimalString(
 }
 
 /**
- * The largest value a PostgreSQL `integer` column holds.
+ * The largest value a MySQL `integer` column holds.
  *
  * Every whole number this module validates — `capacity`, `bed_count`,
  * `sort_order` — is stored in an `int4` column, so this is the real ceiling,
  * not `Number.MAX_SAFE_INTEGER`. Bounding at the JavaScript limit instead let
- * a request that looked valid pass validation and then fail inside PostgreSQL
+ * a request that looked valid pass validation and then fail inside MySQL
  * with `22003`, which surfaces as a server error rather than as the bad
  * request it is.
  */

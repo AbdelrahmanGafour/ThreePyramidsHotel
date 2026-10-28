@@ -146,7 +146,7 @@ function multiplyMoney(amount: string, factor: number): string {
 }
 
 /**
- * Validates the query, asks PostgreSQL for live availability, and composes the
+ * Validates the query, asks MySQL for live availability, and composes the
  * API response. Sold-out room types are kept: a room type with
  * `availableRoomCount: 0` is a meaningful answer, not something to hide.
  *

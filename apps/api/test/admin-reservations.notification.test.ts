@@ -70,7 +70,12 @@ const sequence = () =>
       return 'OUTBOX';
     }
 
-    return text.startsWith('SELECT') ? 'SELECT' : 'UPDATE';
+    // The non-locking SELECT is the read-back that replaces RETURNING.
+    if (text.startsWith('SELECT')) {
+      return text.includes('FOR UPDATE') ? 'SELECT' : 'READBACK';
+    }
+
+    return 'UPDATE';
   });
 
 const outboxCalls = () => calls.filter((call) => call.text.includes('INSERT INTO notification_outbox'));
@@ -78,7 +83,7 @@ const outboxCalls = () => calls.filter((call) => call.text.includes('INSERT INTO
 before(async () => {
   // The module graph reaches db/pool, which reads the environment at import
   // time. Nothing connects: connect is replaced before any call.
-  process.env.DATABASE_URL ??= 'postgresql://unused:unused@127.0.0.1:1/unused';
+  process.env.DATABASE_URL ??= 'mysql://unused:unused@127.0.0.1:1/unused';
   ({ dbPool } = await import('../src/db/pool.js'));
   ({ changeAdminReservationStatus } = await import(
     '../src/modules/admin-reservations/admin-reservations.service.js'
@@ -96,10 +101,10 @@ before(async () => {
           return outboxError ? Promise.reject(outboxError) : Promise.resolve({ rows: [], rowCount: 1 });
         }
         if (trimmed.startsWith('SELECT')) {
-          return Promise.resolve({ rows: lockedRows });
+          return Promise.resolve({ rows: trimmed.includes('FOR UPDATE') ? lockedRows : updatedRows });
         }
         if (trimmed.startsWith('UPDATE')) {
-          return Promise.resolve({ rows: updatedRows });
+          return Promise.resolve({ rows: [], rowCount: 1 });
         }
 
         return Promise.resolve({ rows: [] });
@@ -146,7 +151,7 @@ describe('confirming a reservation queues the guest notification', () => {
 
     await changeAdminReservationStatus(REFERENCE, 'confirmed');
 
-    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'OUTBOX', 'COMMIT']);
+    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'READBACK', 'OUTBOX', 'COMMIT']);
   });
 
   it('carries the room-confirmed guest identity', async () => {
@@ -236,7 +241,7 @@ describe('everything else queues nothing', () => {
 
     assert.equal(result.outcome, 'updated');
     assert.equal(outboxCalls().length, 0);
-    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'COMMIT']);
+    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'READBACK', 'COMMIT']);
   });
 
   it('writes no event when confirming an already-confirmed reservation', async () => {
@@ -285,7 +290,7 @@ describe('a failed outbox insert fails the confirmation', () => {
 
     await assert.rejects(() => changeAdminReservationStatus(REFERENCE, 'confirmed'));
 
-    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'OUTBOX', 'ROLLBACK']);
+    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'READBACK', 'OUTBOX', 'ROLLBACK']);
   });
 
   it('propagates the original database error, object identity included', async () => {

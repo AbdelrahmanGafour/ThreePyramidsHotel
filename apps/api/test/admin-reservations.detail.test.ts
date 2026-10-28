@@ -266,7 +266,7 @@ describe('toAdminReservationDetail', () => {
       ['a currency other than EGP', { currency: 'USD' }, /currency/],
       ['a created_at that is not a Date', { created_at: '2026-03-01T00:00:00Z' }, /created_at/],
       ['an invalid created_at', { created_at: new Date('not-a-date') }, /created_at/],
-      ['nights as a string', { nights: '3' }, /nights/],
+      ['nights as a non-numeric string', { nights: 'three' }, /nights/],
       ['a fractional nights count', { nights: 2.5 }, /nights/],
       ['a negative nights count', { nights: -1 }, /nights/],
       // check_out > check_in is a CHECK constraint, so a stay cannot be zero nights.

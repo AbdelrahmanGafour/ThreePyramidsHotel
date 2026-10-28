@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 import sharp from 'sharp';
 
 // A journey's one image, against real PostgreSQL.
@@ -25,8 +24,8 @@ import sharp from 'sharp';
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 
 type Pool = typeof import('../src/db/pool.js');
@@ -76,14 +75,13 @@ async function createJourney(): Promise<{ packageId: string; slug: string }> {
   sequence += 1;
   const slug = `${slugPrefix}-${sequence}`;
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO packages (code, slug, title, is_active, seed_managed)
-     VALUES ($1, $2, 'Journey image fixture', false, true)
-     RETURNING id`,
+     VALUES ($1, $2, 'Journey image fixture', false, true)`,
     [`${codePrefix}-${sequence}`, slug],
   );
 
-  return { packageId: rows[0]!.id, slug };
+  return { packageId: inserted.insertId!, slug };
 }
 
 async function mediaState(packageId: string): Promise<{
@@ -101,8 +99,8 @@ async function mediaState(packageId: string): Promise<{
     storage_key: string | null;
   }>(
     `SELECT
-       (SELECT count(*)::int FROM package_media WHERE package_id = $1) AS relations,
-       (SELECT count(*)::int FROM package_media pm
+       (SELECT CAST(COUNT(*) AS SIGNED) FROM package_media WHERE package_id = $1) AS relations,
+       (SELECT CAST(COUNT(*) AS SIGNED) FROM package_media pm
           JOIN media_assets ma ON ma.id = pm.media_asset_id
          WHERE pm.package_id = $1) AS assets,
        (SELECT ma.reference FROM package_media pm
@@ -118,8 +116,8 @@ async function mediaState(packageId: string): Promise<{
   const row = rows[0]!;
 
   return {
-    relations: row.relations,
-    assets: row.assets,
+    relations: Number(row.relations),
+    assets: Number(row.assets),
     reference: row.reference,
     altText: row.alt_text,
     storageKey: row.storage_key,
@@ -129,7 +127,7 @@ async function mediaState(packageId: string): Promise<{
 /** The whole of the asset row a journey's image points at. */
 async function assetRow(packageId: string): Promise<Record<string, unknown> | null> {
   const { rows } = await dbPool.query(
-    `SELECT ma.id, ma.reference, ma.storage_key, ma.content_type, ma.byte_size::text AS byte_size,
+    `SELECT ma.id, ma.reference, ma.storage_key, ma.content_type, CAST(ma.byte_size AS CHAR) AS byte_size,
             ma.checksum_sha256, ma.width, ma.height, ma.created_at
        FROM package_media pm
        JOIN media_assets ma ON ma.id = pm.media_asset_id
@@ -156,22 +154,14 @@ async function assetCount(keys: string[]): Promise<number> {
   }
 
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM media_assets WHERE storage_key = ANY($1::text[])',
+    'SELECT CAST(COUNT(*) AS SIGNED) AS n FROM media_assets WHERE storage_key IN ($1)',
     [keys],
   );
 
-  return rows[0]!.n;
+  return Number(rows[0]!.n);
 }
 
 before(async () => {
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
-
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
   ({ uploadPackageImage, replacePackageImage, deletePackageImage, updatePackageImageAltText } =
     await import('../src/modules/admin-package-media/admin-package-media.service.js'));
@@ -201,7 +191,7 @@ after(async () => {
   );
 
   if (assetRows.length > 0) {
-    await dbPool.query('DELETE FROM media_assets WHERE id = ANY($1::bigint[])', [
+    await dbPool.query('DELETE FROM media_assets WHERE id IN ($1)', [
       assetRows.map((row) => row.media_asset_id),
     ]);
   }
@@ -209,10 +199,10 @@ after(async () => {
   await dbPool.query('DELETE FROM packages WHERE code LIKE $1', [`${codePrefix}%`]);
 
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM packages WHERE code LIKE $1',
+    'SELECT CAST(COUNT(*) AS SIGNED) AS n FROM packages WHERE code LIKE $1',
     [`${codePrefix}%`],
   );
-  assert.equal(rows[0]!.n, 0, 'every fixture this run created was removed');
+  assert.equal(Number(rows[0]!.n), 0, 'every fixture this run created was removed');
 
   await closeDatabasePool();
 });
@@ -501,10 +491,10 @@ describe('journey image: the package row serializes everything', () => {
       // transaction, and `package_media_package_id_fkey` would have refused
       // the delete otherwise.
       const { rows } = await dbPool.query<{ n: number }>(
-        'SELECT count(*)::int AS n FROM package_media WHERE package_id = $1',
+        'SELECT CAST(COUNT(*) AS SIGNED) AS n FROM package_media WHERE package_id = $1',
         [journey.packageId],
       );
-      assert.equal(rows[0]!.n, 0);
+      assert.equal(Number(rows[0]!.n), 0);
     } else {
       // The replacement won the lock and the delete then refused, or the
       // delete refused for its own reasons. Either way exactly one image.

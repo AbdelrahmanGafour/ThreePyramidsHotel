@@ -2,9 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 
-// Admin rate-tier replacement against real PostgreSQL.
+// Admin rate-tier replacement against real MySQL.
 //
 // The unit suite models the transaction; this proves the parts only the
 // database can settle: that the exclusion constraint actually refuses an
@@ -17,12 +16,12 @@ import { runner } from 'node-pg-migrate';
 // it, through the real pool. Every row this suite writes carries an
 // identifier unique to the run, and exactly those rows are removed afterwards.
 
-// Uses the dedicated migrated disposable cluster, never hotel development.
+// Uses the dedicated migrated disposable MySQL database, never hotel development.
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 
 type Pool = typeof import('../src/db/pool.js');
@@ -60,7 +59,7 @@ async function storedTiers(variantId: string): Promise<StoredTier[]> {
   const { rows } = await dbPool.query<StoredTier>(
     `SELECT min_party_size,
             max_party_size,
-            adult_unit_rate::text AS adult_unit_rate,
+            adult_unit_rate AS adult_unit_rate,
             currency
        FROM package_rate_tiers
       WHERE variant_id = $1
@@ -101,11 +100,10 @@ async function createFixture(options: {
   const code = `${codePrefix}-${sequence}`;
   const slug = `${slugPrefix}-${sequence}`;
 
-  const { rows: packageRows } = await dbPool.query<{ id: string }>(
+  const { insertId: packageRowsInsertId } = await dbPool.query(
     `INSERT INTO packages (
        code, slug, title, is_active, requires_price_confirmation, sort_order, seed_managed
-     ) VALUES ($1, $2, 'Rate fixture', $3, $4, 0, $5)
-     RETURNING id`,
+     ) VALUES ($1, $2, 'Rate fixture', $3, $4, 0, $5)`,
     [
       code,
       slug,
@@ -114,15 +112,14 @@ async function createFixture(options: {
       options.seedManaged ?? false,
     ],
   );
-  const packageId = packageRows[0]!.id;
+  const packageId = packageRowsInsertId!;
 
-  const { rows: variantRows } = await dbPool.query<{ id: string }>(
-    `INSERT INTO package_variants (package_id, key, label, is_default, sort_order)
-     VALUES ($1, $2, 'Standard', true, 1)
-     RETURNING id`,
+  const { insertId: variantRowsInsertId } = await dbPool.query(
+    `INSERT INTO package_variants (package_id, \`key\`, label, is_default, sort_order)
+     VALUES ($1, $2, 'Standard', true, 1)`,
     [packageId, VARIANT_KEY],
   );
-  const variantId = variantRows[0]!.id;
+  const variantId = variantRowsInsertId!;
 
   for (const tier of options.tiers ?? [{ min: 1, max: null, rate: '500.00' }]) {
     await dbPool.query(
@@ -139,29 +136,10 @@ async function createFixture(options: {
 before(async () => {
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 
-  const version = (await dbPool.query<{ version: number }>(
-    "SELECT current_setting('server_version_num')::int AS version",
-  )).rows[0]!.version;
-  assert.ok(
-    (version >= 160000 && version < 170000) || (version >= 180000 && version < 190000),
-    'PostgreSQL 16 or 18 required',
-  );
-
   // Do not depend on test-file execution order. UP is a no-op when the schema
   // lifecycle suite has already run against this disposable database, and it
   // brings a fresh one up to the current schema when it has not.
   //
-  // UP only: the schema suite owns the destructive DOWN/UP lifecycle, and a
-  // second file driving migrations downward would make the two fight over the
-  // same tables depending on which ran first.
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
-
   ({ replaceAdminPackageVariantRates } = await import(
     '../src/modules/admin-packages/admin-packages.repository.js'
   ));
@@ -203,15 +181,15 @@ after(async () => {
   await dbPool.query('DELETE FROM packages WHERE code LIKE $1', [`${codePrefix}%`]);
 
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM packages WHERE code LIKE $1',
+    'SELECT COUNT(*) AS n FROM packages WHERE code LIKE $1',
     [`${codePrefix}%`],
   );
-  assert.equal(rows[0]!.n, 0, 'every fixture this run created was removed');
+  assert.equal(Number(rows[0]!.n), 0, 'every fixture this run created was removed');
 
   await closeDatabasePool();
 });
 
-describe('admin rate replacement against PostgreSQL', () => {
+describe('admin rate replacement against MySQL', () => {
   it('replaces the whole set, keeping exact decimals, USD and order', async () => {
     const fixture = await createFixture({
       seedManaged: false,
@@ -262,14 +240,14 @@ describe('admin rate replacement against PostgreSQL', () => {
     // And the database agrees it is genuinely unbounded: a party of a hundred
     // still falls inside it.
     const { rows } = await dbPool.query<{ n: number }>(
-      `SELECT count(*)::int AS n
+      `SELECT COUNT(*) AS n
          FROM package_rate_tiers
         WHERE variant_id = $1
           AND min_party_size <= 100
           AND (max_party_size IS NULL OR max_party_size >= 100)`,
       [fixture.variantId],
     );
-    assert.equal(rows[0]!.n, 1, 'exactly one tier covers a party of a hundred');
+    assert.equal(Number(rows[0]!.n), 1, 'exactly one tier covers a party of a hundred');
   });
 
   it('takes ownership of a brochure-managed package', async () => {
@@ -290,7 +268,7 @@ describe('admin rate replacement against PostgreSQL', () => {
   });
 });
 
-describe('admin rate replacement: PostgreSQL integrity guard', () => {
+describe('admin rate replacement: MySQL integrity guard', () => {
   it('refuses an overlapping set and leaves the previous tiers completely intact', async () => {
     const original = [
       { min: 1, max: 2, rate: '300.00' },

@@ -92,7 +92,7 @@ function scriptedClient(): { client: PoolClient; log: Recording } {
       }
 
       if (text.includes('INSERT INTO package_reservations')) {
-        return { rows: [{ booking_reference: (values as string[])[0] }] };
+        return { rows: [], rowCount: 1 };
       }
 
       if (text.includes('INSERT INTO notification_outbox')) {

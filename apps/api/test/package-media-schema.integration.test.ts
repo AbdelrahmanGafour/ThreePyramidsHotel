@@ -1,10 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 
-// The `package_media` schema, proved against real PostgreSQL.
+// The `package_media` schema, proved against real MySQL.
 //
 // Everything asserted here is a rule only the database can settle: that
 // exactly one image per journey is a constraint rather than a habit, that an
@@ -24,8 +22,8 @@ import { runner } from 'node-pg-migrate';
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 
 type Pool = typeof import('../src/db/pool.js');
@@ -44,14 +42,13 @@ let sequence = 0;
 async function createPackage(): Promise<string> {
   sequence += 1;
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO packages (code, slug, title, is_active, seed_managed)
-     VALUES ($1, $2, 'Package media fixture', false, false)
-     RETURNING id`,
+     VALUES ($1, $2, 'Package media fixture', false, false)`,
     [`${codePrefix}-${sequence}`, `${slugPrefix}-${sequence}`],
   );
 
-  return rows[0]!.id;
+  return inserted.insertId!;
 }
 
 /**
@@ -61,15 +58,14 @@ async function createPackage(): Promise<string> {
 async function createAsset(): Promise<string> {
   sequence += 1;
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO media_assets
        (reference, storage_key, content_type, byte_size, checksum_sha256, width, height)
-     VALUES ($1, $2, 'image/webp', 4096, $3, 1200, 800)
-     RETURNING id`,
+     VALUES ($1, $2, 'image/webp', 4096, $3, 1200, 800)`,
     [randomUUID(), `${keyPrefix}-${sequence}.webp`, 'a'.repeat(64)],
   );
 
-  return rows[0]!.id;
+  return inserted.insertId!;
 }
 
 async function insertMedia(
@@ -77,14 +73,13 @@ async function insertMedia(
   mediaAssetId: string,
   altText: string | null = null,
 ): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO package_media (package_id, media_asset_id, alt_text)
-     VALUES ($1, $2, $3)
-     RETURNING id`,
+     VALUES ($1, $2, $3)`,
     [packageId, mediaAssetId, altText],
   );
 
-  return rows[0]!.id;
+  return inserted.insertId!;
 }
 
 type Violation = { code: string; constraint: string };
@@ -107,7 +102,7 @@ async function violation(run: () => Promise<unknown>): Promise<Violation> {
     return { code: pgError.code ?? '(none)', constraint: pgError.constraint ?? '(none)' };
   }
 
-  assert.fail('expected PostgreSQL to reject the statement');
+  assert.fail('expected MySQL to reject the statement');
 }
 
 /**
@@ -134,14 +129,7 @@ function assertRestrictRefusal(actual: Violation, constraint: string): void {
 }
 
 before(async () => {
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
-
+  // The schema (src/db/schema) is applied beforehand with `npm run migrate:up`.
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 });
 
@@ -162,15 +150,17 @@ after(async () => {
 
   const { rows } = await dbPool.query<{ packages: number; assets: number; media: number }>(
     `SELECT
-       (SELECT count(*)::int FROM packages WHERE code LIKE $1) AS packages,
-       (SELECT count(*)::int FROM media_assets WHERE storage_key LIKE $2) AS assets,
-       (SELECT count(*)::int FROM package_media pm
+       (SELECT CAST(COUNT(*) AS SIGNED) FROM packages WHERE code LIKE $1) AS packages,
+       (SELECT CAST(COUNT(*) AS SIGNED) FROM media_assets WHERE storage_key LIKE $2) AS assets,
+       (SELECT CAST(COUNT(*) AS SIGNED) FROM package_media pm
           JOIN media_assets ma ON ma.id = pm.media_asset_id
          WHERE ma.storage_key LIKE $2) AS media`,
     [`${codePrefix}%`, `${keyPrefix}%`],
   );
 
-  assert.deepEqual(rows[0], { packages: 0, assets: 0, media: 0 }, 'every fixture this run created was removed');
+  assert.deepEqual(
+    { packages: Number(rows[0]!.packages), assets: Number(rows[0]!.assets), media: Number(rows[0]!.media) },
+    { packages: 0, assets: 0, media: 0 }, 'every fixture this run created was removed');
 
   await closeDatabasePool();
 });
@@ -178,9 +168,9 @@ after(async () => {
 describe('package_media: the table as the migration declares it', () => {
   it('carries exactly the six columns, and none of the gallery ones', async () => {
     const { rows } = await dbPool.query<{ column_name: string; is_nullable: string }>(
-      `SELECT column_name, is_nullable
+      `SELECT column_name AS column_name, is_nullable AS is_nullable
          FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'package_media'
+        WHERE table_schema = DATABASE() AND table_name = 'package_media'
         ORDER BY ordinal_position`,
     );
 
@@ -201,44 +191,46 @@ describe('package_media: the table as the migration declares it', () => {
   });
 
   it('names every constraint, and declares both foreign keys as RESTRICT', async () => {
-    const { rows } = await dbPool.query<{ conname: string; contype: string; confdeltype: string }>(
-      `SELECT conname, contype, confdeltype
-         FROM pg_constraint
-        WHERE conrelid = 'package_media'::regclass AND contype <> 'n'
-        ORDER BY conname`,
+    const { rows } = await dbPool.query<{ conname: string; contype: string }>(
+      `SELECT constraint_name AS conname, constraint_type AS contype
+         FROM information_schema.table_constraints
+        WHERE table_schema = DATABASE() AND table_name = 'package_media'
+        ORDER BY constraint_name`,
     );
 
     assert.deepEqual(
-      rows.map((row) => row.conname),
+      rows.map((row) => row.conname).sort(),
       [
+        'PRIMARY',
         'package_media_alt_text_check',
         'package_media_media_asset_id_fkey',
         'package_media_media_asset_id_key',
         'package_media_package_id_fkey',
         'package_media_package_id_key',
-        'package_media_pkey',
-      ],
+      ].sort(),
     );
 
-    // 'r' is RESTRICT. Asserted from the catalog rather than inferred from a
-    // refusal, so it holds regardless of which SQLSTATE the server reports.
+    const { rows: rules } = await dbPool.query<{ conname: string; rule: string }>(
+      `SELECT constraint_name AS conname, delete_rule AS rule
+         FROM information_schema.referential_constraints
+        WHERE constraint_schema = DATABASE() AND table_name = 'package_media'`,
+    );
+
     for (const name of ['package_media_package_id_fkey', 'package_media_media_asset_id_fkey']) {
-      const fk = rows.find((row) => row.conname === name);
-      assert.equal(fk?.contype, 'f', `${name} should be a foreign key`);
-      assert.equal(fk?.confdeltype, 'r', `${name} should be ON DELETE RESTRICT`);
+      const fk = rules.find((row) => row.conname === name);
+      assert.equal(fk?.rule, 'RESTRICT', `${name} should be ON DELETE RESTRICT`);
     }
   });
 
   it('adds no index beyond the ones its constraints require', async () => {
     const { rows } = await dbPool.query<{ indexname: string }>(
-      `SELECT indexname FROM pg_indexes
-        WHERE schemaname = 'public' AND tablename = 'package_media'
-        ORDER BY indexname`,
+      `SELECT DISTINCT index_name AS indexname FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'package_media'`,
     );
 
     assert.deepEqual(
-      rows.map((row) => row.indexname),
-      ['package_media_media_asset_id_key', 'package_media_package_id_key', 'package_media_pkey'],
+      rows.map((row) => row.indexname).sort(),
+      ['package_media_media_asset_id_key', 'package_media_package_id_key', 'PRIMARY'].sort(),
     );
   });
 });
@@ -261,8 +253,8 @@ describe('package_media: integrity', () => {
     assert.equal(rows[0]!.package_id, packageId);
     assert.equal(rows[0]!.media_asset_id, assetId);
     assert.equal(rows[0]!.alt_text, 'Dawn over the plateau');
-    assert.ok(rows[0]!.created_at instanceof Date, 'created_at defaults to now()');
-    assert.ok(rows[0]!.updated_at instanceof Date, 'updated_at defaults to now()');
+    assert.ok(rows[0]!.created_at instanceof Date, 'created_at defaults to UTC_TIMESTAMP(3)');
+    assert.ok(rows[0]!.updated_at instanceof Date, 'updated_at defaults to UTC_TIMESTAMP(3)');
   });
 
   it('accepts a null alt text, because a decorative image is a real case', async () => {
@@ -280,11 +272,11 @@ describe('package_media: integrity', () => {
     const id = await insertMedia(await createPackage(), await createAsset(), 'x'.repeat(240));
 
     const { rows } = await dbPool.query<{ length: number }>(
-      'SELECT length(alt_text) AS length FROM package_media WHERE id = $1',
+      'SELECT CHAR_LENGTH(alt_text) AS length FROM package_media WHERE id = $1',
       [id],
     );
 
-    assert.equal(rows[0]!.length, 240, 'the ceiling itself is inside the rule, not outside it');
+    assert.equal(Number(rows[0]!.length), 240, 'the ceiling itself is inside the rule, not outside it');
   });
 
   it('refuses alt text of 241 characters', async () => {
@@ -368,13 +360,13 @@ describe('package_media: integrity', () => {
 
     const { rows } = await dbPool.query<{ media: number; assets: number; packages: number }>(
       `SELECT
-         (SELECT count(*)::int FROM package_media WHERE id = $1) AS media,
-         (SELECT count(*)::int FROM media_assets WHERE id = $2) AS assets,
-         (SELECT count(*)::int FROM packages WHERE id = $3) AS packages`,
+         (SELECT CAST(COUNT(*) AS SIGNED) FROM package_media WHERE id = $1) AS media,
+         (SELECT CAST(COUNT(*) AS SIGNED) FROM media_assets WHERE id = $2) AS assets,
+         (SELECT CAST(COUNT(*) AS SIGNED) FROM packages WHERE id = $3) AS packages`,
       [mediaId, assetId, packageId],
     );
 
-    assert.deepEqual(rows[0], { media: 0, assets: 0, packages: 0 });
+    assert.deepEqual({ media: Number(rows[0]!.media), assets: Number(rows[0]!.assets), packages: Number(rows[0]!.packages) }, { media: 0, assets: 0, packages: 0 });
   });
 
   it('leaves the asset alone when only the relation is removed', async () => {
@@ -384,13 +376,13 @@ describe('package_media: integrity', () => {
     await dbPool.query('DELETE FROM package_media WHERE id = $1', [mediaId]);
 
     const { rows } = await dbPool.query<{ n: number }>(
-      'SELECT count(*)::int AS n FROM media_assets WHERE id = $1',
+      'SELECT CAST(COUNT(*) AS SIGNED) AS n FROM media_assets WHERE id = $1',
       [assetId],
     );
 
     // No cascade in this direction either: removing a placement must never
     // discard the asset row on its own, because deleting the object from
     // storage is a separate, post-commit step the caller owns.
-    assert.equal(rows[0]!.n, 1);
+    assert.equal(Number(rows[0]!.n), 1);
   });
 });

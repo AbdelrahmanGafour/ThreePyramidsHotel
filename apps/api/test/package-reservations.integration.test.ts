@@ -2,15 +2,13 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import path from 'node:path';
 import { after, before, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 
 type Pool = typeof import('../src/db/pool.js');
@@ -30,7 +28,6 @@ async function hotelRows() {
   const result: Record<string, unknown> = {};
   for (const table of ['room_types', 'rooms', 'reservations']) {
     result[table] = (await pool.dbPool.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
-    result[`${table}_sequence`] = (await pool.dbPool.query(`SELECT last_value, is_called FROM ${table}_id_seq`)).rows;
   }
   return result;
 }
@@ -58,23 +55,19 @@ async function post(body: unknown): Promise<Response> {
 
 before(async () => {
   pool = await import('../src/db/pool.js');
-  const version = (await pool.dbPool.query("SELECT current_setting('server_version_num')::int AS version")).rows[0].version;
-  assert.ok((version >= 160000 && version < 170000) || (version >= 180000 && version < 190000), 'PostgreSQL 16 or 18 required');
-  await runner({ databaseUrl: process.env.DATABASE_URL!, direction: 'up', migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'), log: () => undefined });
-  assert.equal((await pool.dbPool.query('SELECT count(*)::int AS n FROM packages')).rows[0].n, 0);
+  assert.equal(Number((await pool.dbPool.query('SELECT COUNT(*) AS n FROM packages')).rows[0].n), 0);
   hotelBefore = await hotelRows();
 
-  packageId = (await pool.dbPool.query<{ id: string }>(`INSERT INTO packages(
+  packageId = (await pool.dbPool.query(`INSERT INTO packages(
     code,slug,title,summary,description,duration_label,schedule_label,operating_days,is_active,
     requires_price_confirmation,sort_order) VALUES ($1,$2,'Reservation package','Summary','Description',
-    'Approx. 4 hrs','Monday only',ARRAY['monday'],true,false,1) RETURNING id`, [code, slug])).rows[0].id;
+    'Approx. 4 hrs','Monday only','["monday"]',true,false,1)`, [code, slug])).insertId!;
 
-  standardVariantId = (await pool.dbPool.query<{ id: string }>(`INSERT INTO package_variants(
-    package_id,key,label,is_default,sort_order,child_min_age,child_max_age,child_discount_percent)
-    VALUES ($1,'standard','Standard',true,1,6,12,50.00) RETURNING id`, [packageId])).rows[0].id;
-  noRateVariantId = (await pool.dbPool.query<{ id: string }>(`INSERT INTO package_variants(
-    package_id,key,label,is_default,sort_order) VALUES ($1,'manual','Manual',false,2) RETURNING id`, [packageId])).rows[0].id;
+  standardVariantId = (await pool.dbPool.query(`INSERT INTO package_variants(
+    package_id,\`key\`,label,is_default,sort_order,child_min_age,child_max_age,child_discount_percent)
+    VALUES ($1,'standard','Standard',true,1,6,12,50.00)`, [packageId])).insertId!;
+  noRateVariantId = (await pool.dbPool.query(`INSERT INTO package_variants(
+    package_id,\`key\`,label,is_default,sort_order) VALUES ($1,'manual','Manual',false,2)`, [packageId])).insertId!;
   await pool.dbPool.query(`INSERT INTO package_rate_tiers(variant_id,min_party_size,max_party_size,adult_unit_rate,currency)
     VALUES ($1,1,1,'100.00','USD'),($1,2,2,'90.00','USD'),($1,3,NULL,'80.00','USD')`, [standardVariantId]);
 
@@ -91,11 +84,11 @@ after(async () => {
     // Every booking also queues a hotel notification. Those rows hold no
     // foreign key, so nothing obstructs the deletes below and nothing would
     // remove them either.
-    await pool.dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [createdReferences]);
+    await pool.dbPool.query('DELETE FROM notification_outbox WHERE booking_reference IN (?)', [createdReferences]);
     await pool.dbPool.query('DELETE FROM package_reservations WHERE package_id=$1', [packageId]);
     await pool.dbPool.query('DELETE FROM packages WHERE id=$1', [packageId]);
     for (const table of ['packages','package_variants','package_rate_tiers','package_content_items','package_itinerary_sections','package_reservations','notification_outbox']) {
-      assert.equal((await pool.dbPool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 0, `${table} residue`);
+      assert.equal(Number((await pool.dbPool.query(`SELECT COUNT(*) AS n FROM ${table}`)).rows[0].n), 0, `${table} residue`);
     }
     assert.deepEqual(await hotelRows(), hotelBefore);
   } finally {
@@ -186,11 +179,11 @@ it('preserves stored snapshots after later catalogue changes', async () => {
 });
 
 it('rejects dates outside explicit operating days without inserting', async () => {
-  const before = (await pool.dbPool.query('SELECT count(*)::int AS n FROM package_reservations')).rows[0].n;
+  const before = Number((await pool.dbPool.query('SELECT COUNT(*) AS n FROM package_reservations')).rows[0].n);
   const response = await post(requestBody({ tourDate: '2030-01-08' }));
   assert.equal(response.status, 400);
   assert.equal((await response.json()).error.code, 'PACKAGE_OPERATING_DAY_MISMATCH');
-  assert.equal((await pool.dbPool.query('SELECT count(*)::int AS n FROM package_reservations')).rows[0].n, before);
+  assert.equal(Number((await pool.dbPool.query('SELECT COUNT(*) AS n FROM package_reservations')).rows[0].n), before);
 });
 
 it('returns narrow 404/409 errors for unknown package, variant and unavailable rate', async () => {
@@ -218,25 +211,22 @@ it('rejects browser-controlled pricing/status fields and malformed JSON', async 
 });
 
 it('rolls back a failed INSERT and returns a sanitized 500', async () => {
-  const fn = `reject_package_reservation_${runId}`.replace(/-/g, '_');
   const trigger = `reject_package_reservation_trigger_${runId}`.replace(/-/g, '_');
-  await pool.dbPool.query(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'private db failure'; END $$`);
-  await pool.dbPool.query(`CREATE TRIGGER ${trigger} BEFORE INSERT ON package_reservations FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
-  const before = (await pool.dbPool.query('SELECT count(*)::int AS n FROM package_reservations')).rows[0].n;
+  await pool.dbPool.query(`CREATE TRIGGER ${trigger} BEFORE INSERT ON package_reservations FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'private db failure'`);
+  const before = Number((await pool.dbPool.query('SELECT COUNT(*) AS n FROM package_reservations')).rows[0].n);
   try {
     const response = await post(requestBody({ adults: 1, children: 0, childAges: undefined }));
     assert.equal(response.status, 500);
     assert.deepEqual(await response.json(), { error: {
       code: 'PACKAGE_RESERVATION_FAILED', message: 'Package reservation could not be created',
     } });
-    assert.equal((await pool.dbPool.query('SELECT count(*)::int AS n FROM package_reservations')).rows[0].n, before);
+    assert.equal(Number((await pool.dbPool.query('SELECT COUNT(*) AS n FROM package_reservations')).rows[0].n), before);
   } finally {
-    await pool.dbPool.query(`DROP TRIGGER ${trigger} ON package_reservations`);
-    await pool.dbPool.query(`DROP FUNCTION ${fn}()`);
+    await pool.dbPool.query(`DROP TRIGGER ${trigger}`);
   }
 });
 
-it('never changes hotel room/reservation data or sequences', async () => {
+it('never changes hotel room/reservation data', async () => {
   assert.deepEqual(await hotelRows(), hotelBefore);
   assert.ok(noRateVariantId);
   assert.ok(createdReferences.length >= 4);

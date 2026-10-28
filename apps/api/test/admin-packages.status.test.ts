@@ -86,21 +86,26 @@ function storedPackage(options: { isActive?: boolean; seedManaged?: boolean; exi
     async query(text: string, values?: unknown[]) {
       state.calls.push({ text, values });
 
-      if (!text.includes('UPDATE packages')) {
-        return { rows: [] } as never;
+      if (text.includes('UPDATE packages')) {
+        if (!state.exists || values?.[0] !== SLUG) {
+          return { rows: [], rowCount: 0 } as never;
+        }
+
+        const requested = values[1] as boolean;
+
+        if (state.isActive !== requested) {
+          state.isActive = requested;
+          state.updatedAt = '2026-06-01T12:00:00.000Z';
+        }
+        state.writes += 1;
+
+        return { rows: [], rowCount: 1 } as never;
       }
 
+      // The detail read that follows the write.
       if (!state.exists || values?.[0] !== SLUG) {
         return { rows: [] } as never;
       }
-
-      const requested = values[1] as boolean;
-
-      if (state.isActive !== requested) {
-        state.isActive = requested;
-        state.updatedAt = '2026-06-01T12:00:00.000Z';
-      }
-      state.writes += 1;
 
       return {
         rows: [detailRow(state.isActive, state.seedManaged, state.updatedAt)],
@@ -259,7 +264,10 @@ describe('admin package status: write scope', () => {
     const stored = storedPackage({ isActive: true });
     await setStatus(SLUG, { isActive: false });
 
-    assert.equal(stored.calls.length, 1, 'one atomic statement, no read-then-write');
+    // MySQL has no UPDATE ... RETURNING: one UPDATE, then the detail read.
+    assert.equal(stored.calls.length, 2, 'one UPDATE, then the read that answers');
+    assert.match(stored.calls[0]!.text, /^UPDATE packages/);
+    assert.match(stored.calls[1]!.text, /^SELECT/);
     const sql = stored.calls[0]!.text;
 
     const setClause = sql.split('SET')[1]!.split('WHERE')[0]!;
@@ -294,14 +302,24 @@ describe('admin package status: write scope', () => {
     }
   });
 
-  it('returns the updated row from the same statement that wrote it', async () => {
+  it('answers with a read of the row it just wrote', async () => {
     const stored = storedPackage({ isActive: true });
     await setStatus(SLUG, { isActive: false });
 
-    const sql = stored.calls[0]!.text;
-    assert.match(sql, /WITH updated AS \(/);
-    assert.match(sql, /RETURNING \*/);
-    assert.match(sql, /FROM updated p/);
+    const sql = stored.calls[1]!.text;
+    assert.match(sql, /FROM packages p/);
+    assert.match(sql, /WHERE p\.slug = \$1/);
+    assert.deepEqual(stored.calls[1]!.values, [SLUG]);
+  });
+
+  it('compares against the old value, so updated_at is assigned before is_active', async () => {
+    // MySQL evaluates SET assignments left to right; a later one sees the new
+    // value of an earlier one.
+    const stored = storedPackage({ isActive: true });
+    await setStatus(SLUG, { isActive: false });
+
+    const setClause = stored.calls[0]!.text.split('SET')[1]!.split('WHERE')[0]!;
+    assert.ok(setClause.indexOf('updated_at') < setClause.indexOf('is_active = $2'));
   });
 });
 

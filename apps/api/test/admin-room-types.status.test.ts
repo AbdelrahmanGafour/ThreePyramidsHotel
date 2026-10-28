@@ -206,7 +206,12 @@ const sequence = () =>
       return 'COUNT';
     }
 
-    return text.startsWith('SELECT') ? 'SELECT' : 'UPDATE';
+    // The non-locking SELECT is the read-back that replaces RETURNING.
+    if (text.startsWith('SELECT')) {
+      return text.includes('FOR UPDATE') ? 'SELECT' : 'READBACK';
+    }
+
+    return text.startsWith('INSERT') ? 'INSERT' : 'UPDATE';
   });
 
 /**
@@ -220,6 +225,8 @@ const statementStartingWith = (prefix: string) =>
 /** The active-room count, which is the only statement that *starts* with it. */
 const activeRoomCount = () => statementStartingWith('SELECT COUNT');
 
+const readBackRows = (): unknown[] => [];
+
 function respond(text: string): Promise<{ rows: unknown[] }> {
   const trimmed = text.trim();
 
@@ -227,10 +234,14 @@ function respond(text: string): Promise<{ rows: unknown[] }> {
     return Promise.resolve({ rows: countRows });
   }
   if (trimmed.startsWith('SELECT')) {
-    return Promise.resolve({ rows: lockedRows });
+    // The locking read returns the locked row; the plain read-back that
+    // replaces RETURNING returns the written row.
+    return Promise.resolve({
+      rows: trimmed.includes('FOR UPDATE') ? lockedRows : [...updatedRows, ...readBackRows()],
+    });
   }
   if (trimmed.startsWith('UPDATE')) {
-    return Promise.resolve({ rows: updatedRows });
+    return Promise.resolve({ rows: [], rowCount: 1 });
   }
 
   return Promise.resolve({ rows: [] });
@@ -240,7 +251,7 @@ before(async () => {
   // The service's module graph reaches db/pool, which requires DATABASE_URL at
   // import time. Nothing here connects: the pool is replaced before any call,
   // and a placeholder is enough to load the module.
-  process.env.DATABASE_URL ??= 'postgresql://unused:unused@127.0.0.1:1/unused';
+  process.env.DATABASE_URL ??= 'mysql://unused:unused@127.0.0.1:1/unused';
   ({ dbPool } = await import('../src/db/pool.js'));
   ({ changeAdminRoomTypeStatus } = await import(
     '../src/modules/admin-room-types/admin-room-types.service.js'
@@ -290,7 +301,7 @@ describe('changeAdminRoomTypeStatus: publishing', () => {
     assert.equal(result.outcome, 'updated');
     assert.equal(result.outcome === 'updated' && result.roomType.isActive, true);
     assert.equal(result.outcome === 'updated' && result.roomType.slug, SLUG);
-    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'COUNT', 'UPDATE', 'COMMIT']);
+    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'COUNT', 'UPDATE', 'READBACK', 'COMMIT']);
   });
 
   it('refuses a draft with no physical rooms at all', async () => {
@@ -365,7 +376,7 @@ describe('changeAdminRoomTypeStatus: archiving', () => {
     await changeAdminRoomTypeStatus(SLUG, false);
 
     assert.equal(activeRoomCount(), undefined);
-    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'COMMIT']);
+    assert.deepEqual(sequence(), ['BEGIN', 'SELECT', 'UPDATE', 'READBACK', 'COMMIT']);
   });
 
   it('archives a room type with no active rooms left', async () => {
@@ -400,7 +411,7 @@ describe('changeAdminRoomTypeStatus: archiving', () => {
     const update = statementStartingWith('UPDATE');
     assert.ok(update);
     assert.match(update.text, /UPDATE room_types rt/);
-    assert.match(update.text, /SET is_active = \$2/);
+    assert.match(update.text, /is_active = \$2/);
     assert.ok(!/SET[\s\S]*capacity =/.test(update.text), 'capacity is not this endpoint');
     assert.ok(!/UPDATE rooms/.test(update.text), 'physical rooms are not this endpoint');
   });
@@ -439,9 +450,11 @@ describe('changeAdminRoomTypeStatus: idempotence', () => {
     const update = statementStartingWith('UPDATE');
     assert.ok(update);
     assert.match(update.text, /updated_at = CASE/);
-    assert.match(update.text, /WHEN rt\.is_active IS DISTINCT FROM \$2 THEN now\(\)/);
+    assert.match(update.text, /WHEN NOT \(rt\.is_active <=> \$2\) THEN UTC_TIMESTAMP\(3\)/);
     assert.match(update.text, /ELSE rt\.updated_at/);
-    assert.ok(!/SET[\s\S]*updated_at = now\(\)/.test(update.text), 'no unconditional now()');
+    assert.ok(!/SET[\s\S]*updated_at = UTC_TIMESTAMP\(3\)/.test(update.text), 'no unconditional timestamp');
+    // MySQL evaluates SET left to right: the guard must read the old value.
+    assert.ok(update.text.indexOf('updated_at = CASE') < update.text.indexOf('is_active = $2'));
   });
 
   it('does not re-run the publish guard for an already-published room type', async () => {

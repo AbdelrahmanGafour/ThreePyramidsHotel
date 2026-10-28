@@ -76,7 +76,7 @@ export type AdminReservationStatusChangeResult =
  * two administrators confirming at once cannot both succeed — the second sees
  * `confirmed` and is refused.
  *
- * Which of them wins is PostgreSQL's to decide by lock order, and this code
+ * Which of them wins is MySQL's to decide by lock order, and this code
  * does not try to influence it. A confirm and a cancel racing may therefore
  * both succeed, in that order: pending -> confirmed -> cancelled is a perfectly
  * legal history.
@@ -87,7 +87,7 @@ export type AdminReservationStatusChangeResult =
  *
  * Only the status moves. The allocated room, the stay and the price are never
  * touched, and no room is re-allocated — a cancellation frees inventory purely
- * by changing what the exclusion constraint considers active.
+ * by changing what the overlap check considers active.
  */
 export async function changeAdminReservationStatus(
   bookingReference: string,

@@ -1,0 +1,1 @@
+ALTER TABLE packages ADD COLUMN seed_managed TINYINT(1) NOT NULL DEFAULT 1

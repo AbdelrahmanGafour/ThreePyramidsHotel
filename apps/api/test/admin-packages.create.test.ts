@@ -89,13 +89,22 @@ type Recorded = { text: string; values: unknown[] | undefined };
 
 function fakeQueryable(answer: (text: string, values: unknown[] | undefined) => unknown): Recorded[] {
   const calls: Recorded[] = [];
+  let pending: unknown = [];
 
   __setQueryableForTests({
     async query(text: string, values?: unknown[]) {
       calls.push({ text, values });
-      const rows = answer(text, values);
-      if (rows instanceof Error) throw rows;
-      return { rows } as never;
+
+      // MySQL has no INSERT ... RETURNING: the insert answers with the new
+      // id, and the row is read back by that id.
+      if (text.includes('INSERT INTO packages')) {
+        const answered = answer(text, values);
+        if (answered instanceof Error) throw answered;
+        pending = answered;
+        return { rows: [], rowCount: 1, insertId: '77' } as never;
+      }
+
+      return { rows: pending } as never;
     },
   } as never);
 
@@ -109,7 +118,7 @@ function acceptingQueryable(): Recorded[] {
       code: values?.[0],
       slug: values?.[1],
       title: values?.[2],
-      operating_days: values?.[7],
+      operating_days: typeof values?.[7] === 'string' ? JSON.parse(values[7] as string) : values?.[7],
       requires_price_confirmation: values?.[8],
       sort_order: values?.[9],
     })],
@@ -237,21 +246,22 @@ describe('admin package create: creating', () => {
     const calls = acceptingQueryable();
     await create(body());
 
-    const writeHalf = calls[0]!.text.split('RETURNING')[0]!;
+    const writeHalf = calls[0]!.text;
     for (const table of ['package_variants', 'package_rate_tiers',
       'package_itinerary_sections', 'package_content_items']) {
       assert.ok(!writeHalf.includes(table), `${table} must not be written by create`);
     }
   });
 
-  it('costs one statement and returns the created row from it', async () => {
+  it('inserts, then reads the created row back by its generated id', async () => {
     const calls = acceptingQueryable();
     await create(body());
 
-    assert.equal(calls.length, 1, 'one atomic statement');
-    assert.match(calls[0]!.text, /WITH inserted AS \(/);
-    assert.match(calls[0]!.text, /RETURNING \*/);
-    assert.match(calls[0]!.text, /FROM inserted p/);
+    assert.equal(calls.length, 2, 'the INSERT, then the read that answers');
+    assert.match(calls[0]!.text, /^\s*INSERT INTO packages/);
+    assert.doesNotMatch(calls[0]!.text, /RETURNING/);
+    assert.match(calls[1]!.text, /FROM packages p WHERE p\.id = \$1/);
+    assert.deepEqual(calls[1]!.values, ['77']);
   });
 
   it('accepts a journey with no optional wording and no operating days', async () => {

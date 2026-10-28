@@ -18,7 +18,7 @@ import {
  * something: length, characters that break URLs, and characters that are not
  * text at all.
  *
- * Uniqueness is not checked here and cannot be. PostgreSQL owns it, through
+ * Uniqueness is not checked here and cannot be. MySQL owns it, through
  * `rooms_room_number_key` for the exact value and
  * `rooms_room_number_lower_key` for the case-insensitive one.
  */

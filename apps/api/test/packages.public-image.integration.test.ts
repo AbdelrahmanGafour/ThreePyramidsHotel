@@ -4,7 +4,6 @@ import path from 'node:path';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 import sharp from 'sharp';
 
 // A journey's image as a guest sees it, over real HTTP against real
@@ -21,12 +20,12 @@ import sharp from 'sharp';
 // **Nothing here contacts R2**, and no R2 variable is read: `createApp`
 // takes both providers, which is what that seam exists for.
 
-// Uses the dedicated migrated disposable cluster, never hotel development.
+// Uses the dedicated migrated disposable MySQL database, never hotel development.
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 
 type Pool = typeof import('../src/db/pool.js');
@@ -62,14 +61,13 @@ async function createJourney(options: { isActive?: boolean } = {}): Promise<{
   sequence += 1;
   const slug = `${slugPrefix}-${sequence}`;
 
-  const { rows } = await dbPool.query<{ id: string }>(
+  const { insertId: rowsInsertId } = await dbPool.query(
     `INSERT INTO packages (code, slug, title, is_active, sort_order, seed_managed)
-     VALUES ($1, $2, $3, $4, $5, true)
-     RETURNING id`,
+     VALUES ($1, $2, $3, $4, $5, true)`,
     [`${codePrefix}-${sequence}`, slug, `Public image fixture ${sequence}`, options.isActive ?? true, sequence],
   );
 
-  return { packageId: rows[0]!.id, slug };
+  return { packageId: rowsInsertId!, slug };
 }
 
 type PublicImage = { url: string; altText: string | null; width: number; height: number } | null;
@@ -91,14 +89,6 @@ async function detail(slug: string): Promise<{ status: number; body: unknown }> 
 }
 
 before(async () => {
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
-
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
   ({ uploadPackageImage, replacePackageImage, deletePackageImage, updatePackageImageAltText } =
     await import('../src/modules/admin-package-media/admin-package-media.service.js'));
@@ -138,7 +128,7 @@ after(async () => {
   );
 
   if (assetRows.length > 0) {
-    await dbPool.query('DELETE FROM media_assets WHERE id = ANY($1::bigint[])', [
+    await dbPool.query('DELETE FROM media_assets WHERE id IN (?)', [
       assetRows.map((row) => row.media_asset_id),
     ]);
   }
@@ -146,10 +136,10 @@ after(async () => {
   await dbPool.query('DELETE FROM packages WHERE code LIKE $1', [`${codePrefix}%`]);
 
   const { rows } = await dbPool.query<{ n: number }>(
-    'SELECT count(*)::int AS n FROM packages WHERE code LIKE $1',
+    'SELECT COUNT(*) AS n FROM packages WHERE code LIKE $1',
     [`${codePrefix}%`],
   );
-  assert.equal(rows[0]!.n, 0, 'every fixture this run created was removed');
+  assert.equal(Number(rows[0]!.n), 0, 'every fixture this run created was removed');
 
   await new Promise<void>((resolve) => {
     if (!server) {

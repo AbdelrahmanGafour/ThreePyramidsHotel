@@ -68,7 +68,7 @@ export async function lockPackageForMediaChange(
   slug: string,
 ): Promise<LockedPackage | null> {
   const { rows } = await client.query<{ id: string }>(
-    'SELECT id FROM packages WHERE slug = $1 FOR UPDATE',
+    'SELECT id FROM packages WHERE slug = BINARY $1 FOR UPDATE',
     [slug],
   );
 
@@ -167,7 +167,7 @@ export async function repointPackageMedia(
   const { rowCount } = await client.query(
     `UPDATE package_media
         SET media_asset_id = $2,
-            updated_at = now()
+            updated_at = UTC_TIMESTAMP(3)
       WHERE package_id = $1`,
     [input.packageId, input.mediaAssetId],
   );
@@ -194,7 +194,7 @@ export async function updatePackageMediaAltText(
   const { rowCount } = await client.query(
     `UPDATE package_media
         SET alt_text = $2,
-            updated_at = now()
+            updated_at = UTC_TIMESTAMP(3)
       WHERE package_id = $1`,
     [input.packageId, input.altText],
   );
@@ -207,7 +207,7 @@ export async function updatePackageMediaAltText(
  *
  * The asset row it pointed at is deleted separately, by the shared media
  * repository, and only after this — `package_media_media_asset_id_fkey` is
- * RESTRICT, so the other order is refused by PostgreSQL rather than by
+ * RESTRICT, so the other order is refused by MySQL rather than by
  * discipline.
  */
 export async function deletePackageMedia(client: PoolClient, packageId: string): Promise<boolean> {

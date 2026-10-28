@@ -3,8 +3,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
+import { toNumbers } from './support/core-sql';
 
-// Runs the real login endpoint over HTTP against a real PostgreSQL database.
+// Runs the real login endpoint over HTTP against a real MySQL database.
 // It creates its own admin accounts with unique emails, never touching a
 // developer's own account, and removes them afterwards.
 if (!process.env.DATABASE_URL) {
@@ -73,14 +74,14 @@ async function postLogin(body: unknown): Promise<{ status: number; json: any; se
 
 const sessionCountFor = async (email: string): Promise<number> => {
   const { rows } = await dbPool.query<{ count: number }>(
-    `SELECT COUNT(*)::int AS count
+    `SELECT COUNT(*) AS count
        FROM admin_sessions s
        JOIN admin_users u ON u.id = s.admin_user_id
       WHERE u.email = $1`,
     [email],
   );
 
-  return rows[0]?.count ?? 0;
+  return Number(rows[0]?.count ?? 0);
 };
 
 before(async () => {
@@ -133,20 +134,20 @@ after(async () => {
     // is obvious and the verification below is meaningful.
     await dbPool.query(
       `DELETE FROM admin_sessions
-        WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email = ANY($1::text[]))`,
+        WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email IN ($1))`,
       [fixtureEmails],
     );
-    await dbPool.query('DELETE FROM admin_users WHERE email = ANY($1::text[])', [fixtureEmails]);
+    await dbPool.query('DELETE FROM admin_users WHERE email IN ($1)', [fixtureEmails]);
 
     const { rows } = await dbPool.query<{ admins: number; sessions: number }>(
-      `SELECT (SELECT COUNT(*) FROM admin_users WHERE email = ANY($1::text[]))::int AS admins,
+      `SELECT (SELECT COUNT(*) FROM admin_users WHERE email IN ($1)) AS admins,
               (SELECT COUNT(*) FROM admin_sessions s
                  JOIN admin_users u ON u.id = s.admin_user_id
-                WHERE u.email = ANY($1::text[]))::int AS sessions`,
+                WHERE u.email IN ($1)) AS sessions`,
       [fixtureEmails],
     );
 
-    assert.deepEqual(rows[0], { admins: 0, sessions: 0 }, 'fixture admins were not fully removed');
+    assert.deepEqual(rows[0] && toNumbers(rows[0]), { admins: 0, sessions: 0 }, 'fixture admins were not fully removed');
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -301,7 +302,7 @@ describe('POST /api/v1/admin/auth/login', () => {
 
   it('creates no session when the account is deactivated during verification', async () => {
     const response = await loginWhileAdminChanges(
-      'UPDATE admin_users SET is_active = false, updated_at = now() WHERE email = $1',
+      'UPDATE admin_users SET is_active = false, updated_at = UTC_TIMESTAMP(3) WHERE email = $1',
       [activeAdmin.email],
     );
 
@@ -319,7 +320,7 @@ describe('POST /api/v1/admin/auth/login', () => {
     const replacementHash = await hashPassword(`replacement-password-${runId}`);
 
     const response = await loginWhileAdminChanges(
-      'UPDATE admin_users SET password_hash = $2, updated_at = now() WHERE email = $1',
+      'UPDATE admin_users SET password_hash = $2, updated_at = UTC_TIMESTAMP(3) WHERE email = $1',
       [activeAdmin.email, replacementHash],
     );
 

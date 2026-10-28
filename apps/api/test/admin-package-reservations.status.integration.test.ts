@@ -3,13 +3,14 @@ import type { PoolClient } from '../src/db/pool';
 import { randomUUID } from 'node:crypto';
 import { after, before, beforeEach, describe, it } from 'node:test';
 
-// The admin package reservation status transition against real PostgreSQL.
+// The admin package reservation status transition against real MySQL.
 //
-// The unit suite models the conditional UPDATE's concurrency guarantee; this
-// one proves it. The guarantee is PostgreSQL's own: under READ COMMITTED, a
-// writer that blocks on a row lock re-evaluates its WHERE clause against the
-// version the lock holder committed (EvalPlanQual). Nothing but the database
-// can demonstrate that, so it is demonstrated here rather than asserted.
+// The unit suite models the row-lock concurrency guarantee; this one proves
+// it. The status change locks the reservation with SELECT ... FOR UPDATE, so a
+// competing writer blocks until the holder commits and then reads the
+// committed status, which the transition rule refuses. Nothing but the
+// database can demonstrate that, so it is demonstrated here rather than
+// asserted.
 //
 // Nothing is mocked. The repository is called exactly as the controller calls
 // it, through the real pool. Every row this suite writes carries an
@@ -122,32 +123,30 @@ before(async () => {
     '../src/modules/package-reservations/booking-reference.js'
   ));
 
-  const { rows: packageRows } = await dbPool.query<{ id: string }>(
+  const { insertId: packageRowsInsertId } = await dbPool.query(
     `INSERT INTO packages (code, slug, title, is_active, requires_price_confirmation, sort_order)
-     VALUES ($1, $2, 'Fixture package', false, false, 0)
-     RETURNING id`,
+     VALUES ($1, $2, 'Fixture package', false, false, 0)`,
     [`${codePrefix}-A`, `${slugPrefix}-a`],
   );
-  packageId = packageRows[0]!.id;
+  packageId = packageRowsInsertId!;
 
-  const { rows: variantRows } = await dbPool.query<{ id: string }>(
-    `INSERT INTO package_variants (package_id, key, label, is_default, sort_order)
-     VALUES ($1, 'standard', 'Fixture variant', true, 0)
-     RETURNING id`,
+  const { insertId: variantRowsInsertId } = await dbPool.query(
+    `INSERT INTO package_variants (package_id, \`key\`, label, is_default, sort_order)
+     VALUES ($1, 'standard', 'Fixture variant', true, 0)`,
     [packageId],
   );
-  variantId = variantRows[0]!.id;
+  variantId = variantRowsInsertId!;
 });
 
 after(async () => {
   // Every confirmation in this suite also queues a guest notification. Those
   // rows hold no foreign key, so nothing obstructs the deletes below and
   // nothing would remove them either.
-  await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [
+  await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference IN (?)', [
     createdReferences,
   ]);
   // Reservations first: they hold the RESTRICT foreign key to the variant.
-  await dbPool.query('DELETE FROM package_reservations WHERE booking_reference = ANY($1::text[])', [
+  await dbPool.query('DELETE FROM package_reservations WHERE booking_reference IN (?)', [
     createdReferences,
   ]);
   await dbPool.query('DELETE FROM package_variants WHERE package_id = $1', [packageId]);
@@ -162,7 +161,7 @@ beforeEach(async () => {
   bookingReference = await createPendingReservation();
 });
 
-describe('package reservation status transitions against PostgreSQL', () => {
+describe('package reservation status transitions against MySQL', () => {
   it('lets exactly one of two concurrent transitions win', async () => {
     const before = snapshotOf(await readRow(bookingReference));
 
@@ -203,7 +202,7 @@ describe('package reservation status transitions against PostgreSQL', () => {
       await holder.query('BEGIN');
       const held = await holder.query(
         `UPDATE package_reservations
-            SET status = 'cancelled', updated_at = now()
+            SET status = 'cancelled', updated_at = UTC_TIMESTAMP(3)
           WHERE booking_reference = $1
             AND status = 'pending'`,
         [bookingReference],
@@ -220,7 +219,7 @@ describe('package reservation status transitions against PostgreSQL', () => {
 
       // Give it a real chance to finish if it were not blocked. Proving it
       // waited needs an observation while the lock is still held.
-      await dbPool.query("SELECT pg_sleep(0.25)");
+      await dbPool.query("SELECT SLEEP(0.25)");
       assert.equal(settled, false, 'the competing transition must be waiting on the row lock');
 
       await holder.query('COMMIT');
@@ -361,7 +360,7 @@ describe('package reservation status transitions against PostgreSQL', () => {
       assert.equal(event.template_key, 'package_confirmed_guest.v1');
       assert.equal(event.attempts, 0, 'queued, not attempted');
 
-      // The payload the CTE built, as jsonb, matching the builder contract.
+      // The payload the builder produced, as JSON, matching the builder contract.
       assert.deepEqual(event.payload, {
         bookingReference,
         guestFirstName: 'Amira',
@@ -405,13 +404,13 @@ describe('package reservation status transitions against PostgreSQL', () => {
 
     it('leaves the reservation pending when the event conflicts', async () => {
       // The strict rule, end to end. An event for this booking already exists,
-      // so the CTE trips `notification_outbox_event_booking_key`. Because it
-      // is one statement, that aborts the UPDATE with it.
+      // so the outbox insert trips `notification_outbox_event_booking_key`.
+      // Because it shares the transaction, that rolls the UPDATE back with it.
       await dbPool.query(
         `INSERT INTO notification_outbox
            (event_type, booking_reference, recipient_kind, recipient_email, template_key, payload)
          VALUES ('package_reservation_confirmed', $1, 'guest', 'squatter@example.test',
-                 'package_confirmed_guest.v1', '{}'::jsonb)`,
+                 'package_confirmed_guest.v1', '{}')`,
         [bookingReference],
       );
 
@@ -427,7 +426,7 @@ describe('package reservation status transitions against PostgreSQL', () => {
         'notification_outbox_event_booking_key',
       );
 
-      // The whole statement rolled back: the status never moved.
+      // The whole transaction rolled back: the status never moved.
       assert.equal(await statusOf(bookingReference), 'pending', 'the UPDATE went down with the INSERT');
 
       // And no second event was created beside the one already there.

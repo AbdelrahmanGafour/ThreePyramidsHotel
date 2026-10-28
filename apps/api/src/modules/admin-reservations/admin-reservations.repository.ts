@@ -9,11 +9,11 @@ import type {
 } from './admin-reservations.types';
 
 /**
- * One row of the page query, named exactly as PostgreSQL returns it.
+ * One row of the page query, named exactly as the database returns it.
  *
- * `check_in`, `check_out` and `total_amount` are cast to text in SQL, so they
- * arrive as strings whatever type parsers are configured. `created_at` is left
- * as a timestamptz and arrives as a `Date`: it is an absolute instant, not a
+ * `check_in` and `check_out` are DATE columns, which the pool adapter returns
+ * as `YYYY-MM-DD` strings; `total_amount` is DECIMAL and arrives as a string.
+ * `created_at` is a UTC DATETIME and arrives as a `Date`: it is an absolute instant, not a
  * calendar day, and has no timezone ambiguity to preserve.
  */
 type AdminReservationListRow = {
@@ -32,7 +32,7 @@ type AdminReservationListRow = {
 };
 
 type CountRow = {
-  /** COUNT(*) is a bigint; ::text keeps it exact on the way out of PostgreSQL. */
+  /** COUNT(*) is a bigint; the adapter returns it as an exact string. */
   total: string;
 };
 
@@ -75,7 +75,7 @@ function toCurrency(value: string): 'EGP' {
  * Maps one row onto the locked list contract.
  *
  * The guest's two name columns become one `guestName`, so no caller has to
- * assemble a name. `totalAmount` is passed through exactly as PostgreSQL
+ * assemble a name. `totalAmount` is passed through exactly as MySQL
  * returned it: numeric money is never converted to a JavaScript number, which
  * cannot represent values like 999.99 exactly.
  */
@@ -106,7 +106,7 @@ export function toAdminReservationListItem(row: AdminReservationListRow): AdminR
 /**
  * Turns the counted bigint into the plain number the pagination contract uses.
  *
- * Accepts only a digits-only string — the form `COUNT(*)::text` always takes —
+ * Accepts only a digits-only string — the form the adapter returns for COUNT(*) —
  * and refuses anything that would not survive the conversion exactly, rather
  * than reporting a total that is quietly wrong.
  */
@@ -148,29 +148,20 @@ export async function findAdminReservationPage({
               r.guest_email,
               rt.slug AS room_type_slug,
               rt.name AS room_type_name,
-              -- ::text keeps calendar days exactly as stored. Read as a Date
-              -- they would shift by a day in a negative-offset timezone.
-              r.check_in::text AS check_in,
-              r.check_out::text AS check_out,
+              r.check_in,
+              r.check_out,
               r.status,
-              -- Exact two-decimal money as a string, never a float.
-              r.total_amount::text AS total_amount,
+              r.total_amount,
               r.currency,
               r.created_at
          FROM reservations r
-         -- Inner join is safe: room_type_id is NOT NULL and foreign-key backed,
-         -- so this can never drop a reservation from the list.
          JOIN room_types rt ON rt.id = r.room_type_id
-        -- The one fixed order, matched by reservations_created_at_id_idx. id
-        -- breaks created_at ties so paging never repeats or skips a row.
         ORDER BY r.created_at DESC, r.id DESC
-        -- ::bigint states the type LIMIT/OFFSET expect, rather than leaving it
-        -- to inference on a bare parameter.
-        LIMIT $1::bigint
-       OFFSET $2::bigint`,
+        LIMIT $1
+       OFFSET $2`,
       [limit, offset],
     ),
-    dbPool.query<CountRow>(`SELECT COUNT(*)::text AS total FROM reservations`),
+    dbPool.query<CountRow>(`SELECT COUNT(*) AS total FROM reservations`),
   ]);
 
   return {
@@ -183,7 +174,7 @@ export async function findAdminReservationPage({
  * One row of the detail query. Wider than the list row, and read only for a
  * single reservation an administrator asked for by reference.
  *
- * `nights` comes from PostgreSQL: subtracting two DATEs yields an integer
+ * `nights` comes from the database: DATEDIFF of two DATEs yields an integer
  * number of days, which for a half-open stay is exactly the nights slept.
  */
 type AdminReservationDetailRow = {
@@ -241,6 +232,15 @@ function requireCount(column: string, value: unknown, minimum: number): number {
   return value;
 }
 
+/**
+ * DATEDIFF comes back from the adapter as a digits-only string (BIGINT), while
+ * INT columns such as `adults` come back as numbers. Only the computed
+ * `nights` is normalised; every stored INT column keeps the strict guard.
+ */
+function nightsFromDatediff(value: unknown): unknown {
+  return typeof value === 'string' && /^-?\d+$/.test(value) ? Number(value) : value;
+}
+
 function requireInstant(column: string, value: unknown): Date {
   if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
     throw new Error(`Unexpected reservation ${column} from the database: expected a timestamp`);
@@ -254,7 +254,7 @@ function requireInstant(column: string, value: unknown): Date {
  *
  * Every field is read and checked individually — nothing is spread — so the
  * shape the API promises is built here rather than inherited from whatever the
- * query happened to select. Money stays the exact string PostgreSQL returned:
+ * query happened to select. Money stays the exact string the database returned:
  * `nightly_rate_snapshot` is the rate accepted at booking time, and neither it
  * nor the total is recomputed from the room type's price today.
  */
@@ -275,7 +275,7 @@ export function toAdminReservationDetail(row: AdminReservationDetailRow): AdminR
       // A stay is at least one night and a party has at least one adult; the
       // schema's CHECK constraints say so, and a row claiming otherwise is a
       // data fault rather than something to render.
-      nights: requireCount('nights', row.nights, 1),
+      nights: requireCount('nights', nightsFromDatediff(row.nights), 1),
       adults: requireCount('adults', row.adults, 1),
       children: requireCount('children', row.children, 0),
     },
@@ -322,27 +322,20 @@ export async function findAdminReservationByReference(
             r.guest_email,
             r.guest_phone,
             r.guest_country,
-            -- ::text keeps calendar days exactly as stored. Read as a Date
-            -- they would shift by a day in a negative-offset timezone.
-            r.check_in::text AS check_in,
-            r.check_out::text AS check_out,
-            -- DATE minus DATE is an integer count of days, and the stay is
-            -- half-open, so that count is exactly the nights slept.
-            (r.check_out - r.check_in) AS nights,
+            r.check_in,
+            r.check_out,
+            DATEDIFF(r.check_out, r.check_in) AS nights,
             r.adults,
             r.children,
             rt.slug AS room_type_slug,
             rt.name AS room_type_name,
             rm.room_number,
-            -- The rate accepted at booking time, never the room type's today.
-            r.nightly_rate_snapshot::text AS nightly_rate,
-            r.total_amount::text AS total_amount,
+            r.nightly_rate_snapshot AS nightly_rate,
+            r.total_amount,
             r.currency,
             r.special_requests,
             r.created_at
        FROM reservations r
-       -- Both joins are safe: room_type_id and room_id are NOT NULL and
-       -- foreign-key backed, so neither can drop the reservation.
        JOIN room_types rt ON rt.id = r.room_type_id
        JOIN rooms rm ON rm.id = r.room_id
       WHERE r.booking_reference = $1`,
@@ -455,22 +448,15 @@ export async function lockReservationForStatusChange(
             r.guest_last_name,
             r.guest_email,
             rt.name AS room_type_name,
-            -- ::text keeps calendar days exactly as stored. Read as a Date
-            -- they would shift by a day in a negative-offset timezone.
-            r.check_in::text AS check_in,
-            r.check_out::text AS check_out,
-            -- DATE minus DATE is an integer count of days, and the stay is
-            -- half-open, so that count is exactly the nights slept.
-            (r.check_out - r.check_in) AS nights,
+            r.check_in,
+            r.check_out,
+            DATEDIFF(r.check_out, r.check_in) AS nights,
             r.adults,
             r.children,
-            -- The rate accepted at booking time, never the room type's today.
-            r.nightly_rate_snapshot::text AS nightly_rate,
-            r.total_amount::text AS total_amount,
+            r.nightly_rate_snapshot AS nightly_rate,
+            r.total_amount,
             r.special_requests
        FROM reservations r
-       -- Safe: room_type_id is NOT NULL and foreign-key backed, so the join
-       -- cannot drop the reservation being locked.
        JOIN room_types rt ON rt.id = r.room_type_id
       WHERE r.booking_reference = $1
         FOR UPDATE OF r`,
@@ -492,7 +478,7 @@ export async function lockReservationForStatusChange(
     roomTypeName: requireText('room type name', row.room_type_name),
     checkIn: requireText('check_in', row.check_in),
     checkOut: requireText('check_out', row.check_out),
-    nights: requireCount('nights', row.nights, 1),
+    nights: requireCount('nights', nightsFromDatediff(row.nights), 1),
     adults: requireCount('adults', row.adults, 1),
     children: requireCount('children', row.children, 0),
     nightlyRate: requireText('nightly_rate_snapshot', row.nightly_rate),
@@ -518,13 +504,21 @@ export async function updateReservationStatus(
   bookingReference: string,
   status: AdminReservationStatusTarget,
 ): Promise<AdminReservationStatusChange> {
-  const { rows } = await client.query<StatusChangeRow>(
+  await client.query(
     `UPDATE reservations
         SET status = $2,
-            updated_at = now()
-      WHERE booking_reference = $1
-      RETURNING booking_reference, status, updated_at`,
+            updated_at = UTC_TIMESTAMP(3)
+      WHERE booking_reference = $1`,
     [bookingReference, status],
+  );
+
+  // No RETURNING in MySQL: the caller holds this row's lock, so re-reading it
+  // inside the same transaction returns exactly what was just written.
+  const { rows } = await client.query<StatusChangeRow>(
+    `SELECT booking_reference, status, updated_at
+       FROM reservations
+      WHERE booking_reference = $1`,
+    [bookingReference],
   );
 
   const row = rows[0];

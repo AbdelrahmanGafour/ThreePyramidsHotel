@@ -20,9 +20,10 @@ import type { AdminPhysicalRoom, AdminPhysicalRoomUpdate } from './admin-rooms.t
  * Nothing is deleted. `room_types` is read to resolve and to lock, never
  * written.
  *
- * Room numbers are matched exactly and case-sensitively — no LOWER, no ILIKE.
- * Case-insensitive *uniqueness* is a different question, and PostgreSQL owns
- * it through `rooms_room_number_lower_key`; identity is the exact string.
+ * Room numbers are matched exactly and case-sensitively — no LOWER, no LIKE.
+ * The column's collation is case-insensitive, so exact lookups add a BINARY
+ * comparison. Case-insensitive *uniqueness* is a different question, and
+ * MySQL owns it through the unique indexes; identity is the exact string.
  *
  * ---------------------------------------------------------------------------
  * CANONICAL ADMIN INVENTORY LOCK ORDER
@@ -73,12 +74,12 @@ type ResolvedRoomRow = {
 
 /**
  * Digits only, at least one, no leading zero: the form a `bigserial` takes on
- * its way out of the pg driver, which returns `int8` as a string rather than
- * risk a value past `Number.MAX_SAFE_INTEGER`.
+ * its way out of the mysql2 adapter, which returns BIGINT as a string rather
+ * than risk a value past `Number.MAX_SAFE_INTEGER`.
  */
 const INTERNAL_ID_PATTERN = /^[1-9]\d*$/;
 
-/** Digits only, as `COUNT(*)::text` always produces. */
+/** Digits only, as the adapter returns for COUNT(*). */
 const WHOLE_NUMBER_PATTERN = /^\d+$/;
 
 /**
@@ -142,8 +143,7 @@ function requireInternalId(column: string, value: unknown): string {
 /**
  * Turns a counted bigint into a plain number.
  *
- * Counted as text rather than `::int` so a count past `int4` is refused here
- * instead of raising a cast error inside PostgreSQL.
+ * Counted as a string so a count past exact integer range is refused here.
  */
 export function parseRoomReservationCount(value: unknown): number {
   if (typeof value !== 'string' || !WHOLE_NUMBER_PATTERN.test(value)) {
@@ -235,8 +235,6 @@ export async function listAdminPhysicalRoomsForType(
   const { rows } = await dbPool.query<MaybeEmptyRoomRow>(
     `SELECT ${ROOM_COLUMNS}
        FROM room_types rt
-       -- LEFT JOIN so a room type with no rooms still returns one row, which
-       -- is what separates "no rooms yet" from "no such room type".
        LEFT JOIN rooms r ON r.room_type_id = rt.id
       WHERE rt.slug = $1
       ORDER BY r.room_number ASC, r.id ASC`,
@@ -269,7 +267,7 @@ export async function listAdminPhysicalRoomsForType(
  * guarded operation.
  *
  * The room number is stored exactly as validated — trimmed, case preserved.
- * Uniqueness is PostgreSQL's: `rooms_room_number_key` for the exact value and
+ * Uniqueness is the database's: `rooms_room_number_key` for the exact value and
  * `rooms_room_number_lower_key` for the case-insensitive one. Neither is
  * pre-checked here, because a SELECT beforehand would only widen the window in
  * which the answer changes; the unique violation propagates untouched so the
@@ -279,13 +277,24 @@ export async function insertAdminPhysicalRoom(
   slug: string,
   roomNumber: string,
 ): Promise<AdminPhysicalRoom | null> {
-  const { rows } = await dbPool.query<AdminPhysicalRoomRow>(
-    `INSERT INTO rooms AS r (room_type_id, room_number)
+  const inserted = await dbPool.query(
+    `INSERT INTO rooms (room_type_id, room_number)
      SELECT rt.id, $2
        FROM room_types rt
-      WHERE rt.slug = $1
-     RETURNING ${ROOM_COLUMNS}`,
+      WHERE rt.slug = $1`,
     [slug, roomNumber],
+  );
+
+  if (!inserted.insertId) {
+    return null;
+  }
+
+  // No RETURNING in MySQL: read the new row back by its generated key.
+  const { rows } = await dbPool.query<AdminPhysicalRoomRow>(
+    `SELECT ${ROOM_COLUMNS}
+       FROM rooms r
+      WHERE r.id = $1`,
+    [inserted.insertId],
   );
 
   const row = rows[0];
@@ -313,7 +322,8 @@ export async function findAdminPhysicalRoomByNumber(
             r.room_number,
             r.is_active
        FROM rooms r
-      WHERE r.room_number = $1`,
+      WHERE r.room_number = $1
+        AND BINARY r.room_number = BINARY $1`,
     [roomNumber],
   );
 
@@ -399,9 +409,9 @@ export async function lockAdminPhysicalRoomById(
  *
  *   status IN ('pending','confirmed')  cancelled stays hold no inventory; they
  *                                      released the room by changing what the
- *                                      exclusion constraint looks at.
- *   check_out > CURRENT_DATE           deliberately not `check_in >=
- *                                      CURRENT_DATE`. A guest who checked in
+ *                                      overlap check looks at.
+ *   check_out > UTC_DATE()             deliberately not `check_in >=
+ *                                      UTC_DATE()`. A guest who checked in
  *                                      yesterday and leaves tomorrow is in the
  *                                      room right now, which is the strongest
  *                                      possible reason not to close it. Only a
@@ -416,11 +426,11 @@ export async function countFutureInventoryReservationsForRoom(
   roomId: string,
 ): Promise<number> {
   const { rows } = await client.query<{ upcoming: string }>(
-    `SELECT COUNT(*)::text AS upcoming
+    `SELECT COUNT(*) AS upcoming
        FROM reservations res
       WHERE res.room_id = $1
         AND res.status IN ('pending', 'confirmed')
-        AND res.check_out > CURRENT_DATE`,
+        AND res.check_out > UTC_DATE()`,
     [roomId],
   );
 
@@ -467,7 +477,7 @@ const UPDATABLE_FIELDS = Object.keys(UPDATABLE_COLUMNS) as (keyof AdminPhysicalR
  * trigger, so nothing else would move it. `id`, `room_type_id` and
  * `created_at` are not in `UPDATABLE_COLUMNS` and cannot be written.
  *
- * A duplicate number raises from PostgreSQL and propagates untouched, so the
+ * A duplicate number raises from MySQL and propagates untouched, so the
  * service can map SQLSTATE 23505 onto ROOM_NUMBER_TAKEN — including the
  * case-insensitive index, which is the whole reason the constraint exists.
  */
@@ -495,13 +505,21 @@ export async function updateAdminPhysicalRoom(
     throw new Error('Physical room update contained no fields to change');
   }
 
-  const { rows } = await client.query<AdminPhysicalRoomRow>(
+  await client.query(
     `UPDATE rooms r
         SET ${assignments.join(',\n            ')},
-            updated_at = now()
-      WHERE r.id = $1
-     RETURNING ${ROOM_COLUMNS}`,
+            updated_at = UTC_TIMESTAMP(3)
+      WHERE r.id = $1`,
     values,
+  );
+
+  // No RETURNING in MySQL: the caller holds this row's lock, so re-reading it
+  // inside the same transaction returns exactly what was just written.
+  const { rows } = await client.query<AdminPhysicalRoomRow>(
+    `SELECT ${ROOM_COLUMNS}
+       FROM rooms r
+      WHERE r.id = $1`,
+    [roomId],
   );
 
   const row = rows[0];

@@ -205,9 +205,11 @@ describe('changeAdminEmail', () => {
 
     const update = statementMatching(/UPDATE admin_users/);
     assert.ok(update);
-    assert.match(update.text, /updated_at = CASE WHEN email IS DISTINCT FROM \$2/);
+    assert.match(update.text, /updated_at = CASE WHEN NOT \(email <=> \$2\)/);
     assert.match(update.text, /ELSE updated_at/);
-    assert.ok(!/SET[\s\S]*updated_at = now\(\)/.test(update.text), 'no unconditional now()');
+    assert.ok(!/SET[\s\S]*updated_at = UTC_TIMESTAMP\(3\)\s*,/.test(update.text), 'no unconditional timestamp');
+    // MySQL evaluates SET left to right: the guard must read the old email.
+    assert.ok(update.text.indexOf('updated_at = CASE') < update.text.indexOf('email = $2'));
   });
 
   it('never deletes a session', async () => {

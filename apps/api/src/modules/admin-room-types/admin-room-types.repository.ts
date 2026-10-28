@@ -29,14 +29,13 @@ import type {
  * nothing about what is bookable tonight, and must not be read as though it
  * did: availability is derived per-stay from reservations, elsewhere.
  */
-const ROOM_COUNT_SQL = '(SELECT COUNT(*) FROM rooms r WHERE r.room_type_id = rt.id)::int';
+const ROOM_COUNT_SQL = '(SELECT COUNT(*) FROM rooms r WHERE r.room_type_id = rt.id)';
 
 /**
- * Columns shared by the detail read and the update's returning clause.
+ * Columns shared by the detail read and the reads that follow each write.
  *
- * `numeric` columns are cast to text in SQL so they arrive as the exact
- * decimal strings PostgreSQL holds; read as JavaScript numbers they would
- * already have lost precision by the time anyone looked at them.
+ * DECIMAL columns arrive from the pool adapter as exact decimal strings;
+ * they are never read as JavaScript numbers, which would lose precision.
  */
 const DETAIL_COLUMNS = `rt.slug,
        rt.name,
@@ -45,9 +44,9 @@ const DETAIL_COLUMNS = `rt.slug,
        rt.capacity,
        rt.bed_type,
        rt.bed_count,
-       rt.size_sqm::text AS size_sqm,
+       rt.size_sqm,
        rt.view,
-       rt.base_nightly_rate::text AS base_nightly_rate,
+       rt.base_nightly_rate,
        rt.is_active,
        rt.sort_order,
        rt.created_at,
@@ -108,6 +107,15 @@ function requireBoolean(column: string, value: unknown): boolean {
   return value;
 }
 
+/**
+ * COUNT(*) comes back from the adapter as a digits-only string (BIGINT), while
+ * INT columns come back as numbers. Only the counted `room_count` is
+ * normalised; every INT column keeps the strict number guard.
+ */
+function normaliseCount(value: unknown): unknown {
+  return typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+}
+
 /** A count the schema constrains to whole numbers, with its own floor. */
 function requireCount(column: string, value: unknown, minimum: number): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) {
@@ -124,8 +132,8 @@ function requireNullableCount(column: string, value: unknown, minimum: number): 
 }
 
 /**
- * A `numeric` column that was cast to text in SQL. It must arrive as a string:
- * a number here would mean the cast was dropped and precision lost upstream.
+ * A DECIMAL column. It must arrive as a string: a number here would mean
+ * precision was lost upstream.
  */
 function requireDecimal(column: string, value: unknown): string {
   if (typeof value !== 'string' || value.length === 0) {
@@ -148,6 +156,49 @@ function requireInstant(column: string, value: unknown): Date {
 }
 
 /**
+ * Runs `work` on its own connection inside a transaction. MySQL has no
+ * RETURNING, so a write and the read-back of the row it produced share one
+ * transaction (and, for an UPDATE, the row lock the write took).
+ */
+async function inTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await dbPool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    try {
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        console.error('Failed to roll back room type transaction:', rollbackError);
+      }
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+}
+
+/** Reads one room type back by internal id, in the caller's transaction. */
+async function readDetailById(client: PoolClient, id: string): Promise<AdminRoomTypeDetail | null> {
+  const { rows } = await client.query<AdminRoomTypeDetailRow>(
+    `SELECT ${DETAIL_COLUMNS},
+            ${ROOM_COUNT_SQL} AS room_count
+       FROM room_types rt
+      WHERE rt.id = $1`,
+    [id],
+  );
+
+  const row = rows[0];
+
+  return row ? toAdminRoomTypeDetail(row) : null;
+}
+
+/**
  * Maps one list row, field by field. Nothing is spread: the shape the API
  * promises is built here rather than inherited from whatever the query
  * happened to select.
@@ -163,7 +214,7 @@ export function toAdminRoomTypeListItem(row: AdminRoomTypeListRow): AdminRoomTyp
     currency: 'EGP',
     isActive: requireBoolean('is_active', row.is_active),
     sortOrder: requireCount('sort_order', row.sort_order, 0),
-    roomCount: requireCount('room_count', row.room_count, 0),
+    roomCount: requireCount('room_count', normaliseCount(row.room_count), 0),
     updatedAt: requireInstant('updated_at', row.updated_at).toISOString(),
   };
 }
@@ -183,7 +234,7 @@ export function toAdminRoomTypeDetail(row: AdminRoomTypeDetailRow): AdminRoomTyp
     currency: 'EGP',
     isActive: requireBoolean('is_active', row.is_active),
     sortOrder: requireCount('sort_order', row.sort_order, 0),
-    roomCount: requireCount('room_count', row.room_count, 0),
+    roomCount: requireCount('room_count', normaliseCount(row.room_count), 0),
     createdAt: requireInstant('created_at', row.created_at).toISOString(),
     updatedAt: requireInstant('updated_at', row.updated_at).toISOString(),
   };
@@ -207,13 +258,11 @@ export async function listAdminRoomTypes(): Promise<AdminRoomTypeListItem[]> {
     `SELECT rt.slug,
             rt.name,
             rt.capacity,
-            rt.base_nightly_rate::text AS base_nightly_rate,
+            rt.base_nightly_rate,
             rt.is_active,
             rt.sort_order,
             rt.updated_at,
-            -- COUNT over the joined rows, so a type with no rooms is 0 rather
-            -- than 1: COUNT(*) would count the LEFT JOIN's null row.
-            COUNT(r.id)::int AS room_count
+            COUNT(r.id) AS room_count
        FROM room_types rt
        LEFT JOIN rooms r ON r.room_type_id = rt.id
       GROUP BY rt.id
@@ -226,7 +275,7 @@ export async function listAdminRoomTypes(): Promise<AdminRoomTypeListItem[]> {
 /**
  * Reads one room type by its slug.
  *
- * Matched exactly and case-sensitively — no LOWER, UPPER or ILIKE — so the
+ * Matched exactly and case-sensitively — no LOWER or UPPER — so the
  * unique index does the work, and the caller has already validated the slug's
  * shape. Active and inactive types alike, for the same reason the list is
  * unfiltered.
@@ -285,14 +334,9 @@ const UPDATABLE_FIELDS = Object.keys(UPDATABLE_COLUMNS) as (keyof AdminRoomTypeU
  * `updated_at` is set here because the schema gives it a DEFAULT and no
  * trigger — nothing else would move it.
  *
- * One statement, not two. The updated row is read straight out of RETURNING,
- * which sees the new values, and the physical-room count comes from a subquery
- * in the same clause. A separate SELECT afterwards could pick up someone
- * else's concurrent edit and report it as the outcome of this one.
- *
- * Deliberately not a data-modifying CTE: an outer query joining back to
- * `room_types` would read the table at the statement's snapshot and hand back
- * the values from *before* the update.
+ * MySQL has no RETURNING, so the UPDATE and the read-back share one
+ * transaction: the UPDATE's row lock is still held when the SELECT runs, so
+ * the read cannot pick up someone else's concurrent edit.
  *
  * Returns null only when no room type has that slug.
  */
@@ -319,19 +363,27 @@ export async function updateAdminRoomType(
     throw new Error('Room type update contained no fields to change');
   }
 
-  const { rows } = await dbPool.query<AdminRoomTypeDetailRow>(
-    `UPDATE room_types rt
-        SET ${assignments.join(',\n            ')},
-            updated_at = now()
-      WHERE rt.slug = $1
-     RETURNING ${DETAIL_COLUMNS},
-               ${ROOM_COUNT_SQL} AS room_count`,
-    values,
-  );
+  return inTransaction(async (client) => {
+    await client.query(
+      `UPDATE room_types rt
+          SET ${assignments.join(',\n              ')},
+              updated_at = UTC_TIMESTAMP(3)
+        WHERE rt.slug = $1`,
+      values,
+    );
 
-  const row = rows[0];
+    const { rows } = await client.query<AdminRoomTypeDetailRow>(
+      `SELECT ${DETAIL_COLUMNS},
+              ${ROOM_COUNT_SQL} AS room_count
+         FROM room_types rt
+        WHERE rt.slug = $1`,
+      [slug],
+    );
 
-  return row ? toAdminRoomTypeDetail(row) : null;
+    const row = rows[0];
+
+    return row ? toAdminRoomTypeDetail(row) : null;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -340,12 +392,12 @@ export async function updateAdminRoomType(
 
 /**
  * Digits only, at least one, no leading zero: the form a `bigserial` takes on
- * its way out of the pg driver, which returns `int8` as a string rather than
- * risk a value past `Number.MAX_SAFE_INTEGER`.
+ * its way out of the mysql2 adapter, which returns BIGINT as a string rather
+ * than risk a value past `Number.MAX_SAFE_INTEGER`.
  */
 const INTERNAL_ID_PATTERN = /^[1-9]\d*$/;
 
-/** Digits only, as `COUNT(*)::text` always produces. */
+/** Digits only, as the adapter returns for COUNT(*). */
 const WHOLE_NUMBER_PATTERN = /^\d+$/;
 
 /**
@@ -367,10 +419,8 @@ function requireInternalId(column: string, value: unknown): string {
 /**
  * Turns a counted bigint into a plain number.
  *
- * Counted as text rather than `::int` so a count past `int4` is refused here
- * instead of raising a cast error inside PostgreSQL, and so the overflow check
- * belongs to this module. Mirrors `parseTotalCount` in the reservations
- * repository, which answers the same question about the same driver.
+ * Counted as a string so the overflow check belongs to this module. Mirrors
+ * `parseTotalCount` in the reservations repository.
  */
 export function parseReservationConflictCount(value: unknown): number {
   if (typeof value !== 'string' || !WHOLE_NUMBER_PATTERN.test(value)) {
@@ -445,15 +495,14 @@ export function toLockedAdminRoomType(row: LockedAdminRoomTypeRow): LockedAdminR
  * unique violation propagates untouched for the service to classify.
  */
 export async function insertAdminRoomType(create: AdminRoomTypeCreate): Promise<AdminRoomTypeDetail> {
-  const { rows } = await dbPool.query<AdminRoomTypeDetailRow>(
-    `INSERT INTO room_types AS rt (
+  return inTransaction(async (client) => {
+    const inserted = await client.query(
+    `INSERT INTO room_types (
        slug, name, short_description, description, capacity,
        bed_type, bed_count, size_sqm, view, base_nightly_rate,
        is_active, sort_order
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false, $11)
-     RETURNING ${DETAIL_COLUMNS},
-               ${ROOM_COUNT_SQL} AS room_count`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false, $11)`,
     [
       create.slug,
       create.name,
@@ -467,17 +516,22 @@ export async function insertAdminRoomType(create: AdminRoomTypeCreate): Promise<
       create.baseNightlyRate,
       create.sortOrder,
     ],
-  );
+    );
 
-  const row = rows[0];
+    // An INSERT that produced no id without raising is not a case this
+    // statement has. Treated as a fault, never as a missing room type.
+    if (!inserted.insertId) {
+      throw new Error('Room type insert returned no row');
+    }
 
-  // An INSERT that returned nothing without raising is not a case this
-  // statement has. Treated as a fault, never as a missing room type.
-  if (!row) {
-    throw new Error('Room type insert returned no row');
-  }
+    const detail = await readDetailById(client, inserted.insertId);
 
-  return toAdminRoomTypeDetail(row);
+    if (!detail) {
+      throw new Error('Room type insert returned no row');
+    }
+
+    return detail;
+  });
 }
 
 /**
@@ -488,8 +542,7 @@ export async function insertAdminRoomType(create: AdminRoomTypeCreate): Promise<
  * the decision. Reading without the lock and updating afterwards would let two
  * administrators each count against a value the other was already replacing.
  *
- * Matched exactly and case-sensitively, as everywhere else. No LOWER, no
- * ILIKE: the unique index does the work.
+ * Matched through the unique index on `slug`, as everywhere else.
  *
  * Takes the caller's client so it runs inside the caller's transaction — the
  * lock means nothing outside one. It begins, commits and rolls back nothing.
@@ -530,7 +583,7 @@ export async function lockAdminRoomTypeBySlug(
  *
  *   status IN ('pending','confirmed')  cancelled stays hold no inventory and
  *                                      make no promise to anyone.
- *   check_out > CURRENT_DATE           a stay already checked in but not yet
+ *   check_out > UTC_DATE()            a stay already checked in but not yet
  *                                      checked out is a promise still being
  *                                      kept; a stay that has ended is history,
  *                                      and lowering capacity cannot unmake it.
@@ -547,13 +600,12 @@ export async function countReservationsAboveCapacity(
   proposedCapacity: number,
 ): Promise<number> {
   const { rows } = await client.query<{ conflicting: string }>(
-    `SELECT COUNT(*)::text AS conflicting
+    `SELECT COUNT(*) AS conflicting
        FROM reservations res
       WHERE res.room_type_id = $1
         AND res.status IN ('pending', 'confirmed')
-        AND res.check_out > CURRENT_DATE
-        -- ::bigint avoids int4 range inference on a large (but JS-safe) capacity.
-        AND res.adults + res.children > $2::bigint`,
+        AND res.check_out > UTC_DATE()
+        AND res.adults + res.children > $2`,
     [roomTypeId, proposedCapacity],
   );
 
@@ -585,19 +637,17 @@ export async function updateAdminRoomTypeCapacity(
   roomTypeId: string,
   capacity: number,
 ): Promise<AdminRoomTypeDetail | null> {
-  const { rows } = await client.query<AdminRoomTypeDetailRow>(
+  await client.query(
     `UPDATE room_types rt
         SET capacity = $2,
-            updated_at = now()
-      WHERE rt.id = $1
-     RETURNING ${DETAIL_COLUMNS},
-               ${ROOM_COUNT_SQL} AS room_count`,
+            updated_at = UTC_TIMESTAMP(3)
+      WHERE rt.id = $1`,
     [roomTypeId, capacity],
   );
 
-  const row = rows[0];
-
-  return row ? toAdminRoomTypeDetail(row) : null;
+  // No RETURNING in MySQL: the caller holds this row's lock, so the read-back
+  // inside the same transaction returns exactly what was just written.
+  return readDetailById(client, roomTypeId);
 }
 
 /**
@@ -629,7 +679,7 @@ export async function countActivePhysicalRooms(
   roomTypeId: string,
 ): Promise<number> {
   const { rows } = await client.query<{ active_rooms: string }>(
-    `SELECT COUNT(*)::text AS active_rooms
+    `SELECT COUNT(*) AS active_rooms
        FROM rooms r
       WHERE r.room_type_id = $1
         AND r.is_active = true`,
@@ -660,7 +710,7 @@ export async function countActivePhysicalRooms(
  * `updated_at` moves only on a real change. Setting a value to what it already
  * is answers 200 without disturbing the row, so a client that re-sends the
  * state it can already see does not make the catalogue look edited. That is
- * the same `IS DISTINCT FROM` guard the journey status write uses.
+ * the same null-safe `<=>` guard the journey status write uses.
  *
  * Whether the change is *allowed* is not decided here. The service counts the
  * active rooms under the same lock and refuses if it must.
@@ -670,20 +720,19 @@ export async function updateAdminRoomTypeActiveState(
   roomTypeId: string,
   isActive: boolean,
 ): Promise<AdminRoomTypeDetail | null> {
-  const { rows } = await client.query<AdminRoomTypeDetailRow>(
+  // updated_at is assigned FIRST: MySQL evaluates SET assignments left to
+  // right, so assigning is_active first would make the guard compare the new
+  // value with itself.
+  await client.query(
     `UPDATE room_types rt
-        SET is_active = $2,
-            updated_at = CASE
-              WHEN rt.is_active IS DISTINCT FROM $2 THEN now()
+        SET updated_at = CASE
+              WHEN NOT (rt.is_active <=> $2) THEN UTC_TIMESTAMP(3)
               ELSE rt.updated_at
-            END
-      WHERE rt.id = $1
-     RETURNING ${DETAIL_COLUMNS},
-               ${ROOM_COUNT_SQL} AS room_count`,
+            END,
+            is_active = $2
+      WHERE rt.id = $1`,
     [roomTypeId, isActive],
   );
 
-  const row = rows[0];
-
-  return row ? toAdminRoomTypeDetail(row) : null;
+  return readDetailById(client, roomTypeId);
 }

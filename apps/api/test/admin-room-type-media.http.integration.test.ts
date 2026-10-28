@@ -155,16 +155,15 @@ async function animatedWebp(): Promise<Buffer> {
 }
 
 async function insertRoomType(slug: string): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, 2, '1500.00', false, 0)
-     RETURNING id`,
+     VALUES ($1, $2, 2, '1500.00', false, 0)`,
     [slug, `Fixture ${slug}`],
   );
 
-  roomTypeIds[slug] = rows[0]!.id;
+  roomTypeIds[slug] = inserted.insertId!;
 
-  return rows[0]!.id;
+  return inserted.insertId!;
 }
 
 let freshRoomTypeSeq = 0;
@@ -258,17 +257,14 @@ async function withFailingImageInsert<T>(run: () => Promise<T>): Promise<T> {
   const name = `itest_media_http_fail_${runId}`;
 
   await dbPool.query(
-    `CREATE FUNCTION ${name}() RETURNS trigger AS $$
-       BEGIN RAISE EXCEPTION 'itest: room_type_images insert refused'; END;
-     $$ LANGUAGE plpgsql`,
+    `CREATE TRIGGER ${name} BEFORE INSERT ON room_type_images
+       FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'itest: room_type_images insert refused'`,
   );
-  await dbPool.query(`CREATE TRIGGER ${name} BEFORE INSERT ON room_type_images FOR EACH ROW EXECUTE FUNCTION ${name}()`);
 
   try {
     return await run();
   } finally {
-    await dbPool.query(`DROP TRIGGER IF EXISTS ${name} ON room_type_images`);
-    await dbPool.query(`DROP FUNCTION IF EXISTS ${name}()`);
+    await dbPool.query(`DROP TRIGGER IF EXISTS ${name}`);
   }
 }
 
@@ -386,7 +382,7 @@ after(async () => {
     await dbPool.query(
       `DELETE FROM media_assets
         WHERE id NOT IN (SELECT media_asset_id FROM room_type_images)
-          AND created_at >= now() - interval '1 hour'
+          AND created_at >= UTC_TIMESTAMP(3) - INTERVAL 1 HOUR
           AND storage_key LIKE 'media/%'`,
     );
     await dbPool.query('DELETE FROM room_types WHERE slug LIKE $1', [like]);
@@ -396,12 +392,12 @@ after(async () => {
     await dbPool.query('DELETE FROM admin_users WHERE email = $1', [admin.email]);
 
     const { rows } = await dbPool.query<{ types: number; admins: number }>(
-      `SELECT (SELECT COUNT(*) FROM room_types WHERE slug LIKE $1)::int AS types,
-              (SELECT COUNT(*) FROM admin_users WHERE email = $2)::int AS admins`,
+      `SELECT CAST((SELECT COUNT(*) FROM room_types WHERE slug LIKE $1) AS SIGNED) AS types,
+              CAST((SELECT COUNT(*) FROM admin_users WHERE email = $2) AS SIGNED) AS admins`,
       [like, admin.email],
     );
 
-    assert.deepEqual(rows[0], { types: 0, admins: 0 }, 'fixtures were not fully removed');
+    assert.deepEqual({ types: Number(rows[0]!.types), admins: Number(rows[0]!.admins) }, { types: 0, admins: 0 }, 'fixtures were not fully removed');
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -801,10 +797,10 @@ describe('POST upload', () => {
     assert.equal(storage.operations.length, opsBefore, 'no storage.putObject before the delivery check');
 
     const { rows } = await dbPool.query<{ total: number }>(
-      `SELECT COUNT(*)::int AS total FROM room_type_images WHERE room_type_id = $1`,
+      `SELECT CAST(COUNT(*) AS SIGNED) AS total FROM room_type_images WHERE room_type_id = $1`,
       [roomTypeIds[slugs.work]],
     );
-    assert.equal(rows[0]!.total, 0, 'no row was written for a room type with no images yet');
+    assert.equal(Number(rows[0]!.total), 0, 'no row was written for a room type with no images yet');
   });
 
   it('invalid public-base delivery config answers the same safe 503, also before any storage.putObject', async () => {

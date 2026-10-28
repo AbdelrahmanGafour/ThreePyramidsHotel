@@ -130,13 +130,13 @@ describe('insertNotificationEvent against PostgreSQL', () => {
     await insertNotificationEvent(client, event);
 
     const { rows } = await client.query(
-      `SELECT payload, jsonb_typeof(payload) AS kind, jsonb_typeof(payload -> 'childAges') AS ages_kind
+      `SELECT payload, JSON_TYPE(payload) AS kind, JSON_TYPE(JSON_EXTRACT(payload, '$.childAges')) AS ages_kind
          FROM notification_outbox WHERE booking_reference = $1`,
       [reference],
     );
 
-    assert.equal(rows[0].kind, 'object');
-    assert.equal(rows[0].ages_kind, 'array', 'the nested ages survive as JSON, not a PG array');
+    assert.equal(rows[0].kind, 'OBJECT');
+    assert.equal(rows[0].ages_kind, 'ARRAY', 'the nested ages survive as JSON, not a PG array');
     assert.deepEqual(rows[0].payload, event.payload);
   });
 
@@ -163,14 +163,9 @@ describe('insertNotificationEvent against PostgreSQL', () => {
       'notification_outbox_event_booking_key',
     );
 
-    // The transaction really is aborted: anything else raises 25P02 until it
-    // is unwound. That is the property the callers rely on.
-    const afterFailure = await client.query('SELECT 1').then(
-      () => null,
-      (error: unknown) => error,
-    );
-
-    assert.equal((afterFailure as { code?: string }).code, '25P02');
+    // MySQL rolls back only the failed statement, not the transaction; what
+    // aborts the reservation is that the error propagates to the caller, which
+    // rolls the whole transaction back (asserted above: the error is not swallowed).
 
     await client.query('ROLLBACK TO SAVEPOINT duplicate_attempt');
   });
@@ -182,7 +177,7 @@ describe('insertNotificationEvent against PostgreSQL', () => {
     await insertNotificationEvent(client, eventFor(`ITEST-REPO-${runId}-5`));
 
     const { rows } = await client.query(
-      `SELECT count(*)::int AS total FROM notification_outbox
+      `SELECT CAST(COUNT(*) AS SIGNED) AS total FROM notification_outbox
         WHERE booking_reference LIKE $1`,
       [`ITEST-REPO-${runId}-%`],
     );

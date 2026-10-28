@@ -29,7 +29,7 @@ import type { NotificationEvent } from './notifications.types';
  *
  * Nothing in this module performs or awaits provider I/O.
  *
- * Times come from `now()`, never from JavaScript. The database's clock is the
+ * Times come from the database clock (`UTC_TIMESTAMP(3)`), never from JavaScript. The database's clock is the
  * one the rows are ordered by, and a second opinion from an application server
  * with a drifting clock could make a row due early, late, or never.
  *
@@ -82,7 +82,7 @@ import type { NotificationEvent } from './notifications.types';
  *
  * Writes exactly the six columns that are frozen at insert. Every other column
  * is left to the schema: `attempts` starts at 0, `next_attempt_at` and
- * `created_at`/`updated_at` default to `now()` — the transaction's own clock,
+ * `created_at`/`updated_at` default to the current time — the transaction's own clock,
  * which is the right one — and the envelope, the verdict, the error and the
  * provider reference all start NULL because nothing has been attempted yet.
  * Naming any of them here would be this layer claiming to know something about
@@ -95,7 +95,7 @@ import type { NotificationEvent } from './notifications.types';
  * the caller's transaction can still roll back — so handing one out would
  * invite exactly the mistake this shape prevents.
  *
- * @throws whatever PostgreSQL raised, unchanged. See the note above.
+ * @throws whatever the database raised, unchanged. See the note above.
  */
 export async function insertNotificationEvent(
   client: PoolClient,
@@ -112,7 +112,7 @@ export async function insertNotificationEvent(
       event.recipientEmail,
       event.templateKey,
       // Serialised here rather than left to the driver's own object handling,
-      // so what lands in `jsonb` is decided by this file and not by a coercion
+      // so what lands in the JSON column is decided by this file and not by a coercion
       // rule that could change under it. It is also a copy: the caller's
       // payload is never handed to the driver to hold.
       JSON.stringify(event.payload),
@@ -287,41 +287,69 @@ export async function claimNotificationEvents(
   client: PoolClient,
   input: ClaimNotificationEventsInput,
 ): Promise<ClaimedNotificationEvent[]> {
-  const { rows } = await client.query<ClaimedRow>(
-    `WITH due AS (
-       SELECT id, next_attempt_at
-         FROM notification_outbox
-        WHERE accepted_at IS NULL
-          AND failed_at IS NULL
-          AND next_attempt_at <= now()
-        ORDER BY next_attempt_at, id
-        LIMIT $1
-        FOR UPDATE SKIP LOCKED
-     )
-     UPDATE notification_outbox o
-        SET attempts = o.attempts + 1,
-            last_attempt_at = now(),
-            next_attempt_at = now() + make_interval(secs => $4::double precision),
-            resolved_from = COALESCE(o.resolved_from, $2),
-            resolved_to = COALESCE(o.resolved_to, o.recipient_email, $3),
-            updated_at = now()
-       FROM due
-      WHERE o.id = due.id
-     RETURNING due.next_attempt_at AS claim_due_at,
-               o.id::text AS id,
-               o.event_type,
-               o.booking_reference,
-               o.recipient_kind,
-               o.recipient_email,
-               o.template_key,
-               o.payload,
-               o.attempts,
-               o.resolved_from,
-               o.resolved_to`,
-    [input.limit, input.resolvedFrom, input.hotelRecipient, input.leaseSeconds],
+  // Three statements inside the caller's (short) transaction: choose and lock
+  // with SKIP LOCKED, lease, then read the leased rows back. MySQL has no
+  // UPDATE ... RETURNING and no UPDATE ... FROM, so the pre-lease due time is
+  // carried from the first statement rather than the CTE.
+  const due = await client.query<{ id: string; next_attempt_at: Date }>(
+    `SELECT id, next_attempt_at
+       FROM notification_outbox
+      WHERE accepted_at IS NULL
+        AND failed_at IS NULL
+        AND next_attempt_at <= UTC_TIMESTAMP(3)
+      ORDER BY next_attempt_at, id
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED`,
+    [input.limit],
   );
 
-  // `UPDATE ... FROM` makes no promise about the order it returns rows in, so
+  if (due.rows.length === 0) {
+    return [];
+  }
+
+  const ids = due.rows.map((row) => row.id);
+  const dueAt = new Map(due.rows.map((row) => [String(row.id), row.next_attempt_at]));
+  const placeholders = ids.map(() => '?').join(', ');
+
+  await client.query(
+    `UPDATE notification_outbox
+        SET attempts = attempts + 1,
+            last_attempt_at = UTC_TIMESTAMP(3),
+            next_attempt_at = UTC_TIMESTAMP(3) + INTERVAL ? SECOND,
+            resolved_from = COALESCE(resolved_from, ?),
+            resolved_to = COALESCE(resolved_to, recipient_email, ?),
+            updated_at = UTC_TIMESTAMP(3)
+      WHERE id IN (${placeholders})`,
+    [input.leaseSeconds, input.resolvedFrom, input.hotelRecipient, ...ids],
+  );
+
+  const { rows: leased } = await client.query<Omit<ClaimedRow, 'claim_due_at'>>(
+    `SELECT CAST(o.id AS CHAR) AS id,
+            o.event_type,
+            o.booking_reference,
+            o.recipient_kind,
+            o.recipient_email,
+            o.template_key,
+            o.payload,
+            o.attempts,
+            o.resolved_from,
+            o.resolved_to
+       FROM notification_outbox o
+      WHERE o.id IN (${placeholders})`,
+    ids,
+  );
+
+  const rows: ClaimedRow[] = leased.map((row) => {
+    const claimDueAt = dueAt.get(String(row.id));
+
+    if (!claimDueAt) {
+      throw new Error('Unexpected notification id from the database: leased a row that was not selected');
+    }
+
+    return { ...row, claim_due_at: claimDueAt };
+  });
+
+  // The read-back makes no promise about the order it returns rows in, so
   // the claim's own order is restored here — and it is restored on the SAME
   // key the claim selected by, `(next_attempt_at, id)`, using the due time as
   // it stood before the lease moved it. Sorting by id alone would be a
@@ -401,12 +429,12 @@ export async function markNotificationAccepted(
 ): Promise<NotificationStateWriteResult> {
   const { rowCount } = await client.query(
     `UPDATE notification_outbox
-        SET accepted_at = now(),
+        SET accepted_at = UTC_TIMESTAMP(3),
             provider_reference = $3,
             last_attempt_acceptance = NULL,
             last_error = NULL,
-            updated_at = now()
-      WHERE id = $1::bigint
+            updated_at = UTC_TIMESTAMP(3)
+      WHERE id = $1
         AND attempts = $2
         AND accepted_at IS NULL
         AND failed_at IS NULL`,
@@ -446,11 +474,11 @@ export async function markNotificationAttemptFailed(
 ): Promise<NotificationStateWriteResult> {
   const { rowCount } = await client.query(
     `UPDATE notification_outbox
-        SET next_attempt_at = now() + make_interval(secs => $5::double precision),
+        SET next_attempt_at = UTC_TIMESTAMP(3) + INTERVAL $5 SECOND,
             last_attempt_acceptance = $3,
             last_error = $4,
-            updated_at = now()
-      WHERE id = $1::bigint
+            updated_at = UTC_TIMESTAMP(3)
+      WHERE id = $1
         AND attempts = $2
         AND accepted_at IS NULL
         AND failed_at IS NULL`,
@@ -484,11 +512,11 @@ export async function markNotificationAbandoned(
 ): Promise<NotificationStateWriteResult> {
   const { rowCount } = await client.query(
     `UPDATE notification_outbox
-        SET failed_at = now(),
+        SET failed_at = UTC_TIMESTAMP(3),
             last_attempt_acceptance = $3,
             last_error = $4,
-            updated_at = now()
-      WHERE id = $1::bigint
+            updated_at = UTC_TIMESTAMP(3)
+      WHERE id = $1
         AND attempts = $2
         AND accepted_at IS NULL
         AND failed_at IS NULL`,

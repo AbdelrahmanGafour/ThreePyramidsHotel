@@ -68,14 +68,14 @@ export async function changeAdminRoomType(
 //
 // CANONICAL ADMIN LOCK ORDER (shared with admin-rooms):
 //
-//     booking:          room_types FOR KEY SHARE -> rooms FOR UPDATE SKIP LOCKED
+//     booking:          room_types FOR SHARE -> rooms FOR UPDATE SKIP LOCKED
 //     admin capacity:   room_types FOR UPDATE
 //     admin room edit:  room_types FOR UPDATE    -> rooms FOR UPDATE
 //
 // No path may lock a room before its room type.
 // ---------------------------------------------------------------------------
 
-/** PostgreSQL unique_violation. */
+/** MySQL unique_violation. */
 const UNIQUE_VIOLATION = '23505';
 
 /** The unique index behind a room type's public identifier. */
@@ -157,7 +157,7 @@ export type AdminRoomTypeCapacityResult =
  * The whole decision happens inside one transaction holding the row's
  * `FOR UPDATE` lock: read the current capacity, count what a lower one would
  * contradict, then write. A booking for the same room type holds
- * `FOR KEY SHARE`, which conflicts, so it either finished before this lock was
+ * `FOR SHARE`, which conflicts, so it either finished before this lock was
  * granted — and is therefore in the count — or waits and re-reads the capacity
  * this transaction committed. Neither order can produce a booking validated
  * against a capacity the hotel no longer offers.
@@ -260,7 +260,7 @@ export type AdminRoomTypeStatusResult =
  * service, then write. That lock is the FIRST of the canonical admin order,
  * the same one the capacity change and the physical-room edit take before
  * anything else, so this path introduces no new ordering and can deadlock
- * against neither. A booking for the same room type holds `FOR KEY SHARE`,
+ * against neither. A booking for the same room type holds `FOR SHARE`,
  * which conflicts, so it either finished before this lock was granted or
  * waits and then reads the state this transaction committed.
  *

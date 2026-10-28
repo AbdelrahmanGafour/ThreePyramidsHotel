@@ -129,13 +129,12 @@ async function resolveRoomTypeId(client: PoolClient, roomType: DemoRoomType): Pr
 
   if (action === 'migrate-legacy') {
     // `is_active` deliberately left out, same reasoning as the upsert below.
-    const { rows } = await client.query<{ id: string }>(
+    await client.query(
       `UPDATE room_types SET
          slug = $2, name = $3, short_description = $4, description = $5, capacity = $6,
-         bed_type = $7, bed_count = $8, size_sqm = $9, view = $10, base_nightly_rate = $11,
-         sort_order = $12, updated_at = now()
-       WHERE id = $1
-       RETURNING id`,
+         bed_type = $7, bed_count = $8, size_sqm = $9, \`view\` = $10, base_nightly_rate = $11,
+         sort_order = $12, updated_at = UTC_TIMESTAMP(3)
+       WHERE id = $1`,
       [
         legacyRows[0]!.id,
         roomType.slug,
@@ -152,7 +151,7 @@ async function resolveRoomTypeId(client: PoolClient, roomType: DemoRoomType): Pr
       ],
     );
 
-    const roomTypeId = rows[0]?.id;
+    const roomTypeId = legacyRows[0]?.id;
     if (!roomTypeId) {
       throw new Error(`Failed to migrate legacy room type '${legacySlug}' to '${roomType.slug}'`);
     }
@@ -161,25 +160,24 @@ async function resolveRoomTypeId(client: PoolClient, roomType: DemoRoomType): Pr
 
   // `is_active` is deliberately left out of the update so re-seeding never
   // reactivates a room type someone deactivated on purpose.
-  const { rows } = await client.query<{ id: string }>(
+  await client.query(
     `INSERT INTO room_types (
        slug, name, short_description, description, capacity,
-       bed_type, bed_count, size_sqm, view, base_nightly_rate, sort_order
+       bed_type, bed_count, size_sqm, \`view\`, base_nightly_rate, sort_order
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     ON CONFLICT (slug) DO UPDATE SET
-       name = EXCLUDED.name,
-       short_description = EXCLUDED.short_description,
-       description = EXCLUDED.description,
-       capacity = EXCLUDED.capacity,
-       bed_type = EXCLUDED.bed_type,
-       bed_count = EXCLUDED.bed_count,
-       size_sqm = EXCLUDED.size_sqm,
-       view = EXCLUDED.view,
-       base_nightly_rate = EXCLUDED.base_nightly_rate,
-       sort_order = EXCLUDED.sort_order,
-       updated_at = now()
-     RETURNING id`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) AS excluded
+     ON DUPLICATE KEY UPDATE
+       name = excluded.name,
+       short_description = excluded.short_description,
+       description = excluded.description,
+       capacity = excluded.capacity,
+       bed_type = excluded.bed_type,
+       bed_count = excluded.bed_count,
+       size_sqm = excluded.size_sqm,
+       \`view\` = excluded.\`view\`,
+       base_nightly_rate = excluded.base_nightly_rate,
+       sort_order = excluded.sort_order,
+       updated_at = UTC_TIMESTAMP(3)`,
     [
       roomType.slug,
       roomType.name,
@@ -195,6 +193,9 @@ async function resolveRoomTypeId(client: PoolClient, roomType: DemoRoomType): Pr
     ],
   );
 
+  const { rows } = await client.query<{ id: string }>('SELECT id FROM room_types WHERE slug = $1', [
+    roomType.slug,
+  ]);
   const roomTypeId = rows[0]?.id;
   if (!roomTypeId) {
     throw new Error(`Failed to upsert demo room type: ${roomType.slug}`);
@@ -217,7 +218,7 @@ async function seed(): Promise<void> {
         await client.query(
           `INSERT INTO rooms (room_type_id, room_number)
            VALUES ($1, $2)
-           ON CONFLICT (room_number) DO NOTHING`,
+           ON DUPLICATE KEY UPDATE room_number = rooms.room_number`,
           [roomTypeId, roomNumber],
         );
 

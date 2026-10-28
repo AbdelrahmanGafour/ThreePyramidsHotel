@@ -3,10 +3,11 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
+import { insertedId, toNumbers } from './support/core-sql';
 import { generateBookingReference } from '../src/modules/reservations/booking-reference';
 
 // Exercises PATCH /api/v1/admin/reservations/:bookingReference/status over real
-// HTTP against a real PostgreSQL database: the real app, the real session
+// HTTP against a real MySQL database: the real app, the real session
 // guard, the real transaction. Nothing is mocked.
 //
 // It keeps its own admin account, room type and rooms, separate from the read
@@ -140,7 +141,7 @@ async function insertReservation(status: 'pending' | 'confirmed' | 'cancelled', 
        status, currency, nightly_rate_snapshot, total_amount, special_requests
      )
      VALUES ($1, $2, $3, 'Amelia', 'Hartwell', $4, '+201000000000', 'Egypt',
-             2, 0, $5::date, $6::date, $7, 'EGP', $8, $9, 'Late arrival')`,
+             2, 0, $5, $6, $7, 'EGP', $8, $9, 'Late arrival')`,
     [
       bookingReference,
       roomTypeId,
@@ -189,22 +190,23 @@ before(async () => {
     [admin.email, admin.displayName, await hashPassword(admin.password)],
   );
 
-  const { rows: roomTypeRows } = await dbPool.query<{ id: string }>(
+  const createdRoomType = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, 2, $3, true, 0)
-     RETURNING id`,
+     VALUES ($1, $2, 2, $3, true, 0)`,
     [fixture.slug, fixture.name, fixture.nightlyRate],
   );
 
-  const createdRoomType = roomTypeRows[0];
-  assert.ok(createdRoomType, 'failed to create the fixture room type');
-  roomTypeId = createdRoomType.id;
+  roomTypeId = insertedId(createdRoomType);
+
+  await dbPool.query(
+    `INSERT INTO rooms (room_type_id, room_number, is_active)
+     VALUES ($1, $2, true), ($1, $3, true)`,
+    [roomTypeId, ...fixture.roomNumbers],
+  );
 
   const { rows: roomRows } = await dbPool.query<{ id: string }>(
-    `INSERT INTO rooms (room_type_id, room_number, is_active)
-     VALUES ($1, $2, true), ($1, $3, true)
-     RETURNING id`,
-    [roomTypeId, ...fixture.roomNumbers],
+    'SELECT id FROM rooms WHERE room_type_id = $1 ORDER BY id',
+    [roomTypeId],
   );
 
   roomIds = roomRows.map((row) => row.id);
@@ -230,7 +232,7 @@ after(async () => {
     // DELETE: this database is shared with every other integration suite, and
     // a sweep of the whole table would destroy rows another suite is asserting
     // on.
-    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [
+    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference IN ($1)', [
       createdReferences,
     ]);
     await dbPool.query('DELETE FROM reservations WHERE room_type_id = $1', [roomTypeId]);
@@ -249,16 +251,16 @@ after(async () => {
       admins: number;
       notifications: number;
     }>(
-      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1)::int AS reservations,
-              (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1)::int AS rooms,
-              (SELECT COUNT(*) FROM admin_users WHERE email = $2)::int AS admins,
+      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1) AS reservations,
+              (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1) AS rooms,
+              (SELECT COUNT(*) FROM admin_users WHERE email = $2) AS admins,
               (SELECT COUNT(*) FROM notification_outbox
-                WHERE booking_reference = ANY($3::text[]))::int AS notifications`,
+                WHERE booking_reference IN ($3)) AS notifications`,
       [roomTypeId, admin.email, createdReferences],
     );
 
     assert.deepEqual(
-      rows[0],
+      rows[0] && toNumbers(rows[0]),
       { reservations: 0, rooms: 0, admins: 0, notifications: 0 },
       'fixtures were not fully removed',
     );

@@ -3,7 +3,7 @@ import type { CookieOptions } from 'express';
 
 // Session token and cookie mechanics for staff sessions.
 //
-// The browser only ever holds an opaque random token; PostgreSQL stores only
+// The browser only ever holds an opaque random token; MySQL stores only
 // its SHA-256, so a database leak yields nothing a client could present. This
 // file performs no database access and no logging: a raw token must never
 // reach a log line.

@@ -145,7 +145,7 @@ export async function findRoomTypeForMedia(
   const { rows } = await client.query<ResolvedRoomTypeRow>(
     `SELECT rt.id, rt.slug
        FROM room_types rt
-      WHERE rt.slug = $1`,
+      WHERE rt.slug = BINARY $1`,
     [slug],
   );
 
@@ -179,7 +179,7 @@ export async function lockRoomTypeForMediaChange(
   const { rows } = await client.query<ResolvedRoomTypeRow>(
     `SELECT rt.id, rt.slug
        FROM room_types rt
-      WHERE rt.slug = $1
+      WHERE rt.slug = BINARY $1
         FOR UPDATE`,
     [slug],
   );
@@ -203,11 +203,11 @@ export async function lockRoomTypeForMediaChange(
  * depends on.
  *
  * Counted as text rather than `::int` so a count past `int4` would be refused
- * here rather than raise a cast error inside PostgreSQL.
+ * here rather than raise a cast error inside the database.
  */
 export async function countRoomTypeImages(client: PoolClient, roomTypeId: string): Promise<number> {
   const { rows } = await client.query<{ total: string }>(
-    `SELECT COUNT(*)::text AS total
+    `SELECT CAST(COUNT(*) AS CHAR) AS total
        FROM room_type_images rti
       WHERE rti.room_type_id = $1`,
     [roomTypeId],
@@ -238,7 +238,7 @@ export async function countRoomTypeImages(client: PoolClient, roomTypeId: string
  * maximum would both claim it.
  */
 export async function nextRoomTypeImageSortOrder(client: PoolClient, roomTypeId: string): Promise<number> {
-  const { rows } = await client.query<{ next_order: number }>(
+  const { rows } = await client.query<{ next_order: number | string }>(
     `SELECT COALESCE(MAX(rti.sort_order), -1) + 1 AS next_order
        FROM room_type_images rti
       WHERE rti.room_type_id = $1`,
@@ -251,7 +251,8 @@ export async function nextRoomTypeImageSortOrder(client: PoolClient, roomTypeId:
     throw new Error('Room-type image sort order returned no row');
   }
 
-  return requireSortOrder(row.next_order);
+  // MAX(...) + 1 is a BIGINT expression in MySQL, which the driver renders as text.
+  return requireSortOrder(typeof row.next_order === 'string' ? Number(row.next_order) : row.next_order);
 }
 
 // ---------------------------------------------------------------------------
@@ -276,21 +277,27 @@ export async function insertRoomTypeImage(
   client: PoolClient,
   input: RoomTypeImageInsert,
 ): Promise<ScopedRoomTypeImage> {
+  const inserted = await client.query(
+    `INSERT INTO room_type_images (room_type_id, media_asset_id, alt_text, sort_order, is_cover)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [input.roomTypeId, input.mediaAssetId, input.altText, input.sortOrder, input.isCover],
+  );
+
+  if (!inserted.insertId) {
+    throw new Error('Room-type image insert returned no row');
+  }
+
   const { rows } = await client.query<ScopedImageRow>(
-    `WITH inserted AS (
-       INSERT INTO room_type_images (room_type_id, media_asset_id, alt_text, sort_order, is_cover)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, media_asset_id, sort_order, is_cover
-     )
-     SELECT inserted.id,
-            inserted.media_asset_id,
-            inserted.sort_order,
-            inserted.is_cover,
+    `SELECT rti.id,
+            rti.media_asset_id,
+            rti.sort_order,
+            rti.is_cover,
             ma.reference,
             ma.storage_key
-       FROM inserted
-       JOIN media_assets ma ON ma.id = inserted.media_asset_id`,
-    [input.roomTypeId, input.mediaAssetId, input.altText, input.sortOrder, input.isCover],
+       FROM room_type_images rti
+       JOIN media_assets ma ON ma.id = rti.media_asset_id
+      WHERE rti.id = $1`,
+    [inserted.insertId],
   );
 
   const row = rows[0];
@@ -377,7 +384,7 @@ export async function listRoomTypeImages(
     `SELECT ma.reference,
             ma.storage_key,
             ma.content_type,
-            ma.byte_size::text AS byte_size,
+            CAST(ma.byte_size AS CHAR) AS byte_size,
             ma.checksum_sha256,
             ma.width,
             ma.height,
@@ -524,7 +531,7 @@ export async function updateRoomTypeImageAltText(
   const { rowCount } = await client.query(
     `UPDATE room_type_images
         SET alt_text = $3,
-            updated_at = now()
+            updated_at = UTC_TIMESTAMP(3)
       WHERE id = $2
         AND room_type_id = $1`,
     [roomTypeId, imageId, altText],
@@ -548,7 +555,7 @@ export async function updateRoomTypeImageAltText(
  * That sequence never holds two covers at once, so
  * `room_type_images_cover_key` — a unique index on `(room_type_id) WHERE
  * is_cover` — is never transiently violated. The obvious single statement,
- * `SET is_cover = (id = $2)`, is avoided deliberately: PostgreSQL gives no
+ * `SET is_cover = (id = $2)`, is avoided deliberately: MySQL gives no
  * guarantee about the order in which it updates rows, so it may set the new
  * cover before clearing the old one and trip the index on a row it is about to
  * fix.
@@ -573,7 +580,7 @@ export async function setRoomTypeImageAsCover(
   const cleared = await client.query(
     `UPDATE room_type_images
         SET is_cover = false,
-            updated_at = now()
+            updated_at = UTC_TIMESTAMP(3)
       WHERE room_type_id = $1
         AND is_cover
         AND id <> $2`,
@@ -583,7 +590,7 @@ export async function setRoomTypeImageAsCover(
   const promoted = await client.query(
     `UPDATE room_type_images
         SET is_cover = true,
-            updated_at = now()
+            updated_at = UTC_TIMESTAMP(3)
       WHERE id = $2
         AND room_type_id = $1
         AND NOT is_cover`,
@@ -708,7 +715,7 @@ export async function moveRoomTypeImage(
     await client.query(
       `UPDATE room_type_images
           SET sort_order = $3,
-              updated_at = now()
+              updated_at = UTC_TIMESTAMP(3)
         WHERE id = $2
           AND room_type_id = $1`,
       [roomTypeId, image.id, position],
@@ -735,18 +742,16 @@ export async function moveRoomTypeImage(
  */
 export async function compactRoomTypeImageOrder(client: PoolClient, roomTypeId: string): Promise<number> {
   const { rowCount } = await client.query(
-    `WITH ordered AS (
-       SELECT rti.id,
-              (ROW_NUMBER() OVER (ORDER BY rti.sort_order ASC, rti.id ASC) - 1)::int AS position
-         FROM room_type_images rti
-        WHERE rti.room_type_id = $1
-     )
-     UPDATE room_type_images rti
-        SET sort_order = ordered.position,
-            updated_at = now()
-       FROM ordered
-      WHERE rti.id = ordered.id
-        AND rti.room_type_id = $1
+    `UPDATE room_type_images rti
+       JOIN (
+         SELECT r.id,
+                (ROW_NUMBER() OVER (ORDER BY r.sort_order ASC, r.id ASC) - 1) AS position
+           FROM room_type_images r
+          WHERE r.room_type_id = $1
+       ) ordered ON ordered.id = rti.id
+        SET rti.sort_order = ordered.position,
+            rti.updated_at = UTC_TIMESTAMP(3)
+      WHERE rti.room_type_id = $1
         AND rti.sort_order <> ordered.position`,
     [roomTypeId],
   );
@@ -763,7 +768,7 @@ export async function compactRoomTypeImageOrder(client: PoolClient, roomTypeId: 
  *
  * The asset row survives this and is deleted separately, by the media
  * repository, once nothing references it. Both foreign keys are RESTRICT, so
- * the order is not a preference — PostgreSQL refuses the other one.
+ * the order is not a preference — MySQL refuses the other one.
  *
  * The room type is named alongside the id for the same reason as everywhere
  * else in this file: a statement that can only affect the room type it was

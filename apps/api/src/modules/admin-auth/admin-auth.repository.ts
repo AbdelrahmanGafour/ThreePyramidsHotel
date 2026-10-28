@@ -90,7 +90,7 @@ export async function findAdminSessionByTokenHash(
        JOIN admin_users u ON u.id = s.admin_user_id
       WHERE s.token_hash = $1
         AND s.revoked_at IS NULL
-        AND s.expires_at > now()
+        AND s.expires_at > UTC_TIMESTAMP(3)
         AND u.is_active = true`,
     [tokenHash],
   );
@@ -118,12 +118,12 @@ export async function deleteSessionByTokenHash(tokenHash: string): Promise<void>
 
 /** Housekeeping for this one account as it signs in; not a general sweep. */
 export async function deleteExpiredSessions(client: PoolClient, adminUserId: string): Promise<void> {
-  await client.query('DELETE FROM admin_sessions WHERE admin_user_id = $1 AND expires_at <= now()', [
+  await client.query('DELETE FROM admin_sessions WHERE admin_user_id = $1 AND expires_at <= UTC_TIMESTAMP(3)', [
     adminUserId,
   ]);
 }
 
-/** Stores only the token hash: the raw token never reaches PostgreSQL. */
+/** Stores only the token hash: the raw token never reaches the database. */
 export async function insertSession(
   client: PoolClient,
   input: { adminUserId: string; tokenHash: string; expiresAt: Date },
@@ -169,7 +169,7 @@ export async function findAdminById(id: string): Promise<AdminAccount | null> {
  *
  * `updated_at` moves only on a real change, so setting an address to the one
  * already stored answers success without disturbing the row. The same
- * `IS DISTINCT FROM` guard the journey and room-type status writes use.
+ * null-safe `<=>` guard the journey and room-type status writes use.
  *
  * Uniqueness is not checked here and must not be: a `23505` on
  * `admin_users_email_key` propagates to the service, which is the only thing
@@ -183,8 +183,8 @@ export async function updateAdminEmail(
 ): Promise<boolean> {
   const { rowCount } = await client.query(
     `UPDATE admin_users
-        SET email = $2,
-            updated_at = CASE WHEN email IS DISTINCT FROM $2 THEN now() ELSE updated_at END
+        SET updated_at = CASE WHEN NOT (email <=> $2) THEN UTC_TIMESTAMP(3) ELSE updated_at END,
+            email = $2
       WHERE id = $1`,
     [id, email],
   );
@@ -208,7 +208,7 @@ export async function updateAdminPasswordHash(
   const { rowCount } = await client.query(
     `UPDATE admin_users
         SET password_hash = $2,
-            updated_at = now()
+            updated_at = UTC_TIMESTAMP(3)
       WHERE id = $1`,
     [id, passwordHash],
   );

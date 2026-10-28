@@ -30,7 +30,7 @@ export type PublicRoomTypeImage = {
  * Guest-facing room type shape. Internal columns (id, is_active, sort_order,
  * timestamps) and physical rooms are deliberately not part of this contract.
  *
- * PostgreSQL numeric values stay strings so no precision is lost on the way out.
+ * MySQL numeric values stay strings so no precision is lost on the way out.
  */
 export type RoomTypeResponse = {
   slug: string;

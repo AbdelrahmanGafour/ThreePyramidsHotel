@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
+import { toNumbers } from './support/core-sql';
 
 // Exercises GET /api/v1/admin/auth/session and the session guard over real HTTP
-// against a real PostgreSQL database, using its own admin accounts.
+// against a real MySQL database, using its own admin accounts.
 if (!process.env.DATABASE_URL) {
   throw new Error(
     'DATABASE_URL is required for the integration tests. Run them from a shell that has it set, e.g.\n' +
@@ -55,17 +56,17 @@ async function insertAdmin(admin: typeof activeAdmin, isActive: boolean): Promis
 /** Creates a session row directly, so expiry and revocation can be set exactly. */
 async function insertSessionFor(
   email: string,
-  options: { expiresIn?: string; createdAgo?: string; revoked?: boolean } = {},
+  options: { expiresInSeconds?: number; createdAgoSeconds?: number; revoked?: boolean } = {},
 ): Promise<string> {
   const rawToken = generateSessionToken();
-  const { expiresIn = '1 hour', createdAgo = '1 minute', revoked = false } = options;
+  const { expiresInSeconds = 3600, createdAgoSeconds = 60, revoked = false } = options;
 
   await dbPool.query(
     `INSERT INTO admin_sessions (admin_user_id, token_hash, expires_at, created_at, revoked_at)
-     SELECT id, $2, now() + $3::interval, now() - $4::interval, ${revoked ? 'now()' : 'NULL'}
+     SELECT id, $2, DATE_ADD(UTC_TIMESTAMP(3), INTERVAL $3 SECOND), DATE_SUB(UTC_TIMESTAMP(3), INTERVAL $4 SECOND), ${revoked ? 'UTC_TIMESTAMP(3)' : 'NULL'}
        FROM admin_users
       WHERE email = $1`,
-    [email, hashSessionToken(rawToken), expiresIn, createdAgo],
+    [email, hashSessionToken(rawToken), expiresInSeconds, createdAgoSeconds],
   );
 
   return rawToken;
@@ -131,20 +132,20 @@ after(async () => {
   try {
     await dbPool.query(
       `DELETE FROM admin_sessions
-        WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email = ANY($1::text[]))`,
+        WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email IN ($1))`,
       [fixtureEmails],
     );
-    await dbPool.query('DELETE FROM admin_users WHERE email = ANY($1::text[])', [fixtureEmails]);
+    await dbPool.query('DELETE FROM admin_users WHERE email IN ($1)', [fixtureEmails]);
 
     const { rows } = await dbPool.query<{ admins: number; sessions: number }>(
-      `SELECT (SELECT COUNT(*) FROM admin_users WHERE email = ANY($1::text[]))::int AS admins,
+      `SELECT (SELECT COUNT(*) FROM admin_users WHERE email IN ($1)) AS admins,
               (SELECT COUNT(*) FROM admin_sessions s
                  JOIN admin_users u ON u.id = s.admin_user_id
-                WHERE u.email = ANY($1::text[]))::int AS sessions`,
+                WHERE u.email IN ($1)) AS sessions`,
       [fixtureEmails],
     );
 
-    assert.deepEqual(rows[0], { admins: 0, sessions: 0 }, 'fixture admins were not fully removed');
+    assert.deepEqual(rows[0] && toNumbers(rows[0]), { admins: 0, sessions: 0 }, 'fixture admins were not fully removed');
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -218,8 +219,8 @@ describe('GET /api/v1/admin/auth/session', () => {
   it('refuses an unknown, expired or revoked session identically', async () => {
     const unknownToken = generateSessionToken();
     const expiredToken = await insertSessionFor(activeAdmin.email, {
-      expiresIn: '-1 hour',
-      createdAgo: '2 hours',
+      expiresInSeconds: -3600,
+      createdAgoSeconds: 7200,
     });
     const revokedToken = await insertSessionFor(activeAdmin.email, { revoked: true });
 
@@ -235,7 +236,7 @@ describe('GET /api/v1/admin/auth/session', () => {
       assert.equal(response.setCookie.length, 0);
     }
 
-    await dbPool.query('DELETE FROM admin_sessions WHERE token_hash = ANY($1::text[])', [
+    await dbPool.query('DELETE FROM admin_sessions WHERE token_hash IN ($1)', [
       [hashSessionToken(expiredToken), hashSessionToken(revokedToken)],
     ]);
   });

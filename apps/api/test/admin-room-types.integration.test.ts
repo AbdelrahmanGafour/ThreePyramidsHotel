@@ -3,10 +3,11 @@ import { randomUUID } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
+import { insertedId, toNumbers } from './support/core-sql';
 import { generateBookingReference } from '../src/modules/reservations/booking-reference';
 
 // Exercises the admin room-type endpoints over real HTTP against a real
-// PostgreSQL database: the real app, the real session guard, the real
+// MySQL database: the real app, the real session guard, the real
 // repository SQL. Nothing is mocked.
 //
 // It creates its own admin account, room types, physical rooms and one
@@ -108,13 +109,12 @@ async function insertRoomType(input: {
   isActive?: boolean;
   nullable?: boolean;
 }): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO room_types (
        slug, name, short_description, description, capacity,
        bed_type, bed_count, size_sqm, view, base_nightly_rate, is_active, sort_order
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     RETURNING id`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [
       input.slug,
       input.name,
@@ -131,23 +131,19 @@ async function insertRoomType(input: {
     ],
   );
 
-  const row = rows[0];
-  assert.ok(row, `failed to insert fixture room type ${input.slug}`);
-  roomTypeIds[input.slug] = row.id;
+  const id = insertedId(inserted);
+  roomTypeIds[input.slug] = id;
 
-  return row.id;
+  return id;
 }
 
 async function insertRoom(roomTypeId: string, roomNumber: string, isActive = true): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
-    `INSERT INTO rooms (room_type_id, room_number, is_active) VALUES ($1, $2, $3) RETURNING id`,
+  const inserted = await dbPool.query(
+    `INSERT INTO rooms (room_type_id, room_number, is_active) VALUES ($1, $2, $3)`,
     [roomTypeId, roomNumber, isActive],
   );
 
-  const row = rows[0];
-  assert.ok(row, `failed to insert fixture room ${roomNumber}`);
-
-  return row.id;
+  return insertedId(inserted);
 }
 
 async function readRoomType(slug: string) {
@@ -160,7 +156,7 @@ async function readRoomType(slug: string) {
     created_at: Date;
     updated_at: Date;
   }>(
-    `SELECT slug, name, base_nightly_rate::text AS base_nightly_rate, capacity, is_active, created_at, updated_at
+    `SELECT slug, name, base_nightly_rate AS base_nightly_rate, capacity, is_active, created_at, updated_at
        FROM room_types WHERE slug = $1`,
     [slug],
   );
@@ -237,7 +233,7 @@ before(async () => {
        status, currency, nightly_rate_snapshot, total_amount, special_requests
      )
      VALUES ($1, $2, $3, 'Amelia', 'Hartwell', $4, '+201000000000', 'Egypt',
-             2, 0, '2099-06-01'::date, '2099-06-03'::date, 'pending', 'EGP', $5, $6, NULL)`,
+             2, 0, '2099-06-01', '2099-06-03', 'pending', 'EGP', $5, $6, NULL)`,
     [generateBookingReference(), pricedId, pricedRoom, `guest-${runId}@example.com`, '1500.00', '3000.00'],
   );
 
@@ -259,9 +255,9 @@ after(async () => {
   try {
     const ids = Object.values(roomTypeIds);
 
-    await dbPool.query('DELETE FROM reservations WHERE room_type_id = ANY($1::bigint[])', [ids]);
-    await dbPool.query('DELETE FROM rooms WHERE room_type_id = ANY($1::bigint[])', [ids]);
-    await dbPool.query('DELETE FROM room_types WHERE id = ANY($1::bigint[])', [ids]);
+    await dbPool.query('DELETE FROM reservations WHERE room_type_id IN ($1)', [ids]);
+    await dbPool.query('DELETE FROM rooms WHERE room_type_id IN ($1)', [ids]);
+    await dbPool.query('DELETE FROM room_types WHERE id IN ($1)', [ids]);
     await dbPool.query(
       `DELETE FROM admin_sessions WHERE admin_user_id IN (SELECT id FROM admin_users WHERE email = $1)`,
       [admin.email],
@@ -269,15 +265,15 @@ after(async () => {
     await dbPool.query('DELETE FROM admin_users WHERE email = $1', [admin.email]);
 
     const { rows } = await dbPool.query<{ reservations: number; rooms: number; types: number; admins: number }>(
-      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = ANY($1::bigint[]))::int AS reservations,
-              (SELECT COUNT(*) FROM rooms WHERE room_type_id = ANY($1::bigint[]))::int AS rooms,
-              (SELECT COUNT(*) FROM room_types WHERE id = ANY($1::bigint[]))::int AS types,
-              (SELECT COUNT(*) FROM admin_users WHERE email = $2)::int AS admins`,
+      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id IN ($1)) AS reservations,
+              (SELECT COUNT(*) FROM rooms WHERE room_type_id IN ($1)) AS rooms,
+              (SELECT COUNT(*) FROM room_types WHERE id IN ($1)) AS types,
+              (SELECT COUNT(*) FROM admin_users WHERE email = $2) AS admins`,
       [ids, admin.email],
     );
 
     assert.deepEqual(
-      rows[0],
+      rows[0] && toNumbers(rows[0]),
       { reservations: 0, rooms: 0, types: 0, admins: 0 },
       'fixtures were not fully removed',
     );
@@ -708,8 +704,8 @@ describe('historical pricing safety', () => {
       nightly_rate_snapshot: string;
       total_amount: string;
     }>(
-      `SELECT booking_reference, nightly_rate_snapshot::text AS nightly_rate_snapshot,
-              total_amount::text AS total_amount
+      `SELECT booking_reference, nightly_rate_snapshot AS nightly_rate_snapshot,
+              total_amount AS total_amount
          FROM reservations WHERE room_type_id = $1`,
       [roomTypeIds[slugs.priced]],
     );
@@ -731,7 +727,7 @@ describe('historical pricing safety', () => {
       nightly_rate_snapshot: string;
       total_amount: string;
     }>(
-      `SELECT nightly_rate_snapshot::text AS nightly_rate_snapshot, total_amount::text AS total_amount
+      `SELECT nightly_rate_snapshot AS nightly_rate_snapshot, total_amount AS total_amount
          FROM reservations WHERE booking_reference = $1`,
       [reservation.booking_reference],
     );

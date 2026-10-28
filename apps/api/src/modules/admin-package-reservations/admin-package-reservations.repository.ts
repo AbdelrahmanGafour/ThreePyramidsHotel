@@ -1,5 +1,7 @@
-import type { QueryResult, QueryResultRow } from '../../db/pool';
+import type { PoolClient, QueryResult, QueryResultRow } from '../../db/pool';
 import { dbPool } from '../../db/pool';
+import { buildPackageReservationConfirmedEvent } from '../notifications/notifications.events';
+import { insertNotificationEvent } from '../notifications/notifications.repository';
 import { allowedSourceStatusesFor } from './admin-package-reservations.status';
 import type {
   AdminPackageReservationDetail,
@@ -49,6 +51,8 @@ type AdminPackageReservationListRow = {
  */
 type Queryable = {
   query<R extends QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<R>>;
+  /** Present on the real pool; the status write needs a connection of its own. */
+  connect?(): Promise<PoolClient>;
 };
 
 let queryable: Queryable = dbPool;
@@ -178,22 +182,22 @@ export async function findAdminPackageReservations(): Promise<AdminPackageReserv
             pr.package_code_snapshot,
             p.slug AS package_slug,
             pr.package_title_snapshot,
-            pv.key AS variant_key,
+            pv.\`key\` AS variant_key,
             pr.variant_label_snapshot,
             pr.guest_first_name,
             pr.guest_last_name,
             pr.guest_email,
             pr.guest_phone,
-            -- ::text keeps the calendar day exactly as stored.
-            pr.tour_date::text AS tour_date,
+            -- DATE comes back from the pool adapter as a 'YYYY-MM-DD' string.
+            pr.tour_date AS tour_date,
             pr.adults,
             pr.children,
             pr.status,
             pr.pricing_status,
             pr.currency,
             -- Exact two-decimal money as a string, never a float. NULL stays
-            -- NULL: ::text on a NULL numeric is still NULL.
-            pr.total_amount_snapshot::text AS total_amount_snapshot,
+            -- NULL (DECIMAL arrives as a string from the adapter).
+            pr.total_amount_snapshot AS total_amount_snapshot,
             pr.created_at
        FROM package_reservations pr
        JOIN package_variants pv ON pv.id = pr.variant_id AND pv.package_id = pr.package_id
@@ -295,14 +299,14 @@ export async function findAdminPackageReservationByReference(
             pr.package_code_snapshot,
             p.slug AS package_slug,
             pr.package_title_snapshot,
-            pv.key AS variant_key,
+            pv.\`key\` AS variant_key,
             pr.variant_label_snapshot,
             pr.guest_first_name,
             pr.guest_last_name,
             pr.guest_email,
             pr.guest_phone,
             pr.guest_country,
-            pr.tour_date::text AS tour_date,
+            pr.tour_date AS tour_date,
             pr.adults,
             pr.children,
             pr.child_ages,
@@ -311,10 +315,10 @@ export async function findAdminPackageReservationByReference(
             pr.pricing_status,
             pr.currency,
             -- Exact two-decimal money as strings, never floats. A NULL
-            -- numeric stays NULL through ::text.
-            pr.adult_unit_rate_snapshot::text AS adult_unit_rate_snapshot,
-            pr.child_unit_rate_snapshot::text AS child_unit_rate_snapshot,
-            pr.total_amount_snapshot::text AS total_amount_snapshot,
+            -- decimal stays NULL.
+            pr.adult_unit_rate_snapshot AS adult_unit_rate_snapshot,
+            pr.child_unit_rate_snapshot AS child_unit_rate_snapshot,
+            pr.total_amount_snapshot AS total_amount_snapshot,
             pr.created_at
        FROM package_reservations pr
        JOIN package_variants pv ON pv.id = pr.variant_id AND pv.package_id = pr.package_id
@@ -338,159 +342,138 @@ export type AdminPackageReservationStatusChange =
  * Moves one reservation to `nextStatus`, if the rule allows it from wherever
  * it is now.
  *
- * ONE statement does the whole job. The UPDATE is guarded by
- * `status = ANY($3)` — the allowed source states, read from
- * `allowedSourceStatusesFor` rather than restated here — so the transition
- * rule is enforced by the write itself rather than by a check that happened
- * earlier and might no longer hold.
- *
- * That is what makes it safe against concurrent transitions. Two
- * administrators confirming and cancelling the same pending reservation at
- * the same instant both reach the UPDATE; PostgreSQL gives the row lock to
- * one, and when the second acquires it, it re-evaluates the WHERE clause
- * against the now-committed row. The status is no longer in the allowed set,
- * so the second matches zero rows and is refused. Neither can overwrite a
- * terminal state, and no read-then-write window exists for them to race in.
- *
- * No BEGIN/COMMIT: a single statement is already atomic, so this path never
- * has a commit whose outcome could be unknown. The public reservation POST
- * path keeps its own transaction and its own uncertainty handling, untouched.
- *
- * The CTE returns the updated row and the outer SELECT joins it to its
- * package and variant, so the caller gets the full detail without a second
- * read that could observe a different state. `RETURNING *` feeds only the
- * explicit projection below — that projection, and the mapper it feeds, are
- * what decide which columns can ever leave this module.
- *
- * Only `status` and `updated_at` are written on the reservation. Every
- * snapshot column is untouched, and no price is recomputed.
- *
- * ---------------------------------------------------------------------------
- * THE GUEST'S CONFIRMATION RIDES IN THE SAME STATEMENT
- *
- * `notification_event` is a data-modifying CTE, not a second query, because
- * this path has no transaction to put a second query in. One statement is
- * already atomic, so the status change and the message the guest is owed
- * commit together or not at all — the same guarantee the room and journey
- * creation paths get from a transaction, obtained here without opening one.
- *
- * It selects `FROM updated`, so it is strictly dependent on the UPDATE:
- *
- *   * the UPDATE matched nothing (not found, or a refused transition) —
- *     `updated` is empty, the INSERT inserts no rows, and no event exists for
- *     a change that never happened;
- *   * the UPDATE matched but this is a cancellation — `WHERE u.status =
- *     'confirmed'` excludes it. A cancellation is a different conversation and
- *     a different event, and this slice owes the guest nothing when a booking
- *     is called off;
- *   * the UPDATE confirmed the booking — exactly one row is selected, so
- *     exactly one event is written.
- *
- * Nothing references `notification_event` in the outer SELECT and nothing
- * needs to: PostgreSQL executes a data-modifying WITH clause exactly once and
- * always to completion, whether or not the primary query reads its output. It
- * cannot be optimised away, and adding a reference would only distort the
- * result set.
- *
- * Strict, and allowed to be fatal. No `ON CONFLICT`: a conflict on
- * `UNIQUE (event_type, booking_reference)` means a second confirmation event
- * for a booking reference that is unique forever, which has no benign reading.
- * Because it is one statement, that error aborts the whole thing — the status
- * change included — and propagates untranslated. An administrator who sees an
- * error and retries costs less than a guest who is never told their journey
- * was confirmed.
- *
- * The payload is built by `jsonb_build_object` here rather than by
- * `buildPackageReservationConfirmedEvent` in the service, because the event
- * cannot be assembled in TypeScript without first reading the row back —
- * which would be the second statement this design exists to avoid. It must
- * therefore match that builder's contract field for field, and a test pins the
- * two together. Money keeps its exact stored decimals via `::text`, the tour
- * date stays a calendar day, and the guest's address goes to `recipient_email`
- * only — a confirmation does not read a person their own address back.
+ * MySQL has no data-modifying CTEs, so this is one short transaction: lock the
+ * row (`FOR UPDATE`), check the current status against
+ * `allowedSourceStatusesFor`, UPDATE, queue the guest's confirmation when the
+ * booking is confirmed, COMMIT. Concurrent transitions serialise on the row
+ * lock; the loser re-reads the committed status and is refused, so neither can
+ * overwrite a terminal state. A failure at any step rolls everything back,
+ * the outbox row included.
  */
 export async function updateAdminPackageReservationStatus(
   bookingReference: string,
   nextStatus: AdminPackageReservationStatusTarget,
 ): Promise<AdminPackageReservationStatusChange> {
-  const { rows } = await queryable.query<AdminPackageReservationDetailRow>(
-    `WITH updated AS (
-       UPDATE package_reservations
-          SET status = $2,
-              updated_at = now()
-        WHERE booking_reference = $1
-          AND status = ANY($3::text[])
-       RETURNING *
-     ),
-     notification_event AS (
-       INSERT INTO notification_outbox
-         (event_type, booking_reference, recipient_kind, recipient_email, template_key, payload)
-       SELECT 'package_reservation_confirmed',
-              u.booking_reference,
-              'guest',
-              u.guest_email,
-              'package_confirmed_guest.v1',
-              jsonb_build_object(
-                'bookingReference', u.booking_reference,
-                'guestFirstName', u.guest_first_name,
-                'guestLastName', u.guest_last_name,
-                'packageTitle', u.package_title_snapshot,
-                'variantLabel', u.variant_label_snapshot,
-                'tourDate', u.tour_date::text,
-                'adults', u.adults,
-                'children', u.children,
-                'pricingStatus', u.pricing_status,
-                'adultUnitRate', u.adult_unit_rate_snapshot::text,
-                'childUnitRate', u.child_unit_rate_snapshot::text,
-                'totalAmount', u.total_amount_snapshot::text,
-                'currency', 'USD'::text,
-                'specialRequests', u.special_requests
-              )
-         FROM updated u
-        WHERE u.status = 'confirmed'
-     )
-     SELECT u.booking_reference,
-            u.package_code_snapshot,
-            p.slug AS package_slug,
-            u.package_title_snapshot,
-            pv.key AS variant_key,
-            u.variant_label_snapshot,
-            u.guest_first_name,
-            u.guest_last_name,
-            u.guest_email,
-            u.guest_phone,
-            u.guest_country,
-            u.tour_date::text AS tour_date,
-            u.adults,
-            u.children,
-            u.child_ages,
-            u.special_requests,
-            u.status,
-            u.pricing_status,
-            u.currency,
-            u.adult_unit_rate_snapshot::text AS adult_unit_rate_snapshot,
-            u.child_unit_rate_snapshot::text AS child_unit_rate_snapshot,
-            u.total_amount_snapshot::text AS total_amount_snapshot,
-            u.created_at
-       FROM updated u
-       JOIN package_variants pv ON pv.id = u.variant_id AND pv.package_id = u.package_id
-       JOIN packages p ON p.id = pv.package_id`,
-    [bookingReference, nextStatus, allowedSourceStatusesFor(nextStatus)],
-  );
-
-  const row = rows[0];
-
-  if (row) {
-    return { outcome: 'updated', reservation: toAdminPackageReservationDetail(row) };
+  if (!queryable.connect) {
+    throw new Error('The status change needs a database handle that can open a transaction');
   }
 
-  // Nothing was updated. Telling the two reasons apart is a read, and only a
-  // read: the write above has already settled, so this cannot change what
-  // happened — it only decides whether the administrator is told 404 or 409.
-  const { rows: existing } = await queryable.query<{ booking_reference: string }>(
-    'SELECT booking_reference FROM package_reservations WHERE booking_reference = $1',
-    [bookingReference],
-  );
+  const client = await queryable.connect();
+  let discard = false;
+  let open = false;
 
-  return existing[0] ? { outcome: 'invalid-transition' } : { outcome: 'not-found' };
+  try {
+    await client.query('BEGIN');
+    open = true;
+
+    // The row lock is what serialises two administrators moving the same
+    // reservation: the second waits here, then reads the committed status and
+    // is refused by the check below. No read-then-write window remains.
+    const { rows } = await client.query<AdminPackageReservationDetailRow>(
+      `SELECT u.booking_reference,
+              u.package_code_snapshot,
+              p.slug AS package_slug,
+              u.package_title_snapshot,
+              pv.\`key\` AS variant_key,
+              u.variant_label_snapshot,
+              u.guest_first_name,
+              u.guest_last_name,
+              u.guest_email,
+              u.guest_phone,
+              u.guest_country,
+              u.tour_date AS tour_date,
+              u.adults,
+              u.children,
+              u.child_ages,
+              u.special_requests,
+              u.status,
+              u.pricing_status,
+              u.currency,
+              u.adult_unit_rate_snapshot AS adult_unit_rate_snapshot,
+              u.child_unit_rate_snapshot AS child_unit_rate_snapshot,
+              u.total_amount_snapshot AS total_amount_snapshot,
+              u.created_at
+         FROM package_reservations u
+         JOIN package_variants pv ON pv.id = u.variant_id AND pv.package_id = u.package_id
+         JOIN packages p ON p.id = pv.package_id
+        WHERE u.booking_reference = $1
+          FOR UPDATE OF u`,
+      [bookingReference],
+    );
+
+    const current = rows[0];
+
+    if (!current) {
+      await client.query('ROLLBACK');
+      open = false;
+      return { outcome: 'not-found' };
+    }
+
+    if (!allowedSourceStatusesFor(nextStatus).some((allowed) => allowed === current.status)) {
+      await client.query('ROLLBACK');
+      open = false;
+      return { outcome: 'invalid-transition' };
+    }
+
+    // Only `status` and `updated_at` are written on the reservation. Every
+    // snapshot column is untouched, and no price is recomputed.
+    await client.query(
+      `UPDATE package_reservations
+          SET status = $2,
+              updated_at = UTC_TIMESTAMP(3)
+        WHERE booking_reference = $1`,
+      [bookingReference, nextStatus],
+    );
+
+    // The guest's confirmation commits with the status change or not at all.
+    // Strict and allowed to be fatal: no duplicate handling, so a conflict on
+    // UNIQUE (event_type, booking_reference) rolls the status change back.
+    // A cancellation owes the guest nothing here.
+    if (nextStatus === 'confirmed') {
+      await insertNotificationEvent(
+        client,
+        buildPackageReservationConfirmedEvent({
+          bookingReference: current.booking_reference,
+          guestFirstName: current.guest_first_name,
+          guestLastName: current.guest_last_name,
+          guestEmail: current.guest_email,
+          packageTitle: current.package_title_snapshot,
+          variantLabel: current.variant_label_snapshot,
+          tourDate: current.tour_date,
+          adults: current.adults,
+          children: current.children,
+          pricingStatus: toPricingStatus(current.pricing_status),
+          adultUnitRate: current.adult_unit_rate_snapshot,
+          childUnitRate: current.child_unit_rate_snapshot,
+          totalAmount: current.total_amount_snapshot,
+          specialRequests: current.special_requests,
+        }),
+      );
+    }
+
+    try {
+      await client.query('COMMIT');
+    } catch (error) {
+      open = false;
+      discard = true;
+      throw error;
+    }
+    open = false;
+
+    return {
+      outcome: 'updated',
+      reservation: toAdminPackageReservationDetail({ ...current, status: nextStatus }),
+    };
+  } catch (error) {
+    if (open) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        discard = true;
+      }
+    }
+    throw error;
+  } finally {
+    client.release(discard);
+  }
 }

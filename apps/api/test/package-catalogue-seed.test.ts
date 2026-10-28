@@ -163,10 +163,10 @@ describe('variant reorder parking', () => {
         if (text.includes('FROM packages')) {
           return { rows: [{ id: '1', code: 'TEST-EXCURSION', slug: 'test-excursion', seed_managed: true }] };
         }
-        if (text.includes('SELECT key, sort_order FROM package_variants')) {
+        if (text.includes('SELECT `key`, sort_order FROM package_variants')) {
           return { rows: existingVariants.map((v) => ({ key: v.key, sort_order: v.sortOrder })) };
         }
-        if (text.includes('INSERT INTO package_variants')) {
+        if (text.includes('SELECT id FROM package_variants')) {
           return { rows: [{ id: '10' }] };
         }
         return { rows: [] };
@@ -180,7 +180,7 @@ describe('variant reorder parking', () => {
     statements.findIndex((statement) => statement.text.includes(needle));
 
   const parkStatements = (statements: Recorded[]) =>
-    statements.filter((statement) => statement.text.includes('WITH parked'));
+    statements.filter((statement) => statement.text.includes('parked.rn'));
 
   /** Two variants, so a genuine reorder is expressible. */
   function twoVariantFixture(): BrochurePackageSeed {
@@ -232,8 +232,8 @@ describe('variant reorder parking', () => {
 
     await seedBrochurePackageCatalogue(client, [twoVariantFixture()]);
 
-    const load = find(statements, 'SELECT key, sort_order FROM package_variants');
-    const park = find(statements, 'WITH parked');
+    const load = find(statements, 'SELECT `key`, sort_order FROM package_variants');
+    const park = find(statements, 'parked.rn');
     const clearDefaults = find(statements, 'SET is_default = false');
     const upsert = find(statements, 'INSERT INTO package_variants');
 
@@ -282,7 +282,7 @@ describe('variant reorder parking', () => {
     );
 
     // The locked read happened; nothing after it did.
-    assert.ok(find(statements, 'SELECT key, sort_order FROM package_variants') >= 0);
+    assert.ok(find(statements, 'SELECT `key`, sort_order FROM package_variants') >= 0);
     assert.equal(parkStatements(statements).length, 0, 'no parking write');
     assert.equal(find(statements, 'SET is_default = false'), -1, 'no default reset');
     assert.equal(find(statements, 'INSERT INTO package_variants'), -1, 'no upsert');

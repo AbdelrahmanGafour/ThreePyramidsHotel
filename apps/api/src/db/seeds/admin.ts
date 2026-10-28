@@ -108,17 +108,20 @@ async function createAdmin(): Promise<void> {
 
     // ON CONFLICT still covers the rare case of a concurrent insert between the
     // read above and this write.
-    const { rows } = await client.query<{ id: string }>(
+    await client.query(
       `INSERT INTO admin_users (email, display_name, password_hash)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (email) DO UPDATE SET
-         display_name = EXCLUDED.display_name,
-         password_hash = EXCLUDED.password_hash,
+       VALUES ($1, $2, $3) AS excluded
+       ON DUPLICATE KEY UPDATE
+         display_name = excluded.display_name,
+         password_hash = excluded.password_hash,
          is_active = true,
-         updated_at = now()
-       RETURNING id`,
+         updated_at = UTC_TIMESTAMP(3)`,
       [email, displayName, passwordHash],
     );
+
+    const { rows } = await client.query<{ id: string }>('SELECT id FROM admin_users WHERE email = $1', [
+      email,
+    ]);
 
     const row = rows[0];
 

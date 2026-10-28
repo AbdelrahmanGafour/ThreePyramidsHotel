@@ -1,18 +1,16 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, it, mock } from 'node:test';
-import { runner } from 'node-pg-migrate';
 import type { PackageCard, PackageDetail } from '../src/modules/packages/packages.types';
 
-// Uses the dedicated migrated disposable cluster, never hotel development.
+// Uses the dedicated migrated disposable MySQL database, never hotel development.
 const target = new URL(process.env.DATABASE_URL ?? 'http://invalid');
 assert.equal(process.env.PACKAGES_DISPOSABLE_TEST, '1');
 assert.equal(target.hostname, '127.0.0.1');
-assert.ok(target.port === '5434' || target.port === '55432');
-assert.equal(target.pathname, '/hotel_reservation_packages_test');
+assert.equal(target.port, '3307');
+assert.match(target.pathname, /^\/hotel_[a-z_]*test$/);
 assert.equal(target.search, '');
 let pool: typeof import('../src/db/pool');
 let server: Server | undefined;
@@ -29,21 +27,14 @@ async function hotelRows() {
   const result: Record<string, unknown> = {};
   for (const table of ['room_types', 'rooms', 'reservations']) {
     result[table] = (await pool.dbPool.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
-    result[`${table}_sequence`] = (await pool.dbPool.query(`SELECT last_value, is_called FROM ${table}_id_seq`)).rows;
   }
   return result;
 }
 
 before(async () => {
   pool = await import('../src/db/pool.js');
-  const version = (await pool.dbPool.query("SELECT current_setting('server_version_num')::int AS version")).rows[0].version;
-  assert.ok((version >= 160000 && version < 170000) || (version >= 180000 && version < 190000), 'PostgreSQL 16 or 18 required');
-  // Do not depend on test-file execution order. UP is a no-op when the schema
-  // lifecycle suite has already run against this disposable database.
-  await runner({ databaseUrl: process.env.DATABASE_URL!, direction: 'up', migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'), log: () => undefined });
   schemaReady = true;
-  assert.equal((await pool.dbPool.query('SELECT count(*)::int AS n FROM packages')).rows[0].n, 0);
+  assert.equal(Number((await pool.dbPool.query('SELECT COUNT(*) AS n FROM packages')).rows[0].n), 0);
   hotelBefore = await hotelRows();
   const { createApp } = await import('../src/app.js');
   server = await new Promise<Server>(resolve => {
@@ -60,21 +51,21 @@ before(async () => {
     for (const [index, slug] of slugs.entries()) {
       const inserted = await client.query(`INSERT INTO packages(code,slug,title,summary,description,
         duration_label,schedule_label,operating_days,is_active,requires_price_confirmation,sort_order)
-        VALUES ($1,$1,$2,NULL,$3,NULL,NULL,$4,$5,$6,$7) RETURNING id`,
+        VALUES ($1,$1,$2,NULL,$3,NULL,NULL,$4,$5,$6,$7)`,
       [slug, `Synthetic ${index}`, index === 0 ? 'Description' : null,
-        index === 0 ? ['monday', 'friday'] : null, index !== 3, index === 1, [20, 10, 30, 0, 20][index]]);
-      ids.push(inserted.rows[0].id);
+        index === 0 ? JSON.stringify(['monday', 'friday']) : null, index !== 3, index === 1, [20, 10, 30, 0, 20][index]]);
+      ids.push(inserted.insertId!);
     }
     // Insertion order intentionally differs from public variant order.
-    const double = (await client.query(`INSERT INTO package_variants(package_id,key,label,is_default,sort_order)
-      VALUES ($1,'double','Double Cabin',false,2) RETURNING id`, [ids[0]])).rows[0].id;
-    const single = (await client.query(`INSERT INTO package_variants(package_id,key,label,is_default,sort_order,
-      child_min_age,child_max_age,child_discount_percent) VALUES ($1,'single','Single Cabin',true,1,6,12,50.00) RETURNING id`, [ids[0]])).rows[0].id;
+    const double = (await client.query(`INSERT INTO package_variants(package_id,\`key\`,label,is_default,sort_order)
+      VALUES ($1,'double','Double Cabin',false,2)`, [ids[0]])).insertId;
+    const single = (await client.query(`INSERT INTO package_variants(package_id,\`key\`,label,is_default,sort_order,
+      child_min_age,child_max_age,child_discount_percent) VALUES ($1,'single','Single Cabin',true,1,6,12,50.00)`, [ids[0]])).insertId;
     await client.query(`INSERT INTO package_rate_tiers(variant_id,min_party_size,max_party_size,adult_unit_rate)
       VALUES ($1,3,NULL,'80.00'),($1,1,1,'9999999999.99'),($1,2,2,'90.00'),($2,2,NULL,'9.25')`, [single, double]);
     for (const index of [1, 2, 3, 4]) {
-      const v = (await client.query(`INSERT INTO package_variants(package_id,key,label,is_default,sort_order)
-        VALUES ($1,'standard','Standard',true,0) RETURNING id`, [ids[index]])).rows[0].id;
+      const v = (await client.query(`INSERT INTO package_variants(package_id,\`key\`,label,is_default,sort_order)
+        VALUES ($1,'standard','Standard',true,0)`, [ids[index]])).insertId;
       if (index !== 2) await client.query(`INSERT INTO package_rate_tiers(variant_id,min_party_size,adult_unit_rate)
         VALUES ($1,1,$2)`, [v, index === 4 ? '0.00' : '100.00']);
     }
@@ -91,9 +82,9 @@ after(async () => {
   try {
     if (server) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
     if (pool && schemaReady) {
-      await pool.dbPool.query('DELETE FROM packages WHERE slug=ANY($1::text[])', [slugs]);
+      await pool.dbPool.query('DELETE FROM packages WHERE slug IN (?)', [slugs]);
       for (const table of ['packages','package_variants','package_rate_tiers','package_content_items','package_itinerary_sections','package_reservations']) {
-        assert.equal((await pool.dbPool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 0, `${table} residue`);
+        assert.equal(Number((await pool.dbPool.query(`SELECT COUNT(*) AS n FROM ${table}`)).rows[0].n), 0, `${table} residue`);
       }
       if (hotelBefore) assert.deepEqual(await hotelRows(), hotelBefore);
     }

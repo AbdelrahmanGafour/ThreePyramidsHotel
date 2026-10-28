@@ -92,6 +92,12 @@ function requireBoolean(field: string, value: unknown): boolean {
 }
 
 function requireWholeNumber(field: string, value: unknown): number {
+  // MySQL hands COUNT()/SUM() back as strings (BIGINT/DECIMAL); a plain run of
+  // digits is a whole number, anything else is still refused below.
+  if (typeof value === 'string' && /^\d{1,15}$/.test(value)) {
+    value = Number(value);
+  }
+
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`Unexpected package ${field} from the database: ${String(value)}`);
   }
@@ -182,8 +188,8 @@ export async function findAdminPackages(): Promise<AdminPackageList> {
             p.seed_managed,
             -- COUNT(pv.id), not COUNT(*): the LEFT JOIN yields one all-NULL
             -- row for a package with no variants, which COUNT(*) would call 1.
-            COUNT(pv.id)::int AS variant_count,
-            MAX(pv.label) FILTER (WHERE pv.is_default) AS default_variant_label
+            COUNT(pv.id) AS variant_count,
+            MAX(CASE WHEN pv.is_default THEN pv.label END) AS default_variant_label
        FROM packages p
        LEFT JOIN package_variants pv ON pv.package_id = p.id
       GROUP BY p.id
@@ -250,6 +256,52 @@ function asCurrency(value: unknown): 'USD' {
   return value === 'USD' ? 'USD' : invalidRow();
 }
 
+/**
+ * MySQL 8.0's JSON_ARRAYAGG has no ORDER BY, so every aggregated element
+ * carries its sort keys under "_o"; the array is ordered here and the keys
+ * dropped. Arrays without "_o" (already ordered) pass through unchanged. A
+ * JSON value that arrives as text is parsed first.
+ */
+function parseJsonValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return invalidRow();
+  }
+}
+
+function ordered(input: unknown): unknown {
+  const value = parseJsonValue(input);
+
+  if (!Array.isArray(value)) return value;
+
+  const items = value as Array<Record<string, unknown> & { _o?: unknown[] }>;
+
+  if (!items.every((item) => item && typeof item === 'object' && Array.isArray(item._o))) {
+    return value;
+  }
+
+  return [...items]
+    .sort((a, b) => {
+      const left = a._o as Array<number | string>;
+      const right = b._o as Array<number | string>;
+
+      for (let i = 0; i < left.length; i += 1) {
+        if (left[i] === right[i]) continue;
+        return left[i]! < right[i]! ? -1 : 1;
+      }
+
+      return 0;
+    })
+    .map((item) => {
+      const { _o, ...rest } = item;
+      void _o;
+      return rest;
+    });
+}
+
 function toRateTier(value: unknown): AdminPackageRateTier {
   const row = asRecord(value);
   const minPartySize = asInteger(row.min_party_size);
@@ -290,7 +342,7 @@ function toVariant(value: unknown): AdminPackageVariant {
     childMinAge,
     childMaxAge,
     childDiscountPercent,
-    rates: asArray(row.rates).map(toRateTier),
+    rates: asArray(ordered(row.rates)).map(toRateTier),
   };
 }
 
@@ -298,7 +350,7 @@ function toVariant(value: unknown): AdminPackageVariant {
 function toContent(value: unknown): AdminPackageContent {
   const content: AdminPackageContent = { included: [], excluded: [], notes: [] };
 
-  for (const entry of asArray(value)) {
+  for (const entry of asArray(ordered(value))) {
     const item = asRecord(entry);
 
     if (item.kind !== 'included' && item.kind !== 'excluded' && item.kind !== 'note') {
@@ -356,13 +408,13 @@ function toAdminPackageImageRecord(value: unknown): AdminPackageImageRecord | nu
 }
 
 export function toAdminPackageDetail(row: AdminPackageDetailRow): AdminPackageDetailRecord {
-  const operatingDays = row.operating_days === null ? null : asArray(row.operating_days).map(asText);
+  const operatingDays = row.operating_days === null ? null : asArray(parseJsonValue(row.operating_days)).map(asText);
 
   return {
     ...toAdminPackageListItem(row),
     description: asNullableText(row.description),
     operatingDays,
-    itinerary: asArray(row.itinerary).map((value) => {
+    itinerary: asArray(ordered(row.itinerary)).map((value) => {
       const section = asRecord(value);
       return {
         dayNumber: section.day_number === null ? null : asInteger(section.day_number),
@@ -371,8 +423,8 @@ export function toAdminPackageDetail(row: AdminPackageDetailRow): AdminPackageDe
       };
     }),
     content: toContent(row.content),
-    variants: asArray(row.variants).map(toVariant),
-    image: toAdminPackageImageRecord(row.image),
+    variants: asArray(ordered(row.variants)).map(toVariant),
+    image: toAdminPackageImageRecord(parseJsonValue(row.image)),
   };
 }
 
@@ -397,29 +449,30 @@ const PACKAGE_DETAIL_COLUMNS = `p.code,
             p.seed_managed,
             p.description,
             p.operating_days,
-            (SELECT COUNT(*)::int FROM package_variants v WHERE v.package_id = p.id) AS variant_count,
+            (SELECT COUNT(*) FROM package_variants v WHERE v.package_id = p.id) AS variant_count,
             (SELECT v.label FROM package_variants v
               WHERE v.package_id = p.id AND v.is_default) AS default_variant_label,
-            COALESCE((SELECT jsonb_agg(jsonb_build_object(
-                'day_number', s.day_number, 'heading', s.heading, 'body', s.body)
-                ORDER BY s.sort_order)
-              FROM package_itinerary_sections s WHERE s.package_id = p.id), '[]'::jsonb) AS itinerary,
-            COALESCE((SELECT jsonb_agg(jsonb_build_object('kind', c.kind, 'text', c.text)
-                ORDER BY c.kind, c.sort_order)
-              FROM package_content_items c WHERE c.package_id = p.id), '[]'::jsonb) AS content,
-            COALESCE((SELECT jsonb_agg(jsonb_build_object(
-                'key', v.key, 'label', v.label, 'is_default', v.is_default,
+            COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT(
+                'day_number', s.day_number, 'heading', s.heading, 'body', s.body,
+                '_o', JSON_ARRAY(s.sort_order)))
+              FROM package_itinerary_sections s WHERE s.package_id = p.id), JSON_ARRAY()) AS itinerary,
+            COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT('kind', c.kind, 'text', c.text,
+                '_o', JSON_ARRAY(c.kind, c.sort_order)))
+              FROM package_content_items c WHERE c.package_id = p.id), JSON_ARRAY()) AS content,
+            COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT(
+                'key', v.\`key\`, 'label', v.label,
+                'is_default', IF(v.is_default, CAST('true' AS JSON), CAST('false' AS JSON)),
                 'sort_order', v.sort_order,
                 'child_min_age', v.child_min_age, 'child_max_age', v.child_max_age,
-                'child_discount_percent', v.child_discount_percent::text,
-                'rates', COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                'child_discount_percent', CAST(v.child_discount_percent AS CHAR),
+                'rates', COALESCE((SELECT JSON_ARRAYAGG(JSON_OBJECT(
                     'min_party_size', r.min_party_size, 'max_party_size', r.max_party_size,
-                    'adult_unit_rate', r.adult_unit_rate::text, 'currency', r.currency)
-                    ORDER BY r.min_party_size)
-                  FROM package_rate_tiers r WHERE r.variant_id = v.id), '[]'::jsonb))
-                ORDER BY v.sort_order, v.key)
-              FROM package_variants v WHERE v.package_id = p.id), '[]'::jsonb) AS variants,
-            (SELECT jsonb_build_object(
+                    'adult_unit_rate', CAST(r.adult_unit_rate AS CHAR), 'currency', r.currency,
+                    '_o', JSON_ARRAY(r.min_party_size)))
+                  FROM package_rate_tiers r WHERE r.variant_id = v.id), JSON_ARRAY()),
+                '_o', JSON_ARRAY(v.sort_order, v.\`key\`)))
+              FROM package_variants v WHERE v.package_id = p.id), JSON_ARRAY()) AS variants,
+            (SELECT JSON_OBJECT(
                 'reference', ma.reference, 'alt_text', pm.alt_text,
                 'width', ma.width, 'height', ma.height)
               FROM package_media pm
@@ -522,21 +575,18 @@ function violatedConstraint(error: unknown): string | null {
 export async function insertAdminPackage(
   input: AdminPackageCreateInput,
 ): Promise<AdminPackageCreateResult> {
-  let rows: AdminPackageDetailRow[];
+  let insertedId: string | undefined;
 
   try {
-    ({ rows } = await queryable.query<AdminPackageDetailRow>(
-      `WITH inserted AS (
-         INSERT INTO packages (
-           code, slug, title, summary, description, duration_label, schedule_label,
-           operating_days, requires_price_confirmation, sort_order,
-           is_active, seed_managed
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false, false)
-         RETURNING *
+    // MySQL has no INSERT ... RETURNING and no data-modifying CTE: insert,
+    // then read the new row back by its generated id.
+    const inserted = await queryable.query(
+      `INSERT INTO packages (
+         code, slug, title, summary, description, duration_label, schedule_label,
+         operating_days, requires_price_confirmation, sort_order,
+         is_active, seed_managed
        )
-       SELECT ${PACKAGE_DETAIL_COLUMNS}
-         FROM inserted p`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false, false)`,
       [
         input.code,
         input.slug,
@@ -545,11 +595,13 @@ export async function insertAdminPackage(
         input.description,
         input.durationLabel,
         input.scheduleLabel,
-        input.operatingDays,
+        input.operatingDays === null ? null : JSON.stringify(input.operatingDays),
         input.requiresPriceConfirmation,
         input.sortOrder,
       ],
-    ));
+    );
+
+    insertedId = inserted.insertId;
   } catch (error) {
     const constraint = violatedConstraint(error);
 
@@ -558,6 +610,13 @@ export async function insertAdminPackage(
 
     throw error;
   }
+
+  const { rows } = await queryable.query<AdminPackageDetailRow>(
+    insertedId === undefined
+      ? `SELECT ${PACKAGE_DETAIL_COLUMNS} FROM packages p WHERE p.slug = $1`
+      : `SELECT ${PACKAGE_DETAIL_COLUMNS} FROM packages p WHERE p.id = $1`,
+    [insertedId === undefined ? input.slug : insertedId],
+  );
 
   const row = rows[0];
 
@@ -601,27 +660,22 @@ export async function updateAdminPackageFields(
   slug: string,
   input: AdminPackageUpdateInput,
 ): Promise<AdminPackageDetailRecord | null> {
-  const { rows } = await queryable.query<AdminPackageDetailRow>(
-    `WITH updated AS (
-       UPDATE packages
-          SET title = $2,
-              summary = $3,
-              description = $4,
-              duration_label = $5,
-              schedule_label = $6,
-              operating_days = $7,
-              requires_price_confirmation = $8,
-              sort_order = $9,
-              -- Editing a journey is what makes it the administrator's. The
-              -- seed must stop reconciling it from this moment, so ownership
-              -- moves in the same write as the change that needs protecting.
-              seed_managed = false,
-              updated_at = now()
-        WHERE slug = $1
-       RETURNING *
-     )
-     SELECT ${PACKAGE_DETAIL_COLUMNS}
-       FROM updated p`,
+  await queryable.query(
+    `UPDATE packages
+        SET title = $2,
+            summary = $3,
+            description = $4,
+            duration_label = $5,
+            schedule_label = $6,
+            operating_days = $7,
+            requires_price_confirmation = $8,
+            sort_order = $9,
+            -- Editing a journey is what makes it the administrator's. The
+            -- seed must stop reconciling it from this moment, so ownership
+            -- moves in the same write as the change that needs protecting.
+            seed_managed = false,
+            updated_at = UTC_TIMESTAMP(3)
+      WHERE slug = $1`,
     [
       slug,
       input.title,
@@ -629,15 +683,13 @@ export async function updateAdminPackageFields(
       input.description,
       input.durationLabel,
       input.scheduleLabel,
-      input.operatingDays,
+      input.operatingDays === null ? null : JSON.stringify(input.operatingDays),
       input.requiresPriceConfirmation,
       input.sortOrder,
     ],
   );
 
-  const row = rows[0];
-
-  return row ? toAdminPackageDetail(row) : null;
+  return findAdminPackageBySlug(slug);
 }
 
 // ---------------------------------------------------------------------------
@@ -741,7 +793,7 @@ export async function updateAdminPackageVariant(
       `SELECT id
          FROM package_variants
         WHERE package_id = $1
-          AND key = $2
+          AND \`key\` = $2
         FOR UPDATE`,
       [pkg.id, key],
     );
@@ -769,7 +821,7 @@ export async function updateAdminPackageVariant(
     // still owns, so an edit that did not take ownership would be undone on
     // the next run. Same transaction as the edit, so the two cannot separate.
     await client.query(
-      'UPDATE packages SET seed_managed = false, updated_at = now() WHERE id = $1',
+      'UPDATE packages SET seed_managed = false, updated_at = UTC_TIMESTAMP(3) WHERE id = $1',
       [pkg.id],
     );
 
@@ -937,9 +989,9 @@ export async function insertAdminPackageVariant(
     }
 
     const context = await client.query<VariantContext>(
-      `SELECT COUNT(*)::int AS variant_count,
-              COUNT(*) FILTER (WHERE is_default)::int AS default_count,
-              COALESCE(MAX(sort_order), 0)::int AS max_sort_order
+      `SELECT COUNT(*) AS variant_count,
+              COALESCE(SUM(CASE WHEN is_default THEN 1 ELSE 0 END), 0) AS default_count,
+              COALESCE(MAX(sort_order), 0) AS max_sort_order
          FROM package_variants
         WHERE package_id = $1`,
       [pkg.id],
@@ -983,7 +1035,7 @@ export async function insertAdminPackageVariant(
 
     await client.query(
       `INSERT INTO package_variants (
-         package_id, key, label, is_default, sort_order,
+         package_id, \`key\`, label, is_default, sort_order,
          child_min_age, child_max_age, child_discount_percent
        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
@@ -1004,7 +1056,7 @@ export async function insertAdminPackageVariant(
     // be deleted or break the next seed run. Same transaction as the insert,
     // so the two cannot separate.
     await client.query(
-      'UPDATE packages SET seed_managed = false, updated_at = now() WHERE id = $1',
+      'UPDATE packages SET seed_managed = false, updated_at = UTC_TIMESTAMP(3) WHERE id = $1',
       [pkg.id],
     );
 
@@ -1076,8 +1128,27 @@ export type AdminPackageRatesReplaceResult =
   | { outcome: 'overlapping-tiers' }
   | { outcome: 'rates-required' };
 
-/** PostgreSQL raises this for the rate tiers' GiST exclusion constraint. */
+/**
+ * PostgreSQL raised this for the rate tiers' GiST exclusion constraint. MySQL
+ * has no exclusion constraints, so the overlap is checked in the application
+ * (under the variant lock) and reported with the same SQLSTATE.
+ */
 const EXCLUSION_VIOLATION = '23P01';
+
+/** Whether any two tiers share a party size. An open maximum runs to infinity. */
+function tiersOverlap(rates: readonly AdminPackageRateTierInput[]): boolean {
+  const sorted = [...rates].sort((a, b) => a.minPartySize - b.minPartySize);
+
+  for (let i = 1; i < sorted.length; i += 1) {
+    const previousMax = sorted[i - 1]!.maxPartySize;
+
+    if (previousMax === null || previousMax >= sorted[i]!.minPartySize) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 function isExclusionViolation(error: unknown): boolean {
   return typeof error === 'object'
@@ -1162,7 +1233,7 @@ export async function replaceAdminPackageVariantRates(
       `SELECT id
          FROM package_variants
         WHERE package_id = $1
-          AND key = $2
+          AND \`key\` = $2
         FOR UPDATE`,
       [pkg.id, key],
     );
@@ -1187,6 +1258,12 @@ export async function replaceAdminPackageVariantRates(
       return { outcome: 'rates-required' };
     }
 
+    // Checked against the tiers about to be written, under the package and
+    // variant locks, so no concurrent writer can slip a tier in between.
+    if (tiersOverlap(rates)) {
+      throw Object.assign(new Error('Rate tiers overlap'), { code: EXCLUSION_VIOLATION });
+    }
+
     await client.query('DELETE FROM package_rate_tiers WHERE variant_id = $1', [found.id]);
 
     for (const tier of rates) {
@@ -1202,7 +1279,7 @@ export async function replaceAdminPackageVariantRates(
     // owns, so a price change that did not take ownership would be undone on
     // the next run. Same transaction as the replacement.
     await client.query(
-      'UPDATE packages SET seed_managed = false, updated_at = now() WHERE id = $1',
+      'UPDATE packages SET seed_managed = false, updated_at = UTC_TIMESTAMP(3) WHERE id = $1',
       [pkg.id],
     );
 
@@ -1356,7 +1433,7 @@ export async function setAdminPackageDefaultVariant(
     // Every sibling is locked, not just the target: both statements below
     // write to this set, and which rows they touch depends on all of them.
     const variants = await client.query<DefaultVariantRow>(
-      'SELECT id, key, is_default FROM package_variants WHERE package_id = $1 FOR UPDATE',
+      'SELECT id, `key`, is_default FROM package_variants WHERE package_id = $1 FOR UPDATE',
       [pkg.id],
     );
 
@@ -1392,7 +1469,7 @@ export async function setAdminPackageDefaultVariant(
 
     // Statement two: set. Never merged with the one above.
     await client.query(
-      'UPDATE package_variants SET is_default = true WHERE package_id = $1 AND key = $2',
+      'UPDATE package_variants SET is_default = true WHERE package_id = $1 AND `key` = $2',
       [pkg.id, variantKey],
     );
 
@@ -1402,7 +1479,7 @@ export async function setAdminPackageDefaultVariant(
     // and no others: `is_active` is not named here, and moving the default
     // never publishes or withdraws a journey.
     await client.query(
-      'UPDATE packages SET seed_managed = false, updated_at = now() WHERE id = $1',
+      'UPDATE packages SET seed_managed = false, updated_at = UTC_TIMESTAMP(3) WHERE id = $1',
       [pkg.id],
     );
 
@@ -1592,24 +1669,20 @@ export async function replaceAdminPackageItinerary(
     await client.query('DELETE FROM package_itinerary_sections WHERE package_id = $1', [pkg.id]);
 
     if (sections.length > 0) {
-      // `WITH ORDINALITY` numbers the rows 1..n in array order, so the
-      // ordering the caller sent is the ordering stored — in one statement
-      // rather than one per section. The three arrays are unnested together,
-      // which pairs them positionally and carries every null through as a
-      // null rather than as a gap.
+      // Numbered 1..n in array order, so the ordering the caller sent is the
+      // ordering stored — in one multi-row statement rather than one per
+      // section. Nulls travel through as nulls.
       await client.query(
         `INSERT INTO package_itinerary_sections (
            package_id, day_number, heading, body, sort_order
-         )
-         SELECT $1, section.day_number, section.heading, section.body, section.position::int
-           FROM unnest($2::int[], $3::text[], $4::text[])
-                WITH ORDINALITY AS section(day_number, heading, body, position)`,
-        [
+         ) VALUES ${sections.map(() => '(?, ?, ?, ?, ?)').join(', ')}`,
+        sections.flatMap((section, index) => [
           pkg.id,
-          sections.map((section) => section.dayNumber),
-          sections.map((section) => section.heading),
-          sections.map((section) => section.body),
-        ],
+          section.dayNumber,
+          section.heading,
+          section.body,
+          index + 1,
+        ]),
       );
     }
 
@@ -1619,7 +1692,7 @@ export async function replaceAdminPackageItinerary(
     // replacement, so the two cannot separate. `is_active` is in no statement
     // here: rewriting what a journey says never publishes or withdraws it.
     await client.query(
-      'UPDATE packages SET seed_managed = false, updated_at = now() WHERE id = $1',
+      'UPDATE packages SET seed_managed = false, updated_at = UTC_TIMESTAMP(3) WHERE id = $1',
       [pkg.id],
     );
 
@@ -1811,14 +1884,12 @@ export async function replaceAdminPackageContent(
         continue;
       }
 
-      // `WITH ORDINALITY` numbers the rows 1..n in array order, so the
-      // ordering the caller sent is the ordering stored, in one statement per
-      // kind rather than one per row.
+      // Numbered 1..n in array order, so the ordering the caller sent is the
+      // ordering stored, in one statement per kind rather than one per row.
       await client.query(
         `INSERT INTO package_content_items (package_id, kind, text, sort_order)
-         SELECT $1, $2, entry.text, entry.position::int
-           FROM unnest($3::text[]) WITH ORDINALITY AS entry(text, position)`,
-        [pkg.id, CONTENT_KIND_BY_LIST[key], entries],
+         VALUES ${entries.map(() => '(?, ?, ?, ?)').join(', ')}`,
+        entries.flatMap((entry, index) => [pkg.id, CONTENT_KIND_BY_LIST[key], entry, index + 1]),
       );
     }
 
@@ -1828,7 +1899,7 @@ export async function replaceAdminPackageContent(
     // replacement, so the two cannot separate. `is_active` is in no statement
     // here: rewriting what a journey says never publishes or withdraws it.
     await client.query(
-      'UPDATE packages SET seed_managed = false, updated_at = now() WHERE id = $1',
+      'UPDATE packages SET seed_managed = false, updated_at = UTC_TIMESTAMP(3) WHERE id = $1',
       [pkg.id],
     );
 
@@ -1971,7 +2042,7 @@ export async function deleteAdminPackageVariant(
       `SELECT id, is_default
          FROM package_variants
         WHERE package_id = $1
-          AND key = $2
+          AND \`key\` = $2
         FOR UPDATE`,
       [pkg.id, key],
     );
@@ -1988,7 +2059,7 @@ export async function deleteAdminPackageVariant(
     // Counted under the package lock, so "are there others" cannot change
     // between asking and acting.
     const siblings = await client.query<{ remaining: number }>(
-      'SELECT COUNT(*)::int AS remaining FROM package_variants WHERE package_id = $1 AND id <> $2',
+      'SELECT COUNT(*) AS remaining FROM package_variants WHERE package_id = $1 AND id <> $2',
       [pkg.id, found.id],
     );
 
@@ -2006,8 +2077,8 @@ export async function deleteAdminPackageVariant(
     // the admin API only moves them between pending, confirmed and
     // cancelled. Status is not consulted: a cancelled booking is a record of
     // what was sold and holds the variant exactly as a confirmed one does.
-    const booked = await client.query<{ exists: number }>(
-      'SELECT 1 AS exists FROM package_reservations WHERE variant_id = $1 LIMIT 1',
+    const booked = await client.query<{ found: number }>(
+      'SELECT 1 AS found FROM package_reservations WHERE variant_id = $1 LIMIT 1',
       [found.id],
     );
 
@@ -2026,7 +2097,7 @@ export async function deleteAdminPackageVariant(
     // next run — the delete would appear to work and then undo itself. Same
     // transaction as the delete, so the two cannot separate.
     await client.query(
-      'UPDATE packages SET seed_managed = false, updated_at = now() WHERE id = $1',
+      'UPDATE packages SET seed_managed = false, updated_at = UTC_TIMESTAMP(3) WHERE id = $1',
       [pkg.id],
     );
 
@@ -2186,8 +2257,8 @@ export async function deleteAdminPackage(slug: string): Promise<AdminPackageDele
 
     // Any booking on any variant of this journey. Status is deliberately not
     // consulted.
-    const booked = await client.query<{ exists: number }>(
-      `SELECT 1 AS exists
+    const booked = await client.query<{ found: number }>(
+      `SELECT 1 AS found
          FROM package_reservations r
          JOIN package_variants v ON v.id = r.variant_id
         WHERE v.package_id = $1
@@ -2374,10 +2445,10 @@ export async function reorderAdminPackageVariants(
     // set the request is checked against must not change underneath it.
     // Ordered so `current` below is the journey's order as it stands.
     const variants = await client.query<VariantOrderRow>(
-      `SELECT id, key, sort_order
+      `SELECT id, \`key\`, sort_order
          FROM package_variants
         WHERE package_id = $1
-        ORDER BY sort_order, key
+        ORDER BY sort_order, \`key\`
         FOR UPDATE`,
       [pkg.id],
     );
@@ -2447,7 +2518,7 @@ export async function reorderAdminPackageVariants(
     // from the brochure's own order, so a reorder that did not take ownership
     // would be undone on the next run. Same transaction as the renumber.
     await client.query(
-      'UPDATE packages SET seed_managed = false, updated_at = now() WHERE id = $1',
+      'UPDATE packages SET seed_managed = false, updated_at = UTC_TIMESTAMP(3) WHERE id = $1',
       [pkg.id],
     );
 
@@ -2520,20 +2591,16 @@ export async function updateAdminPackageActiveState(
   slug: string,
   isActive: boolean,
 ): Promise<AdminPackageDetailRecord | null> {
-  const { rows } = await queryable.query<AdminPackageDetailRow>(
-    `WITH updated AS (
-       UPDATE packages
-          SET is_active = $2,
-              updated_at = CASE WHEN is_active IS DISTINCT FROM $2 THEN now() ELSE updated_at END
-        WHERE slug = $1
-       RETURNING *
-     )
-     SELECT ${PACKAGE_DETAIL_COLUMNS}
-       FROM updated p`,
+  // MySQL evaluates SET assignments left to right and a later one sees the
+  // earlier ones' new values, so updated_at is assigned BEFORE is_active:
+  // it must compare against the value the row held.
+  await queryable.query(
+    `UPDATE packages
+        SET updated_at = CASE WHEN NOT (is_active <=> $2) THEN UTC_TIMESTAMP(3) ELSE updated_at END,
+            is_active = $2
+      WHERE slug = $1`,
     [slug, isActive],
   );
 
-  const row = rows[0];
-
-  return row ? toAdminPackageDetail(row) : null;
+  return findAdminPackageBySlug(slug);
 }

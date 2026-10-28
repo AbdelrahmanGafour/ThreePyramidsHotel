@@ -2,18 +2,17 @@ import assert from 'node:assert/strict';
 import { afterEach, before, describe, it } from 'node:test';
 import { buildPackageReservationConfirmedEvent } from '../src/modules/notifications/notifications.events';
 
-// The guest confirmation for a journey, which rides inside the status UPDATE.
+// The guest confirmation for a journey, written in the status transaction.
 //
-// This path has no transaction — the status change is deliberately one
-// statement — so the event is a data-modifying CTE rather than a second query.
-// That makes the SQL itself the contract, and most of what can be checked
-// without a database is structural: that there is ONE statement, that the
-// event CTE depends on the UPDATE, that it carries the right identity, and
-// that its payload matches the builder the other three events use.
+// MySQL has no data-modifying CTE, so the status change runs as one short
+// transaction: lock the row, check the transition, UPDATE, queue the event
+// built by the shared builder, COMMIT. The event therefore commits with the
+// status change or not at all, and what can be checked without a database is
+// the statement sequence and the event handed to the outbox insert.
 //
-// The behaviour only PostgreSQL can settle — that a confirmation writes
-// exactly one row, that a cancellation writes none, and that a conflict aborts
-// the UPDATE with it — is proved in
+// The behaviour only MySQL can settle - that a confirmation writes exactly
+// one row, that a cancellation writes none, and that a conflict rolls the
+// status change back - is proved in
 // `admin-package-reservations.status.integration.test.ts`.
 //
 // Scope is Event 4 only. The transition rules, the 404/409 split and the HTTP
@@ -69,231 +68,191 @@ function row(status: string) {
 
 type Recorded = { text: string; values: unknown[] | undefined };
 
-/** Records every statement and answers the UPDATE with the given rows. */
-function recording(options: { updates?: boolean; error?: unknown } = {}) {
-  const state = { calls: [] as Recorded[] };
+/** Records every statement of the transaction; the lock read finds the row. */
+function recording(options: { found?: boolean; error?: unknown; status?: string } = {}) {
+  const state = { calls: [] as Recorded[], released: [] as unknown[] };
 
   __setQueryableForTests({
-    async query(text: string, values?: unknown[]) {
-      state.calls.push({ text, values });
+    async query() {
+      throw new Error('the status change must run on a transaction connection');
+    },
+    async connect() {
+      return {
+        async query(text: string, values?: unknown[]) {
+          state.calls.push({ text, values });
 
-      if (text.includes('UPDATE package_reservations')) {
-        if (options.error) {
-          throw options.error;
-        }
-        const next = values?.[1] as string;
-        return { rows: options.updates === false ? [] : [row(next)] } as never;
-      }
+          if (text.includes('FOR UPDATE OF u')) {
+            return { rows: options.found === false ? [] : [row(options.status ?? 'pending')] } as never;
+          }
 
-      return { rows: [{ booking_reference: REFERENCE }] } as never;
+          if (text.includes('INSERT INTO notification_outbox') && options.error) {
+            throw options.error;
+          }
+
+          return { rows: [], rowCount: 1 } as never;
+        },
+        release(discard?: boolean) {
+          state.released.push(discard);
+        },
+      };
     },
   } as never);
 
   return state;
 }
 
-/** Runs one confirmation against a recording double and returns its SQL. */
-async function confirmedStatement(): Promise<string> {
-  const state = recording();
+const compact = (text: string): string => text.replace(/\s+/g, ' ').trim();
+const outboxInsert = (state: { calls: Recorded[] }) =>
+  state.calls.find((call) => call.text.includes('INSERT INTO notification_outbox'));
 
-  await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
-
-  return statusStatement(state);
-}
-
-const statusStatement = (state: { calls: Recorded[] }): string => {
-  const call = state.calls.find((entry) => entry.text.includes('UPDATE package_reservations'));
-
-  assert.ok(call, 'expected the status statement');
-
-  return call.text;
-};
-
-/** The payload keys the SQL builds, in the order it names them. */
-function payloadKeysInSql(sql: string): string[] {
-  const block = /jsonb_build_object\(([\s\S]*?)\n\s*\)/.exec(sql)?.[1];
-
-  assert.ok(block, 'expected a jsonb_build_object payload');
-
-  // Keys are the quoted strings immediately followed by a comma; every value
-  // is either `u.column`, a cast, or a cast literal, so none can match.
-  return [...block.matchAll(/'([A-Za-z]+)',/g)].map((match) => match[1] as string);
-}
-
-describe('the confirmation event travels inside the status statement', () => {
-  it('issues one statement that both updates and queues', async () => {
-    // No transaction exists on this path, so a second statement could commit
-    // apart from the status change. One statement is already atomic.
+describe('the confirmation event travels inside the status transaction', () => {
+  it('locks, updates, queues and commits, in that order', async () => {
     const state = recording();
 
     await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
 
-    assert.equal(state.calls.length, 1, 'exactly one database call for a successful confirmation');
-
-    const sql = state.calls[0]?.text ?? '';
-    assert.match(sql, /UPDATE package_reservations/);
-    assert.match(sql, /INSERT INTO notification_outbox/);
-  });
-
-  it('makes the event a data-modifying CTE that depends on the UPDATE', async () => {
-    const sql = await confirmedStatement();
-
-    assert.match(sql, /WITH updated AS \(/, 'the UPDATE is still the first CTE');
-    assert.match(sql, /notification_event AS \(\s*INSERT INTO notification_outbox/);
-    // Selecting FROM updated is what ties the event to the write: no matched
-    // row, no event.
-    assert.match(sql, /FROM updated u\s*\n\s*WHERE u\.status = 'confirmed'/);
+    const texts = state.calls.map((call) => compact(call.text));
+    assert.equal(texts.length, 5);
+    assert.equal(texts[0], 'BEGIN');
+    assert.match(texts[1] ?? '', /FOR UPDATE OF u$/);
+    assert.match(texts[2] ?? '', /^UPDATE package_reservations/);
+    assert.match(texts[3] ?? '', /^INSERT INTO notification_outbox/);
+    assert.equal(texts[4], 'COMMIT');
+    assert.deepEqual(state.released, [false], 'the connection is returned normally');
   });
 
   it('queues only for a confirmation', async () => {
-    // The CTE's own WHERE, not a branch in TypeScript. A cancellation runs the
-    // same statement and selects no row to insert.
-    const confirming = await confirmedStatement();
-    assert.match(confirming, /WHERE u\.status = 'confirmed'/);
-
     const cancelled = recording();
     await updateAdminPackageReservationStatus(REFERENCE, 'cancelled');
 
-    assert.equal(cancelled.calls.length, 1, 'a cancellation is still one statement');
-    assert.equal(statusStatement(cancelled), confirming, 'and it is the very same statement');
-  });
+    assert.equal(outboxInsert(cancelled), undefined, 'a cancellation owes the guest nothing here');
+    assert.equal(
+      cancelled.calls.map((call) => compact(call.text)).at(-1),
+      'COMMIT',
+      'and it still commits',
+    );
 
-  it('adds no second call for the event on any outcome', async () => {
-    // Not found and a refused transition each cost one diagnosis read, exactly
-    // as before. Neither gains a call, and neither can write an event because
-    // `updated` is empty.
-    const missing = recording({ updates: false });
-
+    const confirmed = recording();
     await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
-
-    assert.equal(missing.calls.length, 2, 'the write plus the existing 404/409 diagnosis read');
-    assert.ok(!missing.calls[1]?.text.includes('notification_outbox'), 'the second read is not about events');
+    assert.ok(outboxInsert(confirmed));
   });
 
-  it('carries no ON CONFLICT anywhere', async () => {
+  it('writes no event when the transition is refused or the booking is missing', async () => {
+    const refused = recording({ status: 'cancelled' });
+    assert.deepEqual(await updateAdminPackageReservationStatus(REFERENCE, 'confirmed'), {
+      outcome: 'invalid-transition',
+    });
+    assert.equal(outboxInsert(refused), undefined);
+    assert.ok(!refused.calls.some((call) => call.text.includes('UPDATE package_reservations')));
+    assert.equal(compact(refused.calls.at(-1)?.text ?? ''), 'ROLLBACK');
+
+    const missing = recording({ found: false });
+    assert.deepEqual(await updateAdminPackageReservationStatus(REFERENCE, 'confirmed'), {
+      outcome: 'not-found',
+    });
+    assert.equal(outboxInsert(missing), undefined);
+    assert.equal(compact(missing.calls.at(-1)?.text ?? ''), 'ROLLBACK');
+  });
+
+  it('carries no duplicate handling anywhere', async () => {
     // A conflict on (event_type, booking_reference) means a second
     // confirmation for a reference that is unique forever. Swallowing it would
     // drop a message the guest was owed.
-    const sql = await confirmedStatement();
-
-    assert.doesNotMatch(sql, /ON\s+CONFLICT/i);
-    assert.doesNotMatch(sql, /DO\s+NOTHING/i);
-    assert.doesNotMatch(sql, /DO\s+UPDATE/i);
-  });
-
-  it('opens no transaction', async () => {
     const state = recording();
-
     await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
 
     for (const { text } of state.calls) {
-      assert.doesNotMatch(text, /\bBEGIN\b/i);
-      assert.doesNotMatch(text, /\bCOMMIT\b/i);
-      assert.doesNotMatch(text, /\bROLLBACK\b/i);
+      assert.doesNotMatch(text, /ON\s+DUPLICATE/i);
+      assert.doesNotMatch(text, /INSERT\s+IGNORE/i);
     }
   });
 });
 
 describe('the confirmation event identity and payload', () => {
   it('names the event, recipient and template exactly', async () => {
-    const sql = await confirmedStatement();
+    const state = recording();
+    await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
 
-    assert.match(sql, /SELECT 'package_reservation_confirmed',/);
-    assert.match(sql, /'guest',/);
-    assert.match(sql, /'package_confirmed_guest\.v1',/);
-    // The reference comes from the row that was just updated, not the input
-    // parameter, so it can only be a booking that actually changed.
-    assert.match(sql, /u\.booking_reference,/);
-  });
-
-  it('writes the six columns the outbox takes at insert, and no others', async () => {
-    const columns = /INSERT INTO notification_outbox\s*\n\s*\(([^)]*)\)/.exec(
-      await confirmedStatement(),
-    )?.[1];
-
-    assert.ok(columns, 'the insert lists its columns');
-    assert.deepEqual(
-      columns.split(',').map((column) => column.trim()),
-      ['event_type', 'booking_reference', 'recipient_kind', 'recipient_email', 'template_key', 'payload'],
-    );
-  });
-
-  it('addresses the guest through recipient_email, from the reservation snapshot', async () => {
-    assert.match(await confirmedStatement(), /'guest',\s*\n\s*u\.guest_email,/);
+    const values = outboxInsert(state)?.values ?? [];
+    assert.deepEqual(values.slice(0, 5), [
+      'package_reservation_confirmed',
+      REFERENCE,
+      'guest',
+      GUEST_EMAIL,
+      'package_confirmed_guest.v1',
+    ]);
   });
 
   it('builds exactly the payload the shared builder defines', async () => {
-    // The one assertion that keeps this SQL honest. The other three events go
-    // through `buildPackageReservationConfirmedEvent`; this one cannot,
-    // because assembling it in TypeScript would need the row read back — the
-    // second statement this design exists to avoid. So the contract is pinned
-    // against the builder itself rather than against a copied list.
-    const expected = Object.keys(
-      buildPackageReservationConfirmedEvent({
-        bookingReference: REFERENCE,
-        guestFirstName: 'Amira',
-        guestLastName: 'Hassan',
-        guestEmail: GUEST_EMAIL,
-        packageTitle: 'Nile Dinner Cruise',
-        variantLabel: 'Premium service',
-        tourDate: '2026-10-01',
-        adults: 2,
-        children: 2,
-        pricingStatus: 'quoted',
-        adultUnitRate: '100.00',
-        childUnitRate: '50.00',
-        totalAmount: '300.00',
-        specialRequests: 'Window table if possible',
-      }).payload,
-    );
+    const state = recording();
+    await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
 
-    assert.deepEqual(payloadKeysInSql(await confirmedStatement()), expected);
+    const expected = buildPackageReservationConfirmedEvent({
+      bookingReference: REFERENCE,
+      guestFirstName: 'Amira',
+      guestLastName: 'Hassan',
+      guestEmail: GUEST_EMAIL,
+      packageTitle: 'Nile Dinner Cruise',
+      variantLabel: 'Premium service',
+      tourDate: '2026-10-01',
+      adults: 2,
+      children: 2,
+      pricingStatus: 'quoted',
+      adultUnitRate: '100.00',
+      childUnitRate: '50.00',
+      totalAmount: '300.00',
+      specialRequests: 'Window table if possible',
+    }).payload;
+
+    const written = JSON.parse(String(outboxInsert(state)?.values?.[5]));
+    assert.deepEqual(written, expected);
   });
 
-  it('keeps the guest address out of the payload', async () => {
-    // It is the destination, not content. `guest_email` appears once in the
-    // event, as the recipient column.
-    const keys = payloadKeysInSql(await confirmedStatement());
+  it('keeps the guest address, phone and country out of the payload', async () => {
+    const state = recording();
+    await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
 
+    const keys = Object.keys(JSON.parse(String(outboxInsert(state)?.values?.[5])));
     assert.ok(!keys.includes('guestEmail'));
     assert.ok(!keys.includes('guestPhone'));
     assert.ok(!keys.includes('guestCountry'));
   });
 
   it('carries no internal id, slug or variant key', async () => {
-    const block = /jsonb_build_object\(([\s\S]*?)\n\s*\)/.exec(await confirmedStatement())?.[1] ?? '';
+    const state = recording();
+    await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
 
-    for (const forbidden of ['package_id', 'variant_id', 'u.id', 'p.slug', 'pv.key', 'package_code']) {
-      assert.ok(!block.includes(forbidden), `the payload must not carry ${forbidden}`);
+    const payload = String(outboxInsert(state)?.values?.[5]);
+    for (const forbidden of ['package_id', 'variant_id', 'nile-dinner-cruise', 'premium-service', 'T016']) {
+      assert.ok(!payload.includes(forbidden), `the payload must not carry ${forbidden}`);
     }
   });
 
   it('keeps money as exact stored decimals and the tour date as a calendar day', async () => {
-    const block = /jsonb_build_object\(([\s\S]*?)\n\s*\)/.exec(await confirmedStatement())?.[1] ?? '';
+    const state = recording();
+    await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
 
-    // ::text, never a float and never a rounded number.
-    assert.match(block, /'adultUnitRate', u\.adult_unit_rate_snapshot::text/);
-    assert.match(block, /'childUnitRate', u\.child_unit_rate_snapshot::text/);
-    assert.match(block, /'totalAmount', u\.total_amount_snapshot::text/);
-    assert.match(block, /'tourDate', u\.tour_date::text/);
-    assert.match(block, /'currency', 'USD'::text/);
+    const payload = JSON.parse(String(outboxInsert(state)?.values?.[5])) as Record<string, unknown>;
+    assert.equal(payload.adultUnitRate, '100.00');
+    assert.equal(payload.childUnitRate, '50.00');
+    assert.equal(payload.totalAmount, '300.00');
+    assert.equal(payload.tourDate, '2026-10-01');
+    assert.equal(payload.currency, 'USD');
   });
 
   it('reads no environment and re-reads no row', async () => {
-    const sql = await confirmedStatement();
+    const state = recording();
+    await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
 
-    assert.ok(!sql.includes('current_setting'));
-    // One reference to the reservations table: the UPDATE itself.
-    assert.equal(sql.match(/package_reservations/g)?.length, 1);
+    const selects = state.calls.filter((call) => /^\s*SELECT/i.test(call.text));
+    assert.equal(selects.length, 1, 'one read: the locking read that decides the transition');
   });
 });
 
 describe('the existing behaviour is unchanged', () => {
   it('still returns the full detail on a confirmation', async () => {
-    const result = await (async () => {
-      recording();
-      return updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
-    })();
+    recording();
+    const result = await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
 
     assert.equal(result.outcome, 'updated');
     assert.ok(result.outcome === 'updated');
@@ -321,34 +280,14 @@ describe('the existing behaviour is unchanged', () => {
     assert.equal(result.reservation.status, 'confirmed');
   });
 
-  it('still reports a refused transition as invalid-transition', async () => {
-    recording({ updates: false });
-
-    const result = await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
-
-    assert.deepEqual(result, { outcome: 'invalid-transition' });
-  });
-
-  it('still reports a missing reservation as not-found', async () => {
-    __setQueryableForTests({
-      async query() {
-        return { rows: [] } as never;
-      },
-    } as never);
-
-    const result = await updateAdminPackageReservationStatus(REFERENCE, 'confirmed');
-
-    assert.deepEqual(result, { outcome: 'not-found' });
-  });
-
-  it('propagates a database error unchanged, object identity included', async () => {
-    // A unique violation from the outbox insert aborts the whole statement,
-    // status change included, and arrives here as the driver raised it.
-    const raised = Object.assign(new Error('duplicate key value violates unique constraint'), {
+  it('propagates a database error unchanged and rolls the status change back', async () => {
+    // A unique violation from the outbox insert aborts the transaction, status
+    // change included, and arrives here as the driver raised it.
+    const raised = Object.assign(new Error('Duplicate entry'), {
       code: '23505',
       constraint: 'notification_outbox_event_booking_key',
     });
-    recording({ error: raised });
+    const state = recording({ error: raised });
 
     const thrown = await updateAdminPackageReservationStatus(REFERENCE, 'confirmed').then(
       () => null,
@@ -357,5 +296,7 @@ describe('the existing behaviour is unchanged', () => {
 
     assert.equal(thrown, raised, 'the very same error object');
     assert.equal((thrown as { code: string }).code, '23505');
+    assert.equal(compact(state.calls.at(-1)?.text ?? ''), 'ROLLBACK');
+    assert.ok(!state.calls.some((call) => compact(call.text) === 'COMMIT'));
   });
 });

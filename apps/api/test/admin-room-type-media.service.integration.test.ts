@@ -166,37 +166,72 @@ async function listed(slug: string) {
   return result.images;
 }
 
+/**
+ * How many pooled connections are currently checked out and not returned.
+ *
+ * The MySQL adapter does not expose pg's `totalCount` / `idleCount`, so this
+ * measures the same thing from outside: it tries to borrow a full pool's worth
+ * of clients (connectionLimit is 10) and counts how many it could not get
+ * within a short wait. A leaked client shows up as one fewer available.
+ */
+async function checkedOut(poolSize = 10): Promise<number> {
+  const held: Array<Awaited<ReturnType<Pool['dbPool']['connect']>>> = [];
+  let pending = 0;
+
+  for (let index = 0; index < poolSize; index += 1) {
+    const attempt = dbPool.connect();
+    const winner = await Promise.race([
+      attempt.then((client) => client),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 750)),
+    ]);
+
+    if (winner) {
+      held.push(winner);
+    } else {
+      pending += 1;
+      // Hand the late client straight back once it arrives.
+      void attempt.then((client) => client.release()).catch(() => undefined);
+    }
+  }
+
+  for (const client of held) {
+    client.release();
+  }
+
+  return pending;
+}
+
+
 async function rowCounts(roomTypeId: string): Promise<{ relations: number; covers: number }> {
   const { rows } = await dbPool.query<{ relations: number; covers: number }>(
-    `SELECT COUNT(*)::int AS relations,
-            COUNT(*) FILTER (WHERE is_cover)::int AS covers
+    `SELECT CAST(COUNT(*) AS SIGNED) AS relations,
+            CAST(COALESCE(SUM(is_cover), 0) AS SIGNED) AS covers
        FROM room_type_images WHERE room_type_id = $1`,
     [roomTypeId],
   );
 
-  return rows[0]!;
+  return { relations: Number(rows[0]!.relations), covers: Number(rows[0]!.covers) };
 }
 
 async function assetCount(reference: string): Promise<number> {
   const { rows } = await dbPool.query<{ total: number }>(
-    'SELECT COUNT(*)::int AS total FROM media_assets WHERE reference = $1',
+    'SELECT CAST(COUNT(*) AS SIGNED) AS total FROM media_assets WHERE reference = $1',
     [reference],
   );
 
-  return rows[0]!.total;
+  return Number(rows[0]!.total);
 }
 
 async function insertRoomType(slug: string): Promise<string> {
-  const { rows } = await dbPool.query<{ id: string }>(
+  const inserted = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, 2, '1500.00', false, 0)
-     RETURNING id`,
+     VALUES ($1, $2, 2, '1500.00', false, 0)`,
     [slug, `Fixture ${slug}`],
   );
 
-  roomTypeIds[slug] = rows[0]!.id;
+  roomTypeIds[slug] = inserted.insertId!;
 
-  return rows[0]!.id;
+  return inserted.insertId!;
 }
 
 /** Removes every image of one room type directly, so a test starts empty. */
@@ -209,7 +244,7 @@ async function clearImages(roomTypeId: string): Promise<void> {
   await dbPool.query('DELETE FROM room_type_images WHERE room_type_id = $1', [roomTypeId]);
 
   if (rows.length > 0) {
-    await dbPool.query('DELETE FROM media_assets WHERE id = ANY($1)', [rows.map((row) => row.media_asset_id)]);
+    await dbPool.query('DELETE FROM media_assets WHERE id IN ($1)', [rows.map((row) => row.media_asset_id)]);
   }
 }
 
@@ -226,20 +261,14 @@ async function withFailingImageInsert<T>(run: () => Promise<T>): Promise<T> {
   const name = `itest_media_fail_${runId}`;
 
   await dbPool.query(
-    `CREATE FUNCTION ${name}() RETURNS trigger AS $$
-       BEGIN RAISE EXCEPTION 'itest: room_type_images insert refused'; END;
-     $$ LANGUAGE plpgsql`,
-  );
-  await dbPool.query(
     `CREATE TRIGGER ${name} BEFORE INSERT ON room_type_images
-       FOR EACH ROW EXECUTE FUNCTION ${name}()`,
+       FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'itest: room_type_images insert refused'`,
   );
 
   try {
     return await run();
   } finally {
-    await dbPool.query(`DROP TRIGGER IF EXISTS ${name} ON room_type_images`);
-    await dbPool.query(`DROP FUNCTION IF EXISTS ${name}()`);
+    await dbPool.query(`DROP TRIGGER IF EXISTS ${name}`);
   }
 }
 
@@ -377,11 +406,11 @@ before(async () => {
   ));
 
   const { rows } = await dbPool.query<{ rooms: number; reservations: number }>(
-    `SELECT (SELECT COUNT(*) FROM rooms)::int AS rooms,
-            (SELECT COUNT(*) FROM reservations)::int AS reservations`,
+    `SELECT CAST((SELECT COUNT(*) FROM rooms) AS SIGNED) AS rooms,
+            CAST((SELECT COUNT(*) FROM reservations) AS SIGNED) AS reservations`,
   );
 
-  untouchedBefore = rows[0]!;
+  untouchedBefore = { rooms: Number(rows[0]!.rooms), reservations: Number(rows[0]!.reservations) };
 
   for (const slug of Object.values(slugs)) {
     await insertRoomType(slug);
@@ -405,20 +434,20 @@ after(async () => {
     await dbPool.query(
       `DELETE FROM media_assets
         WHERE id NOT IN (SELECT media_asset_id FROM room_type_images)
-          AND created_at >= now() - interval '1 hour'
+          AND created_at >= UTC_TIMESTAMP(3) - INTERVAL 1 HOUR
           AND storage_key LIKE 'media/%'`,
     );
     await dbPool.query('DELETE FROM room_types WHERE slug LIKE $1', [like]);
 
     const { rows } = await dbPool.query<{ types: number; rooms: number; reservations: number }>(
-      `SELECT (SELECT COUNT(*) FROM room_types WHERE slug LIKE $1)::int AS types,
-              (SELECT COUNT(*) FROM rooms)::int AS rooms,
-              (SELECT COUNT(*) FROM reservations)::int AS reservations`,
+      `SELECT CAST((SELECT COUNT(*) FROM room_types WHERE slug LIKE $1) AS SIGNED) AS types,
+              CAST((SELECT COUNT(*) FROM rooms) AS SIGNED) AS rooms,
+              CAST((SELECT COUNT(*) FROM reservations) AS SIGNED) AS reservations`,
       [like],
     );
 
     assert.deepEqual(
-      rows[0],
+      { types: Number(rows[0]!.types), rooms: Number(rows[0]!.rooms), reservations: Number(rows[0]!.reservations) },
       { types: 0, ...untouchedBefore },
       'fixtures were not fully removed, or rows this suite must not touch changed',
     );
@@ -1216,17 +1245,17 @@ describe('transactions and isolation', () => {
     // The media_assets insert happened before the failing relation insert, in
     // the same transaction. Neither may survive.
     const { rows } = await dbPool.query<{ total: number }>(
-      `SELECT COUNT(*)::int AS total FROM media_assets
+      `SELECT CAST(COUNT(*) AS SIGNED) AS total FROM media_assets
         WHERE id NOT IN (SELECT media_asset_id FROM room_type_images)
-          AND created_at >= now() - interval '1 minute'`,
+          AND created_at >= UTC_TIMESTAMP(3) - INTERVAL 1 MINUTE`,
     );
 
-    assert.equal(rows[0]!.total, 0, 'the asset row rolled back with the relation');
+    assert.equal(Number(rows[0]!.total), 0, 'the asset row rolled back with the relation');
     assert.deepEqual(await rowCounts(roomTypeIds[slugs.work]!), { relations: 0, covers: 0 });
   });
 
   it('releases every client it borrows', async () => {
-    const before = dbPool.totalCount - dbPool.idleCount;
+    const before = (await checkedOut());
 
     for (let index = 0; index < 6; index += 1) {
       await upload(slugs.work);
@@ -1238,7 +1267,7 @@ describe('transactions and isolation', () => {
       imageReference: (await listed(slugs.work))[1]!.reference,
     });
 
-    const after = dbPool.totalCount - dbPool.idleCount;
+    const after = (await checkedOut());
 
     assert.equal(after, before, 'a leaked client would show as a permanently checked-out connection');
   });
@@ -1360,7 +1389,7 @@ describe('an unanswered COMMIT', () => {
 
   it('releases the connection it could not finish with', async () => {
     const body = await png();
-    const before = dbPool.totalCount - dbPool.idleCount;
+    const before = (await checkedOut());
 
     await withUnansweredCommit(() =>
       rejection(() =>
@@ -1375,7 +1404,7 @@ describe('an unanswered COMMIT', () => {
     // The client is destroyed rather than returned, so it leaves the pool
     // entirely — either way it is not left checked out.
     assert.equal(
-      dbPool.totalCount - dbPool.idleCount,
+      (await checkedOut()),
       before,
       'a connection left checked out would never come back',
     );
@@ -1508,7 +1537,7 @@ describe('a COMMIT that succeeded but was never acknowledged', () => {
 
   it('discards the client and leaves the pool healthy', async () => {
     const body = await png();
-    const before = dbPool.totalCount - dbPool.idleCount;
+    const before = (await checkedOut());
 
     // The service cannot know the commit succeeded, so it still discards the
     // connection. That is correct: production must not be special-cased
@@ -1524,7 +1553,7 @@ describe('a COMMIT that succeeded but was never acknowledged', () => {
     );
 
     assert.equal(
-      dbPool.totalCount - dbPool.idleCount,
+      (await checkedOut()),
       before,
       'a connection left checked out would never come back',
     );

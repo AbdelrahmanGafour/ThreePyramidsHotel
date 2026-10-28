@@ -146,7 +146,7 @@ export async function createAdminRoomTypeHandler(req: Request, res: Response): P
       return;
 
     case 'slug-taken':
-      // The service classified the constraint; nothing about PostgreSQL
+      // The service classified the constraint; nothing about MySQL
       // reaches this layer, and the slug is not echoed back.
       res.status(409).json(ROOM_TYPE_SLUG_TAKEN_RESPONSE);
       return;

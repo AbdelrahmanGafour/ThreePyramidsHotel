@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
+import { insertedId, toNumbers } from './support/core-sql';
 
-// Runs against a real PostgreSQL database. It creates its own room type and
+// Runs against a real MySQL database. It creates its own room type and
 // physical rooms with unique identifiers, never touching the development seed
 // or any other data, and removes them afterwards.
 if (!process.env.DATABASE_URL) {
@@ -67,7 +68,7 @@ async function insertDirectReservation(input: {
        status, currency, nightly_rate_snapshot, total_amount, special_requests
      )
      VALUES ($1, $2, $3, 'Fixture', 'Reservation', $4, '+201000000000', 'Egypt',
-             2, 0, $5::date, $6::date, $7, 'EGP', $8, $8, NULL)`,
+             2, 0, $5, $6, $7, 'EGP', $8, $8, NULL)`,
     [
       bookingReference,
       roomTypeId,
@@ -104,22 +105,23 @@ before(async () => {
   ({ isNoAvailabilityError } = await import('../src/modules/reservations/reservations.types.js'));
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 
-  const { rows: roomTypeRows } = await dbPool.query<{ id: string }>(
+  const createdRoomType = await dbPool.query(
     `INSERT INTO room_types (slug, name, capacity, base_nightly_rate, is_active, sort_order)
-     VALUES ($1, $2, $3, $4, true, 0)
-     RETURNING id`,
+     VALUES ($1, $2, $3, $4, true, 0)`,
     [fixture.slug, fixture.name, fixture.capacity, fixture.baseNightlyRate],
   );
 
-  const createdRoomType = roomTypeRows[0];
-  assert.ok(createdRoomType, 'failed to create the fixture room type');
-  roomTypeId = createdRoomType.id;
+  roomTypeId = insertedId(createdRoomType);
+
+  await dbPool.query(
+    `INSERT INTO rooms (room_type_id, room_number, is_active)
+     VALUES ($1, $2, true), ($1, $3, true)`,
+    [roomTypeId, fixture.roomNumbers[0], fixture.roomNumbers[1]],
+  );
 
   const { rows: roomRows } = await dbPool.query<{ id: string }>(
-    `INSERT INTO rooms (room_type_id, room_number, is_active)
-     VALUES ($1, $2, true), ($1, $3, true)
-     RETURNING id`,
-    [roomTypeId, fixture.roomNumbers[0], fixture.roomNumbers[1]],
+    'SELECT id FROM rooms WHERE room_type_id = $1 ORDER BY id',
+    [roomTypeId],
   );
 
   roomIds = roomRows.map((row) => row.id);
@@ -138,7 +140,7 @@ after(async () => {
     );
     const references = [...new Set([...booked.map((row) => row.booking_reference), ...outboxReferences])];
 
-    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference = ANY($1::text[])', [
+    await dbPool.query('DELETE FROM notification_outbox WHERE booking_reference IN ($1)', [
       references,
     ]);
 
@@ -153,15 +155,15 @@ after(async () => {
       room_types: number;
       notifications: number;
     }>(
-      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1)::int AS reservations,
-              (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1)::int AS rooms,
-              (SELECT COUNT(*) FROM room_types WHERE id = $1)::int AS room_types,
+      `SELECT (SELECT COUNT(*) FROM reservations WHERE room_type_id = $1) AS reservations,
+              (SELECT COUNT(*) FROM rooms WHERE room_type_id = $1) AS rooms,
+              (SELECT COUNT(*) FROM room_types WHERE id = $1) AS room_types,
               (SELECT COUNT(*) FROM notification_outbox
-                WHERE booking_reference = ANY($2::text[]))::int AS notifications`,
+                WHERE booking_reference IN ($2)) AS notifications`,
       [roomTypeId, references],
     );
 
-    const remaining = rows[0];
+    const remaining = rows[0] && toNumbers(rows[0]);
     assert.ok(remaining, 'cleanup verification query returned no row');
     assert.deepEqual(
       remaining,
@@ -272,7 +274,7 @@ describe('reservations integration', () => {
       nightly_rate_snapshot: string;
       total_amount: string;
       room_type_slug: string;
-      has_room: boolean;
+      has_room: string;
       check_in: string;
       check_out: string;
       guest_email: string;
@@ -286,8 +288,8 @@ describe('reservations integration', () => {
               res.total_amount,
               rt.slug AS room_type_slug,
               (res.room_id IS NOT NULL) AS has_room,
-              res.check_in::text AS check_in,
-              res.check_out::text AS check_out,
+              res.check_in AS check_in,
+              res.check_out AS check_out,
               res.guest_email,
               res.adults,
               res.children,
@@ -306,7 +308,7 @@ describe('reservations integration', () => {
       nightly_rate_snapshot: '1234.50',
       total_amount: '3703.50',
       room_type_slug: fixture.slug,
-      has_room: true,
+      has_room: '1',
       check_in: '2030-03-01',
       check_out: '2030-03-04',
       guest_email: 'integration.happy@example.com',
@@ -361,17 +363,17 @@ describe('reservations integration', () => {
       date_match_count: number;
       distinct_rooms: number;
     }>(
-      `SELECT COUNT(*)::int AS stored_count,
-              (COUNT(*) FILTER (WHERE res.status = 'pending'))::int AS pending_count,
-              (COUNT(*) FILTER (WHERE res.room_type_id = $2))::int AS fixture_count,
-              (COUNT(*) FILTER (WHERE res.check_in::text = $3 AND res.check_out::text = $4))::int AS date_match_count,
-              COUNT(DISTINCT res.room_id)::int AS distinct_rooms
+      `SELECT COUNT(*) AS stored_count,
+              (COUNT(CASE WHEN res.status = 'pending' THEN 1 END)) AS pending_count,
+              (COUNT(CASE WHEN res.room_type_id = $2 THEN 1 END)) AS fixture_count,
+              (COUNT(CASE WHEN res.check_in = $3 AND res.check_out = $4 THEN 1 END)) AS date_match_count,
+              COUNT(DISTINCT res.room_id) AS distinct_rooms
          FROM reservations res
-        WHERE res.booking_reference = ANY($1::text[])`,
+        WHERE res.booking_reference IN ($1)`,
       [bookingReferences, roomTypeId, checkIn, checkOut],
     );
 
-    const verification = rows[0];
+    const verification = rows[0] && toNumbers(rows[0]);
     assert.ok(verification, 'verification query returned no row');
     assert.deepEqual(verification, {
       stored_count: 2,
@@ -449,7 +451,7 @@ describe('reservations integration', () => {
   it('leaves no reservation behind when the outbox insert fails', async () => {
     // A real connection, real SQL and a real transaction — only the one
     // notification INSERT is made to fail, which is the one thing a healthy
-    // PostgreSQL will not do on request. A double cannot prove this: the
+    // MySQL will not do on request. A double cannot prove this: the
     // question is whether the ROLLBACK actually discarded a row the database
     // had already written, and that can only be asked of the database.
     const checkIn = '2030-05-10';
@@ -507,14 +509,14 @@ describe('reservations integration', () => {
     // Asked on a different connection, so it can only see committed data.
     const { rows } = await dbPool.query<{ reservations: number; notifications: number }>(
       `SELECT (SELECT COUNT(*) FROM reservations
-                WHERE room_type_id = $1 AND check_in::text = $2)::int AS reservations,
+                WHERE room_type_id = $1 AND check_in = $2) AS reservations,
               (SELECT COUNT(*) FROM notification_outbox
-                WHERE payload ->> 'guestEmail' = $3)::int AS notifications`,
+                WHERE JSON_UNQUOTE(JSON_EXTRACT(payload, '$.guestEmail')) = $3) AS notifications`,
       [roomTypeId, checkIn, 'integration.outbox-failure@example.com'],
     );
 
     assert.deepEqual(
-      rows[0],
+      rows[0] && toNumbers(rows[0]),
       { reservations: 0, notifications: 0 },
       'the reservation rolled back with the notification it could not queue',
     );

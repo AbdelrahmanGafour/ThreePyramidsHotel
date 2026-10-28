@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
-import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { runner } from 'node-pg-migrate';
 
-// One contact submission, against real PostgreSQL.
+// One contact submission, against real MySQL.
 //
 // Small on purpose. The validator, the event, the template and the retry are
 // each covered in their own unit suites; the only questions here are the ones
@@ -50,7 +48,7 @@ const rowsForThisRun = async () =>
       `SELECT booking_reference, event_type, recipient_kind, recipient_email, template_key,
               payload, attempts, accepted_at, failed_at, resolved_from, resolved_to, created_at
          FROM notification_outbox
-        WHERE payload ->> 'message' LIKE $1
+        WHERE JSON_UNQUOTE(JSON_EXTRACT(payload, '$.message')) LIKE $1
         ORDER BY id`,
       [`${runTag}%`],
     )
@@ -59,13 +57,7 @@ const rowsForThisRun = async () =>
 before(async () => {
   ({ dbPool, closeDatabasePool } = await import('../src/db/pool.js'));
 
-  await runner({
-    databaseUrl: process.env.DATABASE_URL!,
-    direction: 'up',
-    migrationsTable: 'pgmigrations',
-    dir: path.resolve(__dirname, '../src/db/migrations'),
-    log: () => undefined,
-  });
+  // The schema (src/db/schema) is applied beforehand with `npm run migrate:up`.
 
   ({ submitContactInquiry } = await import('../src/modules/contact/contact.service.js'));
 });
@@ -74,7 +66,7 @@ after(async () => {
   try {
     // Scoped to this run's own rows, found by the tag in their payload. Never
     // a sweep of the table: other suites have rows here they assert on.
-    await dbPool.query(`DELETE FROM notification_outbox WHERE payload ->> 'message' LIKE $1`, [
+    await dbPool.query(`DELETE FROM notification_outbox WHERE JSON_UNQUOTE(JSON_EXTRACT(payload, '$.message')) LIKE $1`, [
       `${runTag}%`,
     ]);
 
@@ -84,7 +76,7 @@ after(async () => {
   }
 });
 
-describe('submitting a contact inquiry against PostgreSQL', () => {
+describe('submitting a contact inquiry against MySQL', () => {
   it('creates exactly one queued contact event and nothing else', async () => {
     const result = await submitContactInquiry(inquiry());
 
@@ -150,11 +142,11 @@ describe('submitting a contact inquiry against PostgreSQL', () => {
   it('creates no business row anywhere, because there is no contact table', async () => {
     // The architecture in one assertion: the outbox row IS the inquiry.
     const { rows } = await dbPool.query<{ total: number }>(
-      `SELECT count(*)::int AS total FROM pg_tables
-        WHERE schemaname = 'public' AND tablename = 'contact_inquiries'`,
+      `SELECT COUNT(*) AS total FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name = 'contact_inquiries'`,
     );
 
-    assert.equal(rows[0]?.total, 0, 'no contact_inquiries table exists');
+    assert.equal(Number(rows[0]?.total), 0, 'no contact_inquiries table exists');
   });
 
   it('gives each submission its own reference', async () => {

@@ -26,9 +26,9 @@ export async function findReservationPackage(client: PoolClient, slug: string): 
 }
 
 export async function findReservationVariants(client: PoolClient, packageId: string): Promise<ReservationVariant[]> {
-  const { rows } = await client.query<Record<string, unknown>>(`SELECT id, key, label, is_default,
+  const { rows } = await client.query<Record<string, unknown>>(`SELECT id, \`key\`, label, is_default,
     child_min_age, child_max_age, child_discount_percent FROM package_variants
-    WHERE package_id=$1 ORDER BY sort_order, key FOR SHARE`, [packageId]);
+    WHERE package_id=$1 ORDER BY sort_order, \`key\` FOR SHARE`, [packageId]);
   return rows.map(row => {
     const min = age(row.child_min_age), max = age(row.child_max_age);
     const discount = row.child_discount_percent;
@@ -57,15 +57,14 @@ export async function insertPackageReservation(
   variant: ReservationVariant, price: PackageReservationPrice, bookingReference: string,
 ): Promise<void> {
   // Exactly one INSERT, no reference retry, no browser-owned pricing/status.
-  const { rows } = await client.query<{ booking_reference: string }>(`INSERT INTO package_reservations (
+  const result = await client.query(`INSERT INTO package_reservations (
     booking_reference, package_id, variant_id, tour_date, adults, children, child_ages,
     guest_first_name, guest_last_name, guest_email, guest_phone, guest_country, special_requests,
     status, pricing_status, package_code_snapshot, package_title_snapshot, variant_label_snapshot,
     currency, adult_unit_rate_snapshot, child_unit_rate_snapshot, total_amount_snapshot)
-    VALUES ($1,$2,$3,$4::date,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15,$16,$17,'USD',$18,$19,$20)
-    RETURNING booking_reference`, [bookingReference, pkg.id, variant.id, input.tourDate, input.adults,
-    input.children, input.childAges, input.guestFirstName, input.guestLastName, input.guestEmail,
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14,$15,$16,$17,'USD',$18,$19,$20)`, [bookingReference, pkg.id, variant.id, input.tourDate, input.adults,
+    input.children, input.childAges === null ? null : JSON.stringify(input.childAges), input.guestFirstName, input.guestLastName, input.guestEmail,
     input.guestPhone, input.guestCountry, input.specialRequests, price.pricingStatus, pkg.code, pkg.title,
     variant.label, price.adultUnitRate, price.childUnitRate, price.totalAmount]);
-  if (rows.length !== 1 || rows[0].booking_reference !== bookingReference) invalid();
+  if (result.rowCount !== 1) invalid();
 }
