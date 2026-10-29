@@ -30,13 +30,22 @@ const IMAGE_JOIN = `LEFT JOIN package_media pm ON pm.package_id = p.id
 
 // Rate ordering is numeric, not lexicographic. Return the qualifying variant/tier,
 // with stable tie-breaking, so cards cannot imply this rate applies to everyone.
-const FROM_RATE_JOIN = `LEFT JOIN LATERAL (
-  SELECT v.\`key\` AS variant_key, r.min_party_size, r.max_party_size, r.adult_unit_rate, r.currency
-  FROM package_variants v JOIN package_rate_tiers r ON r.variant_id = v.id
-  WHERE v.package_id = p.id
-  ORDER BY r.adult_unit_rate, v.sort_order, v.\`key\`, r.min_party_size
-  LIMIT 1
-) lowest ON true`;
+// Written with ROW_NUMBER() rather than LEFT JOIN LATERAL so the same statement
+// runs on MariaDB (shared hosting) as well as MySQL 8.
+const FROM_RATE_JOIN = `LEFT JOIN (
+  SELECT ranked.package_id, ranked.variant_key, ranked.min_party_size,
+    ranked.max_party_size, ranked.adult_unit_rate, ranked.currency
+  FROM (
+    SELECT v.package_id, v.\`key\` AS variant_key, r.min_party_size, r.max_party_size,
+      r.adult_unit_rate, r.currency,
+      ROW_NUMBER() OVER (
+        PARTITION BY v.package_id
+        ORDER BY r.adult_unit_rate, v.sort_order, v.\`key\`, r.min_party_size
+      ) AS rn
+    FROM package_variants v JOIN package_rate_tiers r ON r.variant_id = v.id
+  ) ranked
+  WHERE ranked.rn = 1
+) lowest ON lowest.package_id = p.id`;
 
 export async function findActivePackages(): Promise<PackageCardRecord[]> {
   const { rows } = await dbPool.query<Record<string, unknown>>(`
