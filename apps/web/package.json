@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@tailwindcss/postcss": "4.3.3",
+    "light-my-request": "^6.8.0",
     "motion": "13.1.1",
     "next": "16.3.8",
     "react": "19.3.0",

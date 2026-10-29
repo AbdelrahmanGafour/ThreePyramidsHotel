@@ -42,6 +42,26 @@ export type DbPool = Queryable & { connect(): Promise<PoolClient>; end(): Promis
 
 const NUMBERED = /\$(\d+)/g;
 
+/**
+ * MariaDB (Hostinger shared hosting) speaks nearly the same dialect, but not
+ * MySQL 8's row-lock targets, `FOR SHARE`, or `CAST(.. AS JSON)`. These rewrites
+ * are applied only when the server reports itself as MariaDB, so MySQL keeps
+ * the original statements. MariaDB locks every joined row for `FOR UPDATE`
+ * instead of only the named alias, which is stricter but never weaker.
+ */
+export function toMariaDb(sql: string): string {
+  return sql
+    .replace(/\bFOR\s+UPDATE\s+OF\s+\w+(?:\s*,\s*\w+)*/gi, 'FOR UPDATE')
+    .replace(/\bFOR\s+SHARE(?:\s+OF\s+\w+(?:\s*,\s*\w+)*)?/gi, 'LOCK IN SHARE MODE')
+    // MySQL 8.0.19 row alias (`VALUES (..) AS excluded ... excluded.col`) -> VALUES(col).
+    .replace(/\)\s+AS\s+excluded\b/gi, ')')
+    .replace(/\bexcluded\.(`?\w+`?)/gi, 'VALUES($1)')
+    .replace(/CAST\(\s*'(true|false)'\s+AS\s+JSON\s*\)/gi, "JSON_COMPACT('$1')")
+    .replace(/CAST\(\s*(\?)\s+AS\s+JSON\s*\)/gi, '$1');
+}
+
+let mariaDbDetection: Promise<boolean> | undefined;
+
 /** Rewrites `$n` placeholders to `?`, reordering/duplicating values to match. */
 export function toPositional(text: string, values: unknown[] = []): [string, unknown[]] {
   if (!NUMBERED.test(text)) {
@@ -88,6 +108,12 @@ export function translateError(error: unknown): unknown {
       e.constraint = lastQuoted(message, /Check constraint '([^']+)'/);
       break;
     }
+    case 4025: {
+      // MariaDB: CONSTRAINT `name` failed for `db`.`table`
+      e.code = '23514';
+      e.constraint = lastQuoted(message, /CONSTRAINT `([^`]+)` failed/);
+      break;
+    }
     case 1213:
       e.code = '40P01';
       break;
@@ -116,8 +142,11 @@ async function run<R extends QueryResultRow>(
   text: string,
   values?: unknown[],
 ): Promise<QueryResult<R>> {
-  const [sql, params] = toPositional(text, values);
+  let [sql, params] = toPositional(text, values);
   try {
+    if (await isMariaDb()) {
+      sql = toMariaDb(sql);
+    }
     const [raw] = await target.query(sql, params);
     return shape<R>(raw);
   } catch (error) {
@@ -143,6 +172,17 @@ const mysqlPool: MysqlPool = mysql.createPool({
     return next();
   },
 });
+
+async function isMariaDb(): Promise<boolean> {
+  mariaDbDetection ??= mysqlPool
+    .query('SELECT VERSION() AS v')
+    .then(([rows]) => /mariadb/i.test(String((rows as { v: string }[])[0]?.v)))
+    .catch(() => {
+      mariaDbDetection = undefined;
+      return false;
+    });
+  return mariaDbDetection;
+}
 
 export const dbPool: DbPool = {
   query: (text, values) => run(mysqlPool, text, values),

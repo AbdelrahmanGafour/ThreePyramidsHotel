@@ -218,7 +218,7 @@ export async function findAdminPackageReservations(): Promise<AdminPackageReserv
  */
 type AdminPackageReservationDetailRow = AdminPackageReservationListRow & {
   guest_country: string;
-  child_ages: number[] | null;
+  child_ages: number[] | string | null;
   special_requests: string | null;
   adult_unit_rate_snapshot: string;
   child_unit_rate_snapshot: string | null;
@@ -232,10 +232,14 @@ type AdminPackageReservationDetailRow = AdminPackageReservationListRow & {
  * same way means a row that somehow broke one raises here instead of being
  * served as an ordinary reservation.
  */
-function toChildAges(value: number[] | null, children: number): number[] | null {
-  if (value === null) {
+function toChildAges(raw: number[] | string | null, children: number): number[] | null {
+  if (raw === null) {
     return null;
   }
+
+  // MariaDB stores JSON as text, so the driver hands the document back as a
+  // string where MySQL returns it already parsed.
+  const value: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw;
 
   if (!Array.isArray(value)) {
     throw new Error('Unexpected package reservation child_ages from the database: not an array');

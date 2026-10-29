@@ -27,6 +27,22 @@ export function splitStatements(source: string): string[] {
     .filter((statement) => statement.length > 0);
 }
 
+/**
+ * MariaDB has no REGEXP_LIKE() in CHECK clauses (the REGEXP operator is
+ * equivalent) and its JSON Schema has no "integer" type ("number" that is a
+ * multiple of 1 is). `DROP CHECK` is spelled `DROP CONSTRAINT`.
+ */
+export function regexpLikeToOperator(statement: string): string {
+  return statement
+    .replace(/"type":"integer"/g, '"type":"number","multipleOf":1')
+    .replace(/\bDROP\s+CHECK\b/gi, 'DROP CONSTRAINT')
+    .replace(
+    /REGEXP_LIKE\(\s*(`?\w+`?)\s*,\s*('(?:[^']|'')*')\s*(?:,\s*'(c)'\s*)?\)/g,
+    (_m, column: string, pattern: string, caseSensitive: string | undefined) =>
+      caseSensitive ? `(${column} COLLATE utf8mb4_bin REGEXP ${pattern})` : `(${column} REGEXP ${pattern})`,
+  );
+}
+
 async function up(): Promise<void> {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -43,6 +59,9 @@ async function up(): Promise<void> {
        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
     );
 
+    const [versionRows] = await connection.query('SELECT VERSION() AS v');
+    const mariaDb = /mariadb/i.test(String((versionRows as { v: string }[])[0]?.v));
+
     const [rows] = await connection.query('SELECT name FROM schema_migrations');
     const applied = new Set((rows as { name: string }[]).map((row) => row.name));
 
@@ -55,7 +74,7 @@ async function up(): Promise<void> {
 
       const statements = splitStatements(await readFile(path.join(SCHEMA_DIR, file), 'utf8'));
       for (const statement of statements) {
-        await connection.query(statement);
+        await connection.query(mariaDb ? regexpLikeToOperator(statement) : statement);
       }
       await connection.query('INSERT INTO schema_migrations (name) VALUES (?)', [file]);
       console.log(`applied ${file} (${statements.length} statements)`);

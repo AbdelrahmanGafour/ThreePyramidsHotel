@@ -41,14 +41,6 @@ const nextConfig = {
     // host still gets Next's own resizing and format negotiation.
     remotePatterns: mediaRemotePattern ? [mediaRemotePattern] : [],
   },
-  // With MEDIA_DRIVER=local on the API, images are served by the API at
-  // /media/*; proxy them through the site's own origin so no second public
-  // host or object storage is needed.
-  async rewrites() {
-    const api = process.env.API_BASE_URL?.trim().replace(/\/+$/, "");
-    if (!api || process.env.MEDIA_DRIVER !== "local") return [];
-    return [{ source: "/media/:path*", destination: `${api}/media/:path*` }];
-  },
   experimental: {
     serverActions: {
       // A raw transport ceiling, not a second "allowed image size" rule. The
