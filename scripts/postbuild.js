@@ -3,7 +3,8 @@
 //
 //  1. Copy the traced `node_modules` (left one level up) next to the flattened
 //     server so `require('next')` resolves.
-//  2. Embed the API: copy its compiled output plus its production dependencies
+//  2. Copy `.next/static` and `public/`, which standalone output omits.
+//  3. Embed the API: copy its compiled output plus its production dependencies
 //     into `apps/web/embedded-api`. The host cannot run a second server (see
 //     apps/web/shared/server/embeddedApi.ts), so the web process loads it.
 const { execFileSync } = require('node:child_process');
@@ -20,6 +21,15 @@ if (fs.existsSync(tracedModules)) {
   fs.cpSync(tracedModules, path.join(webDir, 'node_modules'), { recursive: true, dereference: true });
   console.log('postbuild: copied standalone node_modules into apps/web');
 }
+
+// Next's standalone output leaves out the static assets and `public/`; the
+// server expects them next to itself.
+const webRoot = path.join(root, 'apps/web');
+fs.cpSync(path.join(webRoot, '.next/static'), path.join(webDir, '.next/static'), { recursive: true });
+if (fs.existsSync(path.join(webRoot, 'public'))) {
+  fs.cpSync(path.join(webRoot, 'public'), path.join(webDir, 'public'), { recursive: true });
+}
+console.log('postbuild: copied .next/static and public');
 
 const apiDir = path.join(root, 'apps/api');
 const target = path.join(webDir, 'embedded-api');
