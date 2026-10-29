@@ -4,8 +4,8 @@ import path from "node:path";
 // The hero videos are too large for some upload paths, so a host can keep them
 // outside the deployed folder: MEDIA_LOCAL_DIR/videos/<name>. A file under
 // public/videos, when present, is served by Next before this route is reached.
-const FILE_NAME = /^[a-z0-9][a-z0-9-]*\.(mp4|webm)$/i;
-const TYPES: Record<string, string> = { mp4: "video/mp4", webm: "video/webm" };
+const FILE_NAME = /^[a-z0-9][a-z0-9-]*\.(mp4|webm|webp)$/i;
+const TYPES: Record<string, string> = { mp4: "video/mp4", webm: "video/webm", webp: "image/webp" };
 
 export async function GET(
   request: Request,
