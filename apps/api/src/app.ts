@@ -17,7 +17,13 @@ import { adminRoomsRouter } from './modules/admin-rooms/admin-rooms.routes';
 import { availabilityRouter } from './modules/availability/availability.routes';
 import { healthRouter } from './modules/health/health.routes';
 import { createLazyPublicMediaBaseUrlProvider, type PublicMediaBaseUrlProvider } from './modules/media/media.delivery';
-import { createLazyR2MediaStorageProvider, type MediaStorageProvider } from './modules/media/media.storage';
+import path from 'node:path';
+import {
+  createLazyR2MediaStorageProvider,
+  isLocalMediaDriver,
+  localMediaRoot,
+  type MediaStorageProvider,
+} from './modules/media/media.storage';
 import { contactRouter } from './modules/contact/contact.routes';
 import { reservationsRouter } from './modules/reservations/reservations.routes';
 import { createRoomsRouter } from './modules/rooms/rooms.routes';
@@ -76,6 +82,21 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const mediaStorageProvider = options.mediaStorageProvider ?? createLazyR2MediaStorageProvider();
   const publicMediaBaseUrlProvider =
     options.publicMediaBaseUrlProvider ?? createLazyPublicMediaBaseUrlProvider();
+
+  // Local media driver: serve stored files at /media/<uuid>.webp. The web app
+  // rewrites its own /media/* to this route, so the public media base URL is
+  // simply the site's origin. Keys are immutable, hence the long cache.
+  if (isLocalMediaDriver()) {
+    app.use(
+      '/media',
+      express.static(path.join(localMediaRoot(), 'media'), {
+        index: false,
+        dotfiles: 'deny',
+        immutable: true,
+        maxAge: '365d',
+      }),
+    );
+  }
 
   // The one binary route, mounted BEFORE express.json() and before every
   // other router. This is deliberate and load-bearing: express.json() is a

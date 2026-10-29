@@ -3,5 +3,9 @@
   "private": true,
   "workspaces": [
     "apps/*"
-  ]
+  ],
+  "scripts": {
+    "build": "npm run build -w @hotel-reservation/api && npm run build -w @hotel-reservation/web",
+    "start": "node scripts/start.js"
+  }
 }

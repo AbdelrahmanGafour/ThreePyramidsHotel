@@ -1,3 +1,5 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import type { S3ClientConfig } from '@aws-sdk/client-s3';
 import { parseR2StorageConfig, type EnvironmentLike, type R2StorageConfig } from './media.config';
@@ -134,6 +136,58 @@ export function createR2MediaStorage(environment: EnvironmentLike = process.env)
 }
 
 /**
+ * The local-disk adapter behind the same `MediaStorage` port, for hosts with
+ * no object storage (shared hosting, a single VPS).
+ *
+ * Keys are `media/<uuid>.webp`, built upstream from a validated reference. The
+ * resolved path is still checked to stay inside `rootDir`, so a malformed key
+ * can never write or delete outside it. Deleting an absent file succeeds,
+ * matching the idempotent delete the R2 adapter gets from the protocol.
+ */
+export function createLocalMediaStorage(rootDir: string): MediaStorage {
+  const root = path.resolve(rootDir);
+
+  function resolveKey(key: string): string {
+    const target = path.resolve(root, key);
+
+    if (target !== root && !target.startsWith(root + path.sep)) {
+      throw new Error('media key escapes the storage root');
+    }
+
+    return target;
+  }
+
+  return {
+    async putObject({ key, body }): Promise<void> {
+      try {
+        const target = resolveKey(key);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, body);
+      } catch {
+        throw new MediaStorageError('put');
+      }
+    },
+
+    async deleteObject(key): Promise<void> {
+      try {
+        await fs.rm(resolveKey(key), { force: true });
+      } catch {
+        throw new MediaStorageError('delete');
+      }
+    },
+  };
+}
+
+/** Where the local driver keeps files, and what Express serves under `/media`. */
+export function localMediaRoot(environment: EnvironmentLike = process.env): string {
+  return path.resolve(environment.MEDIA_LOCAL_DIR || 'uploads');
+}
+
+export function isLocalMediaDriver(environment: EnvironmentLike = process.env): boolean {
+  return environment.MEDIA_DRIVER === 'local';
+}
+
+/**
  * Something that hands back a working `MediaStorage`, resolved only when
  * asked.
  *
@@ -167,7 +221,9 @@ export function createLazyR2MediaStorageProvider(
 
   return () => {
     if (!cached) {
-      cached = createR2MediaStorage(environment);
+      cached = isLocalMediaDriver(environment)
+        ? createLocalMediaStorage(localMediaRoot(environment))
+        : createR2MediaStorage(environment);
     }
 
     return cached;
