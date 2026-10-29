@@ -10,6 +10,8 @@
 // - Turbopack refuses to run at all, so the build uses webpack.
 //
 // Keep both: turning either back reintroduces the build failure on that host.
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveMediaRemotePattern } from "./shared/config/mediaPublicBaseUrl.js";
 
 // `MEDIA_PUBLIC_BASE_URL` is read here, once, at build/dev-start time — the
@@ -29,6 +31,10 @@ const mediaRemotePattern = resolveMediaRemotePattern(process.env.MEDIA_PUBLIC_BA
 /** @type {import("next").NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Hostinger's Node.js hosting runs the standalone server Next emits. The
+  // tracing root is the monorepo root so workspace packages are traced too.
+  output: "standalone",
+  outputFileTracingRoot: path.join(path.dirname(fileURLToPath(import.meta.url)), "../.."),
   images: {
     // Only ever this one entry, or none. No `images.domains` (deprecated),
     // no blanket `/**` pathname, and no `unoptimized` — a configured media
